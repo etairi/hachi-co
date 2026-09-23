@@ -2,7 +2,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
-use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
 use crate::arithmetic::utils::{Logarithm, rand_int};
@@ -37,7 +36,7 @@ pub fn write_random_data(
     let mut arr = vec![0u64; 1 << 20];
     let mut buf = vec![0u8; buf_size];
 
-    let mut rng = ChaCha12Rng::from_os_rng();
+    let mut rng: ChaCha12Rng = rand::make_rng();
 
     // Write all of the coefficients
     for rep in 0..reps {

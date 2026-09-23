@@ -1,5 +1,5 @@
 use ark_ff::AdditiveGroup;
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 
 use crate::arithmetic::{ExtField, utils::{Logarithm, rand_int}};
@@ -14,7 +14,7 @@ pub struct PChal {
 
 impl PChal {
     /// Sample a random challenge.
-    pub fn rand(d: usize, k: usize, rng: &mut impl RngCore) -> Self {
+    pub fn rand(d: usize, k: usize, rng: &mut impl Rng) -> Self {
         // create array [0, 1, 2, ..., D]
         let mut arr = vec![0u32; d];
 

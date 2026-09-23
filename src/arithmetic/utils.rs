@@ -1,5 +1,5 @@
 use ark_ff::{AdditiveGroup, Field};
-use rand::RngCore;
+use rand::Rng;
 
 use crate::arithmetic::{CoeffType, ExtField, field::{Fq, Fq2, Fq4}};
 
@@ -72,7 +72,7 @@ impl Logarithm for u32 {
 }
 
 /// Sample a single coefficient.
-pub fn rand_int(q: CoeffType, logq: usize, rng: &mut impl RngCore) ->  CoeffType {
+pub fn rand_int(q: CoeffType, logq: usize, rng: &mut impl Rng) ->  CoeffType {
     // assume q is at most 63 bits.
     let mask = (1 << logq) - 1;
     let mut rnd = q;
@@ -88,7 +88,7 @@ pub fn rand_int(q: CoeffType, logq: usize, rng: &mut impl RngCore) ->  CoeffType
 }
 
 /// Sample a field extension element with coefficients up to q
-pub fn rand_field(q: CoeffType, rng: &mut impl RngCore) -> ExtField {
+pub fn rand_field(q: CoeffType, rng: &mut impl Rng) -> ExtField {
     let logq = q.log();
 
     let a = rand_int(q, logq, rng);
