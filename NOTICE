@@ -1,7 +1,0 @@
-This repository started from the public Hachi prototype
-https://github.com/georgeorourke/hachi-pcs by Ngoc Khanh Nguyen, George O'Rourke and
-Jiapeng Zhang, the implementation accompanying "Hachi: Efficient Lattice-Based Multilinear
-Polynomial Commitments over Extension Fields" (Cryptology ePrint Archive 2026/156).
-That repository carries no license file; the original authors retain their rights to the
-code that originates there. The MIT license in LICENSE covers the contributions made in
-this repository. See README.md, section "Origin and attribution".
