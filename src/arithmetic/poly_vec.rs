@@ -1,7 +1,7 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
-use crate::arithmetic::{CoeffType, fs::Serialise, poly::Poly, utils::{Logarithm, b_decomp, rand_int}};
+use crate::arithmetic::{CoeffType, fs::Serialise, poly::Poly, utils::{Logarithm, b_decomp, rand_int, to_window}};
 
 /// Representation of a vectors of polynomials over Zq with maximum degree d-1.
 /// Stored in default (coefficient) format one after another in a single vector
@@ -60,8 +60,23 @@ impl PVec {
     }
 
     #[cfg_attr(feature = "stats", time_graph::instrument)]
-    /// Balanced decomposition of the vector of polynomials.
+    /// Balanced decomposition of the vector of polynomials, for wrapping-signed coefficients that
+    /// already lie inside the `delta`-digit balanced window (e.g. the bounded response z).
     pub fn b_decomp(&self, base: u64, delta: usize, out: &mut Self) {
+        self.decomp_mapped(|x| x, base, delta, out);
+    }
+
+    #[cfg_attr(feature = "stats", time_graph::instrument)]
+    /// Balanced decomposition of a vector of polynomials whose coefficients are residues in [0, q).
+    /// Each coefficient is first mapped to its representative in the balanced-digit window
+    /// (see `to_window`), so that recomposition G . G^{-1}(x) = x holds modulo q for every residue.
+    pub fn b_decomp_zq(&self, q: u64, base: u64, delta: usize, out: &mut Self) {
+        self.decomp_mapped(|x| to_window(x, q, base, delta), base, delta, out);
+    }
+
+    /// Decompose each coefficient after applying `map`, scattering digit k of coefficient j of
+    /// polynomial i to out[i * d * delta + j + k * d].
+    fn decomp_mapped(&self, map: impl Fn(CoeffType) -> CoeffType, base: u64, delta: usize, out: &mut Self) {
         assert_eq!(self.length() * delta, out.length());
 
         let logb = base.log();
@@ -73,7 +88,7 @@ impl PVec {
             // iterate over coefficients of this poly
             for j in 0..self.d {
                 // decompose and place in correct coefficient
-                b_decomp(self.vec[i * self.d + j], logb, delta, &mut decomp_element);
+                b_decomp(map(self.vec[i * self.d + j]), logb, delta, &mut decomp_element);
 
                 for k in 0..delta {
                     out[i * self.d * delta + j + k * self.d] = decomp_element[k];
@@ -207,6 +222,41 @@ mod test_poly_vec {
         let mut decomp_actual = PVec::zero(n * delta, d);
         p_vec.b_decomp(base, delta, &mut decomp_actual);
         assert_eq!(decomp_expected.slice(), decomp_actual.slice());
+    }
+
+    #[test]
+    fn test_b_decomp_zq_roundtrip() {
+        // q = 2^32 - 99: with 8 balanced hex digits the window top is 2004318071 and 53% of
+        // residues lie above it; they must be decomposed as x - q (regression test for the dropped carry).
+        let q = 4294967197u64;
+        let base = 16u64;
+        let delta = 8usize;
+        let d = 8;
+        let top = crate::arithmetic::utils::window_top(base, delta);
+        assert_eq!(2004318071, top);
+
+        let mut vals: Vec<u64> = vec![0, 1, 98, 99, top - 1, top, top + 1, top + 2, 2004317973, (q - 1) / 2, (q - 1) / 2 + 1, 1 << 31, 3000000000, q - 2, q - 1];
+        let mut rng = ChaCha12Rng::from_seed([7u8; 32]);
+        for _ in 0..10000 { vals.push(rand_int(q, q.log(), &mut rng)); }
+        while vals.len() % d != 0 { vals.push(0); }
+
+        let mut p_vec = PVec::zero(vals.len() / d, d);
+        p_vec.mut_slice().copy_from_slice(&vals);
+        let mut decomp = PVec::zero(p_vec.length() * delta, d);
+        p_vec.b_decomp_zq(q, base, delta, &mut decomp);
+
+        for i in 0..p_vec.length() {
+            for j in 0..d {
+                let mut rec: i128 = 0;
+                for k in 0..delta {
+                    let digit = decomp.element(i * delta + k)[j] as i64;   // wrapping-signed digit
+                    assert!(-(base as i64) / 2 <= digit && digit <= base as i64 / 2 - 1, "digit {} out of range", digit);
+                    rec += digit as i128 * (base as i128).pow(k as u32);
+                }
+                let rec_mod_q = rec.rem_euclid(q as i128) as u64;
+                assert_eq!(vals[i * d + j], rec_mod_q, "G . G^-1 mismatch for x = {}", vals[i * d + j]);
+            }
+        }
     }
 
     #[test]

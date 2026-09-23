@@ -93,11 +93,12 @@ impl Verify<u64> for Hachi{
             + params.n * (1 << params.r) * params.delta             // t_hat
             + (1 << params.m) * params.delta * params.delta_z;      // z_hat    
             
-            // length of r part of new witness (height of M)
+            // number of rows of M (the r part of the new witness holds n * delta decomposed quotients)
             let n = params.n * 3 + 2;
 
-            // new witness must have power of 2 length, so we pad (mu + n) to next power of 2
-            let num_vars = ((mu + n) * params.d).log();
+            // new witness must have power of 2 length, so we pad (mu + n * delta) to the next power of 2
+            // (the same formula as form_next_witness on the prover side)
+            let num_vars = ((mu + n * params.delta) * params.d).log();
 
             // Sample the random field elements tau_0 and tau_1
             let mut tau_0 = vec![ExtField::ZERO; num_vars];
@@ -150,23 +151,23 @@ impl Verify<u64> for Hachi{
             #[cfg(feature = "verbose")]
             tick_item("Verify sum check on F_0");
             
-            // Check evaluation of f_alpha
-            let mut eq_r = ExtField::ONE;
-
-            for i in 0..tau_1.len() {
-                eq_r *= eq(tau_1[i], chals_f_alpha[i]);
-            }
-
+            // Check evaluation of f_alpha = w(x,y) . alpha(y) . mbar(x) at the sumcheck point.
+            // The challenges bind the witness index LSB-first: the log d coefficient variables y
+            // first, then the entry variables x (the same order as F0, with which every round is shared).
             assert_eq!(1 << log_d, alpha_pows.len());
             let alpha_mle = DenseMultilinearExtension::from_evaluations_vec(log_d, alpha_pows);
-            let alpha_r = alpha_mle.evaluate(&chals_f_alpha[chals_f_alpha.len() - log_d..chals_f_alpha.len()].to_vec());
+            let alpha_r = alpha_mle.evaluate(&chals_f_alpha[0..log_d].to_vec());
 
+            // mbar(r_x) = sum_i eq(tau_1, i) M_alpha(i, r_x) is the multilinear extension of the
+            // row-major M_alpha table evaluated at (r_x, tau_1): the column bits are its low bits.
             let m_vars = (m_alpha.len() as u64).log();
-            assert_eq!(chals_f_alpha.len() - log_d, m_vars);
+            assert_eq!(chals_f_alpha.len() - log_d + tau_1.len(), m_vars);
+            let mut m_point = chals_f_alpha[log_d..].to_vec();
+            m_point.extend_from_slice(&tau_1);
             let m_mle = DenseMultilinearExtension::from_evaluations_vec(m_vars, m_alpha);
-            let m_r = m_mle.evaluate(&chals_f_alpha[0..m_vars].to_vec());
+            let m_r = m_mle.evaluate(&m_point);
 
-            let f_alpha_actual = proof.y_dash * alpha_r * eq_r * m_r;
+            let f_alpha_actual = proof.y_dash * alpha_r * m_r;
             assert_eq!(f_alpha_expected, f_alpha_actual);
 
             #[cfg(feature = "verbose")]
@@ -230,9 +231,10 @@ fn sumcheck_verify(
     fs: &mut FS,
     q: u64
 ) -> (ExtField, ExtField, Vec<ExtField>, Vec<ExtField>) {
-    // get the number of rounds
+    // both sumchecks run over the same variables and share every round's challenge
     let rounds_f_0 = univariates_f_0.len();
     let rounds_f_alpha = univariates_f_alpha.len();
+    assert_eq!(rounds_f_0, rounds_f_alpha);
     let mut cur = rounds_f_alpha;
 
     let mut cur_check_f_alpha = sum_f_alpha;
@@ -241,34 +243,13 @@ fn sumcheck_verify(
     let mut challenges_f_alpha = Vec::<ExtField>::new();
     let mut challenges_f_0 = Vec::<ExtField>::new();
 
-    let mut valid = false;
-
-    while cur > rounds_f_0 {
-        // get the univariate polynomial g(x) for this round
-        let univariate_f_alpha = univariates_f_alpha[rounds_f_alpha - cur].clone();
-
-        // check g(0) + g(1)
-        valid = cur_check_f_alpha == univariate_f_alpha.binary_sum();
-
-        // sample the challenge
-        fs.push(&univariate_f_alpha);
-        let mut rng = ChaCha12Rng::from_seed(fs.get_seed());
-        let r = rand_field(q, &mut rng);
-        challenges_f_alpha.push(r);
-
-        // update the expected binary sum
-        cur_check_f_alpha = univariate_f_alpha.eval(r);
-
-        cur -= 1;
-    }
-
     while cur > 0 {
         // get the univariate polynomial g(x) for this round
         let univariate_f_alpha = univariates_f_alpha[rounds_f_alpha - cur].clone();
         let univariate_f_0 = univariates_f_0[rounds_f_0 - cur].clone();
 
         // check g(0) + g(1)
-        valid = cur_check_f_alpha == univariate_f_alpha.binary_sum();
+        assert_eq!(cur_check_f_alpha, univariate_f_alpha.binary_sum());
         assert_eq!(cur_check_f_0, univariate_f_0.binary_sum());
 
         // sample the challenge
@@ -285,8 +266,6 @@ fn sumcheck_verify(
 
         cur -= 1;
     }
-
-    assert!(valid);
 
     (cur_check_f_alpha, cur_check_f_0, challenges_f_alpha, challenges_f_0)
 }

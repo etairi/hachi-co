@@ -149,62 +149,54 @@ impl SumCheckPoly<ExtField> for F0 {
     }
 }
 
-/// Representation of the polynomial f_alpha(i,x,y) = w(x,y).alpha(y).eq(i).M(i,x)
+/// Representation of the polynomial f_alpha(x,y) = w(x,y) . alpha(y) . mbar(x), where
+/// mbar(x) = sum_i eq(tau_1, i) . M_alpha(i, x) folds the row index i of the linear relation
+/// into the public factor (this is F_{alpha,tau_1} of the Hachi paper, Section 4.3). Its sum over
+/// the boolean hypercube is sum_i eq(tau_1, i) . (M_alpha w)_i = sum_i eq(tau_1, i) . y_i(alpha).
+///
+/// The variables are folded LSB-first in the witness index order (the log d ring-coefficient
+/// variables y first, then the witness-entry variables x), exactly as F0 folds the same table,
+/// so both polynomials share every round's challenge.
 pub struct FAlpha {
-    w: Vec<u64>,                             // table of evaluations for w (integers)
-    w_eval_table: Vec<ExtField>,             // table of evaluations for w
-    alpha_pows_eval_table: Vec<ExtField>,    // table of evaluations for powers of alpha
-    eq_eval_table: Vec<ExtField>,            // table of evaluations for eq_tau_1
-    m_alpha_eval_table: Vec<ExtField>,       // table of evaluations for M_alpha
-    w_alpha: Vec<ExtField>,                  // pre-compute values of w*alpha,
-    q: u64                                   // modulus
+    w_eval_table: Vec<ExtField>,             // table of evaluations for w (entry index in the high bits, coefficient index in the low bits)
+    alpha_pows_eval_table: Vec<ExtField>,    // table of evaluations for the powers of alpha (over y)
+    m_bar_eval_table: Vec<ExtField>          // table of evaluations for mbar (over x)
 }
 
 impl FAlpha {
-    /// Construct F0.
+    /// Construct FAlpha from the witness, the powers of alpha, tau_1 and the (row-major) table of M_alpha.
     pub fn init(
-        z_r: &Vec<u64>, 
+        z_r: &Vec<u64>,
         alpha_pows_eval_table: Vec<ExtField>,
         tau_1: Vec<ExtField>,
-        m_alpha_eval_table: Vec<ExtField>,
-        q: u64
+        m_alpha_eval_table: Vec<ExtField>
     ) -> Self {
         // lift evaluations to field
         let w_eval_table: Vec<ExtField> = z_r.iter().map(|x| lift_int(*x)).collect();
 
-        // compute evaluation table for eq(tau, i)
+        // M_alpha is stored row-major: index = row * width + column
         let log_n = tau_1.len();
-        let mut eq_eval_table = vec![ExtField::ONE; 1 << log_n];
+        let height = 1 << log_n;
+        let width = m_alpha_eval_table.len() / height;
+        assert_eq!(height * width, m_alpha_eval_table.len());
+        assert_eq!(width * alpha_pows_eval_table.len(), w_eval_table.len());
 
-        for bin in 0..1 << log_n {
-            for i in 0..log_n {
-                eq_eval_table[bin] *= eq_bin(tau_1[i], (bin >> i) & 1);
+        // mbar(x) = sum_i eq(tau_1, i) . M_alpha(i, x)
+        let mut m_bar_eval_table = vec![ExtField::ZERO; width];
+
+        for i in 0..height {
+            let mut eq_i = ExtField::ONE;
+
+            for b in 0..log_n {
+                eq_i *= eq_bin(tau_1[b], (i >> b) & 1);
+            }
+
+            for x in 0..width {
+                m_bar_eval_table[x] += eq_i * m_alpha_eval_table[i * width + x];
             }
         }
 
-        // pre-compute w[x_y_suffix]*alpha[y_suffix]
-        let len_i = eq_eval_table.len();
-        let len_x = m_alpha_eval_table.len() / len_i;
-        let len_y = w_eval_table.len() / len_x;
-        let log_y = len_y.log();
-
-        let mut w_alpha = vec![ExtField::ZERO; len_x * len_y];
-
-        for x_suffix in 0..len_x {
-            for y_suffix in 0..len_y {
-                let x_y_suffix = (x_suffix << log_y) | y_suffix;
-
-                // still have complete (non-folded) w so can use integers
-                let w = z_r[x_y_suffix];
-
-                // get alpha(y_suffix)
-                let alpha = alpha_pows_eval_table[y_suffix];
-
-                w_alpha[x_y_suffix] = mul_int_field(w, alpha);
-            }
-        }
-
-        Self { w: z_r.clone(), w_eval_table, alpha_pows_eval_table, eq_eval_table, m_alpha_eval_table, w_alpha, q }
+        Self { w_eval_table, alpha_pows_eval_table, m_bar_eval_table }
     }
 }
 
@@ -214,7 +206,7 @@ impl SumCheckPoly<ExtField> for FAlpha {
     }
 
     fn num_vars(&self) -> usize {
-        self.w_eval_table.len().log() + self.eq_eval_table.len().log()
+        self.w_eval_table.len().log()
     }
 
     fn get_univariate(&self) -> Univariate<ExtField> {
@@ -222,130 +214,62 @@ impl SumCheckPoly<ExtField> for FAlpha {
         let deg = self.degree();
         let mut ys = Vec::<ExtField>::with_capacity(deg + 1);
 
-        // get lengths of remaining variables
-        let len_i = self.eq_eval_table.len();
-        let len_x = self.m_alpha_eval_table.len() / len_i;
-        let len_y = self.w_eval_table.len() / len_x;
-
-        let log_x = len_x.log();
-        let log_y = len_y.log();
-
-        // sense check
-        assert_eq!(len_y, self.alpha_pows_eval_table.len());
+        // get lengths of the remaining variables
+        let len_y = self.alpha_pows_eval_table.len();
+        let len_x = self.m_bar_eval_table.len();
+        assert_eq!(len_x * len_y, self.w_eval_table.len());
 
         for x_i in 0..=deg {
             let x_i = x_i as u64;
 
-            // build sum_{0,1}^n-1 F_alpha(x_i, b_2, ..., b_n)
+            // build sum_{b in {0,1}^{n-1}} f_alpha(x_i, b)
             let mut y_i = ExtField::ZERO;
 
-            // TODO: calculation of univariate when i or x not fully folded does not match expected sum
-            // still folding in i
-            if len_i > 1 {
-                for i_suffix in 0..len_i / 2 {
-                    // get eq(0, suffix) and eq(1, suffix)
-                    let eq_0 = self.eq_eval_table[i_suffix << 1];
-                    let eq_1 = self.eq_eval_table[(i_suffix << 1) | 1];
+            // still folding in y: the first variable is the lowest bit of the coefficient index
+            if len_y > 1 {
+                let half_y = len_y / 2;
 
-                    // evaluation at x is linear interpolation
-                    let eq_x = eq_0 + mul_int_field(x_i, eq_1 - eq_0);
+                for x in 0..len_x {
+                    let mut acc = ExtField::ZERO;
 
-                    for x_suffix in 0..len_x {
-                        let i_x_suffix = (i_suffix << log_x) | x_suffix;
+                    for y_suffix in 0..half_y {
+                        let idx = x * half_y + y_suffix;
 
-                        // get M_alpha(0, i_x_suffix) and M_alpha(1, i_x_suffix)
-                        let m_0 = self.m_alpha_eval_table[i_x_suffix << 1];
-                        let m_1 = self.m_alpha_eval_table[(i_x_suffix << 1) | 1];
+                        // get w(x, 0, y_suffix) and w(x, 1, y_suffix)
+                        let w_0 = self.w_eval_table[idx << 1];
+                        let w_1 = self.w_eval_table[(idx << 1) | 1];
 
-                        // evaluation at x is linear interpolation
-                        let m_x = m_0 + mul_int_field(x_i, m_1 - m_0);
+                        // evaluation at x_i is linear interpolation
+                        let w_x = w_0 + mul_int_field(x_i, w_1 - w_0);
 
-                        let mut y = eq_x * m_x;
+                        // get alpha(0, y_suffix) and alpha(1, y_suffix)
+                        let alpha_0 = self.alpha_pows_eval_table[y_suffix << 1];
+                        let alpha_1 = self.alpha_pows_eval_table[(y_suffix << 1) | 1];
+                        let alpha_x = alpha_0 + mul_int_field(x_i, alpha_1 - alpha_0);
 
-                        for y_suffix in 0..len_y {
-                            let x_y_suffix = (x_suffix << log_y) | y_suffix;
-                            y *=  self.w_alpha[x_y_suffix];
-                            y_i += y;
-                        }
+                        acc += w_x * alpha_x;
                     }
+
+                    y_i += self.m_bar_eval_table[x] * acc;
                 }
             }
 
-            // still folding in x
-            else if len_x > 1 {
-                let eq = self.eq_eval_table[0];
+            // y fully folded (alpha is a scalar): folding in x
+            else {
+                let alpha = self.alpha_pows_eval_table[0];
 
                 for x_suffix in 0..len_x / 2 {
-                    // get M_alpha(0, x_suffix) and eq(1, x_suffix)
-                    let m_0 = self.m_alpha_eval_table[x_suffix << 1];
-                    let m_1 = self.m_alpha_eval_table[(x_suffix << 1) | 1];
+                    // get w(0, x_suffix) and w(1, x_suffix)
+                    let w_0 = self.w_eval_table[x_suffix << 1];
+                    let w_1 = self.w_eval_table[(x_suffix << 1) | 1];
+                    let w_x = w_0 + mul_int_field(x_i, w_1 - w_0);
 
-                    // evaluation at x is linear interpolation
+                    // get mbar(0, x_suffix) and mbar(1, x_suffix)
+                    let m_0 = self.m_bar_eval_table[x_suffix << 1];
+                    let m_1 = self.m_bar_eval_table[(x_suffix << 1) | 1];
                     let m_x = m_0 + mul_int_field(x_i, m_1 - m_0);
 
-                    let mut y = eq * m_x;
-
-                    for y_suffix in 0..len_y {
-                        let x_y_suffix = (x_suffix << log_y) | y_suffix;
-
-                        // if this is first round of x being folded then w can use integers for w
-                        if self.w_eval_table.len() == self.w.len() {
-                            // get w(0, x_y_suffix) and w(1, x_y_suffix)
-                            let w_0 = self.w[x_y_suffix << 1];
-                            let w_1 = self.w[(x_y_suffix << 1) | 1];
-
-                            // evaluation at x is linear interpolation
-                            let w_x = (w_0 as i64 + (w_1 as i64 - w_0 as i64) * x_i as i64) % self.q as i64;
-
-                            // get alpha(y_suffix)
-                            let alpha = self.alpha_pows_eval_table[y_suffix];
-
-                            y *= mul_int_field(w_x as u64, alpha);
-                            y_i += y;
-
-                        }
-                        // otherwise use field elements
-                        else 
-                        {
-                            // get w(0, x_y_suffix) and w(1, x_y_suffix)
-                            let w_0 = self.w_eval_table[x_y_suffix << 1];
-                            let w_1 = self.w_eval_table[(x_y_suffix << 1) | 1];
-
-                            // evaluation at x is linear interpolation
-                            let w_x = w_0 + mul_int_field(x_i,w_1 - w_0);
-
-                            // get alpha(y_suffix)
-                            let alpha = self.alpha_pows_eval_table[y_suffix];
-
-                            y *= w_x * alpha;
-                            y_i += y;
-                        }
-                    }
-                }
-            }
-
-            // still folding in y
-            else {
-                let eq = self.eq_eval_table[0];
-                let m_alpha = self.m_alpha_eval_table[0];
-
-                for y_suffix in 0..len_y / 2 {
-                    // get w(0, y_suffix) and w(1, y_suffix)
-                    let w_0 = self.w_eval_table[y_suffix << 1];
-                    let w_1 = self.w_eval_table[(y_suffix << 1) | 1];
-
-                    // evaluation of eq at x is linear interpolation
-                    let w_x = w_0 + mul_int_field(x_i,w_1 - w_0);
-
-                    // get alpha(0, y_suffix) and alpha(1, y_suffix)
-                    let alpha_0 = self.alpha_pows_eval_table[y_suffix << 1];
-                    let alpha_1 = self.alpha_pows_eval_table[(y_suffix << 1) | 1];
-
-                    // evaluation of eq at x is linear interpolation
-                    let alpha_x = alpha_0 + mul_int_field(x_i,alpha_1 - alpha_0);
-
-                    let y = w_x * alpha_x * eq * m_alpha;
-                    y_i += y;
+                    y_i += w_x * m_x * alpha;
                 }
             }
 
@@ -356,31 +280,15 @@ impl SumCheckPoly<ExtField> for FAlpha {
     }
 
     fn fix_first_variable(&mut self, r: ExtField) {
-        // folding in the variable i
-        if self.eq_eval_table.len() > 1 {
-            // fold eq(i)
-            self.eq_eval_table = fix_first_variable(&self.eq_eval_table, r);
+        // fold in w(x, y)
+        self.w_eval_table = fix_first_variable(&self.w_eval_table, r);
 
-            // fold M_alpha(i, x)
-            self.m_alpha_eval_table = fix_first_variable(&self.m_alpha_eval_table, r);
-        }
-
-        // folding in the variable x
-        else if self.m_alpha_eval_table.len() > 1 {
-            // fold in w(x, y)
-            self.w_eval_table = fix_first_variable(&self.w_eval_table, r);
-
-            // fold M_alpha(x)
-            self.m_alpha_eval_table = fix_first_variable(&self.m_alpha_eval_table, r);
-        }
-
-        // folding in the variable y
-        else {
-            // fold in w(y)
-            self.w_eval_table = fix_first_variable(&self.w_eval_table, r);
-
-            // fold in alpha(y)
+        // fold in alpha(y) while y variables remain, then mbar(x)
+        if self.alpha_pows_eval_table.len() > 1 {
             self.alpha_pows_eval_table = fix_first_variable(&self.alpha_pows_eval_table, r);
+        }
+        else {
+            self.m_bar_eval_table = fix_first_variable(&self.m_bar_eval_table, r);
         }
     }
 }
@@ -388,30 +296,16 @@ impl SumCheckPoly<ExtField> for FAlpha {
 #[time_graph::instrument]
 /// Sum check proof.
 pub fn sumcheck_proof(f_0: &mut F0, f_alpha: &mut FAlpha, fs: &mut FS) -> (Vec<Univariate<ExtField>>, Vec<Univariate<ExtField>>, ExtField) {
-    // get the number of variables in the two polynomials (x,y) for f_0 and (i,x,y) for f_alpha
+    // both polynomials are over the same witness variables (x, y), folded in the same order,
+    // so they have the same number of rounds and share every round's challenge
     let rounds_f_0 = f_0.num_vars();
     let rounds_f_alpha = f_alpha.num_vars();
+    assert_eq!(rounds_f_0, rounds_f_alpha);
     let mut cur = rounds_f_alpha;
 
     // store univariate polynomials of F_0 and F_alpha
     let mut univariates_f_0 = Vec::<Univariate<ExtField>>::with_capacity(rounds_f_0);
     let mut univariates_f_alpha = Vec::<Univariate<ExtField>>::with_capacity(rounds_f_alpha);
-
-    while cur > rounds_f_0 {
-        #[cfg(feature = "verbose")]
-        progress_bar("Sum Check" , rounds_f_alpha - cur, rounds_f_alpha);
-
-        let univariate_f_alpha = f_alpha.get_univariate();
-        fs.push(&univariate_f_alpha);
-        univariates_f_alpha.push(univariate_f_alpha);
-
-        let mut rng = ChaCha12Rng::from_seed(fs.get_seed());
-        let r = rand_field(Q, &mut rng);
-
-        f_alpha.fix_first_variable(r);
-
-        cur -= 1;
-    }
 
     while cur > 0 {
         #[cfg(feature = "verbose")]
@@ -441,4 +335,77 @@ pub fn sumcheck_proof(f_0: &mut F0, f_alpha: &mut FAlpha, fs: &mut FS) -> (Vec<U
     assert_eq!(y_dash, f_alpha.w_eval_table[0]);
 
     (univariates_f_alpha, univariates_f_0, y_dash)
+}
+#[cfg(test)]
+mod test_sumcheck {
+    use super::*;
+    use ark_poly::{DenseMultilinearExtension, Polynomial};
+    use crate::arithmetic::utils::rand_int;
+
+    /// Round-by-round consistency of the F_alpha prover against an independent computation of the
+    /// claimed sum, and of its final value against the verifier's evaluation formula. Regression
+    /// test for the folding-order defect: the prover must fold the coefficient variables first,
+    /// then the entry variables, and never the row index (which is folded into mbar up front).
+    #[test]
+    fn test_f_alpha_consistency() {
+        let q = Q;
+        let log_n = 2; let height = 1 << log_n;
+        let log_x = 3; let width = 1 << log_x;
+        let log_d = 2; let d = 1 << log_d;
+        let mut rng = ChaCha12Rng::from_seed([3u8; 32]);
+
+        // witness digits in [-8, 7] as wrapping u64, random public data
+        let z_r: Vec<u64> = (0..width * d).map(|_| (rand_int(16, 4, &mut rng) as i64 - 8) as u64).collect();
+        let m_alpha: Vec<ExtField> = (0..height * width).map(|_| rand_field(q, &mut rng)).collect();
+        let alpha_pows: Vec<ExtField> = (0..d).map(|_| rand_field(q, &mut rng)).collect();
+        let tau_1: Vec<ExtField> = (0..log_n).map(|_| rand_field(q, &mut rng)).collect();
+
+        // claimed sum: sum_i eq(tau_1, i) sum_x M(i, x) sum_y w(x, y) alpha^y
+        let mut claim = ExtField::ZERO;
+
+        for i in 0..height {
+            let mut eq_i = ExtField::ONE;
+
+            for b in 0..log_n {
+                eq_i *= eq_bin(tau_1[b], (i >> b) & 1);
+            }
+
+            for x in 0..width {
+                let mut wy = ExtField::ZERO;
+
+                for y in 0..d {
+                    wy += lift_int(z_r[x * d + y]) * alpha_pows[y];
+                }
+
+                claim += eq_i * m_alpha[i * width + x] * wy;
+            }
+        }
+
+        // run the prover round by round with the verifier's consistency check
+        let mut f_alpha = FAlpha::init(&z_r, alpha_pows.clone(), tau_1.clone(), m_alpha.clone());
+        assert_eq!(log_x + log_d, f_alpha.num_vars());
+
+        let mut chals = Vec::new();
+        let mut cur = claim;
+
+        for _ in 0..f_alpha.num_vars() {
+            let g = f_alpha.get_univariate();
+            assert_eq!(cur, g.binary_sum());
+            let r = rand_field(q, &mut rng);
+            cur = g.eval(r);
+            f_alpha.fix_first_variable(r);
+            chals.push(r);
+        }
+
+        // final check exactly as the verifier computes it
+        let w_table: Vec<ExtField> = z_r.iter().map(|x| lift_int(*x)).collect();
+        let w_r = DenseMultilinearExtension::from_evaluations_vec(log_x + log_d, w_table).evaluate(&chals);
+        let alpha_r = DenseMultilinearExtension::from_evaluations_vec(log_d, alpha_pows).evaluate(&chals[0..log_d].to_vec());
+        let mut m_point = chals[log_d..].to_vec();
+        m_point.extend_from_slice(&tau_1);
+        let m_r = DenseMultilinearExtension::from_evaluations_vec(log_n + log_x, m_alpha).evaluate(&m_point);
+
+        assert_eq!(w_r, f_alpha.w_eval_table[0]);
+        assert_eq!(cur, w_r * alpha_r * m_r);
+    }
 }

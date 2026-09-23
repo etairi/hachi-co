@@ -53,7 +53,7 @@ pub fn commit_w_and_lift(
     w: &PVec, w_hat: &mut PVec, v: &mut PVec, v_quo: &mut PVec
 ) {
     // decompose w
-    w.b_decomp(params.b, params.delta, w_hat);
+    w.b_decomp_zq(params.q, params.b, params.delta, w_hat);
 
     // multiply, v = D.w_hat over Zq[X]
     let mut v_full = PVec::zero(params.n, 2 * params.d);
@@ -93,7 +93,7 @@ pub fn compute_z(
 
             // if decomposing
             if params.decomp_witness {
-                f_i.b_decomp(params.b, params.delta, &mut s_i);
+                f_i.b_decomp_zq(params.q, params.b, params.delta, &mut s_i);
                 ring.chal_mul_poly_vec(&challenges[i], &s_i, z, 0);
             }
             // if not decomposing

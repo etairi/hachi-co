@@ -54,8 +54,9 @@ pub fn compute_y_and_w(
         
         // iterate over each f_ij
         for j in 0..1 << params.m {
-            // the index in {0,1}^{r+m}
-            let index = i << params.r | j;
+            // the index in {0,1}^{r+m}: chunk index i <-> x[0..r], element index j <-> x[r..r+m]
+            // (the same convention as w_i = a^T f_i above and as the verification matrix M)
+            let index = i | (j << params.r);
 
             // get the coefficient for this index
             let coeff = multi_lin_coeff_int(&x[0..params.r + params.m], index, params.r + params.m, params.q);
@@ -112,7 +113,8 @@ pub fn form_next_witness(
         witness[cur..cur + t_hat.length() * params.d].copy_from_slice(t_hat.slice());
         cur += t_hat.length() * params.d;
 
-        // decompose z into z_hat and copy in
+        // decompose z into z_hat and copy in: z is a wrapping-signed vector with ||z||_inf <= z_bound,
+        // which lies inside the delta_z-digit balanced window, so no residue-to-window mapping is applied
         let mut z_hat = PVec::zero(z.length() * params.delta_z, params.d);
         z.b_decomp(params.b, params.delta_z, &mut z_hat);
         witness[cur..cur + z_hat.length() * params.d].copy_from_slice(z_hat.slice());
@@ -123,13 +125,13 @@ pub fn form_next_witness(
 
         // decompose and copy in quotient for commitment v=D.w_hat
         let mut v_quo_hat = PVec::zero(v_quo.length() * params.delta, params.d);
-        v_quo.b_decomp(params.b, params.delta, &mut v_quo_hat);
+        v_quo.b_decomp_zq(params.q, params.b, params.delta, &mut v_quo_hat);
         witness[cur..cur + v_quo_hat.length() * params.d].copy_from_slice(v_quo_hat.slice());
         cur += v_quo_hat.length() * params.d;
 
         // decompose and copy in quotient for commitment u=B.t_hat
         let mut u_quo_hat = PVec::zero(u_quo.length() * params.delta, params.d);
-        u_quo.b_decomp(params.b, params.delta, &mut u_quo_hat);
+        u_quo.b_decomp_zq(params.q, params.b, params.delta, &mut u_quo_hat);
         witness[cur..cur + u_quo_hat.length() * params.d].copy_from_slice(u_quo_hat.slice());
         cur += u_quo_hat.length() * params.d;
 
@@ -138,7 +140,7 @@ pub fn form_next_witness(
 
         // decompose and copy in quotient for sum_i c_i_w_i
         let mut c_i_w_i_quo_hat = PVec::zero(c_i_w_i_quo.length() * params.delta, params.d);
-        c_i_w_i_quo.b_decomp(params.b, params.delta, &mut c_i_w_i_quo_hat);
+        c_i_w_i_quo.b_decomp_zq(params.q, params.b, params.delta, &mut c_i_w_i_quo_hat);
         witness[cur..cur + c_i_w_i_quo_hat.length() * params.d].copy_from_slice(c_i_w_i_quo_hat.slice());
         cur += c_i_w_i_quo_hat.length() * params.d;
 
@@ -160,7 +162,7 @@ pub fn form_next_witness(
         }
 
         let mut quo_hat = PVec::zero(quo.length() * params.delta, params.d);
-        quo.b_decomp(params.b, params.delta, &mut quo_hat);
+        quo.b_decomp_zq(params.q, params.b, params.delta, &mut quo_hat);
         witness[cur..cur + quo_hat.length() * params.d].copy_from_slice(quo_hat.slice());
         cur += quo_hat.length() * params.d;
 

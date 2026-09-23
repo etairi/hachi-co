@@ -60,6 +60,12 @@ impl PChal {
         vec
     }
 
+    /// Build a challenge from explicit (exponent, sign) entries (tests only). Sign: false => -1, true => 1.
+    #[cfg(test)]
+    pub fn from_entries(entries: &[(usize, bool)]) -> Self {
+        Self { coeffs: entries.iter().map(|&(exp, sign)| ((exp as u32) << 1) | (sign as u32)).collect() }
+    }
+
     /// Return the number of non-zero coefficients.
     pub fn k(&self) -> usize {
         self.coeffs.len()

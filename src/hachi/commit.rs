@@ -93,7 +93,7 @@ fn commit_stream(witness: &mut impl Stream<u64>, params: &Parameters) -> Commitm
 
         // if decomposing
         if params.decomp_witness {
-            f_i.b_decomp(params.b, params.delta, &mut s_i);
+            f_i.b_decomp_zq(params.q, params.b, params.delta, &mut s_i);
             ring.mat_mul_vec(&mat_a_ntt, &s_i, &mut t, i * params.n);
         }
         // if not decomposing
@@ -115,7 +115,7 @@ fn commit_stream(witness: &mut impl Stream<u64>, params: &Parameters) -> Commitm
     };
 
     // decompose the inner commitment
-    t.b_decomp(params.b, params.delta, &mut t_hat);
+    t.b_decomp_zq(params.q, params.b, params.delta, &mut t_hat);
 
     // commit over Zq[X]
     ring.mat_mul_vec(&mat_b_ntt, &t_hat, &mut u, 0);
@@ -168,7 +168,7 @@ fn commit_slice(witness: &[u64], params: &Parameters) -> CommitmentWithState {
 
         // if decomposing
         if params.decomp_witness {
-            f_i.b_decomp(params.b, params.delta, &mut s_i);
+            f_i.b_decomp_zq(params.q, params.b, params.delta, &mut s_i);
             ring.mat_mul_vec(&mat_a_ntt, &s_i, &mut t, i * params.n);
         }
         // if not decomposing
@@ -190,7 +190,7 @@ fn commit_slice(witness: &[u64], params: &Parameters) -> CommitmentWithState {
     };
 
     // decompose the inner commitment
-    t.b_decomp(params.b, params.delta, &mut t_hat);
+    t.b_decomp_zq(params.q, params.b, params.delta, &mut t_hat);
 
     // commit over Zq[X]
     ring.mat_mul_vec(&mat_b_ntt, &t_hat, &mut u, 0);

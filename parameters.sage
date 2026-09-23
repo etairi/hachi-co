@@ -1,10 +1,50 @@
 import sys
+import os
 import random
+import shutil
+import signal
+import subprocess
+import tempfile
+import atexit
 
 
-# Importing lattice estimator for SIS hardness.
-# IMPORTANT: Remember to download and extract the lattice estimator folder
-sys.path.insert(1, '../lattice-estimator-main')
+# Importing the lattice estimator (https://github.com/malb/lattice-estimator) for SIS hardness.
+# The estimator is cloned into a fresh temporary directory, imported from there, and the clone is
+# removed again when this script exits (normally, on an error, on Ctrl-C or on SIGTERM).
+# Set LATTICE_ESTIMATOR_DIR to the path of an existing checkout to use it instead (it is then left untouched).
+ESTIMATOR_REPO = "https://github.com/malb/lattice-estimator"
+
+_estimator_dir = os.environ.get("LATTICE_ESTIMATOR_DIR")
+_estimator_tmp = None
+
+if _estimator_dir is None:
+    _estimator_tmp = tempfile.mkdtemp(prefix="lattice-estimator-")
+    _estimator_dir = os.path.join(_estimator_tmp, "lattice-estimator")
+    print("Cloning", ESTIMATOR_REPO, "into", _estimator_dir)
+    subprocess.run(["git", "clone", "--depth", "1", "--quiet", ESTIMATOR_REPO, _estimator_dir], check=True)
+
+# Record the estimator revision the results were produced with.
+_estimator_rev = subprocess.run(["git", "-C", _estimator_dir, "rev-parse", "HEAD"],
+                                capture_output=True, text=True).stdout.strip()
+print("Lattice estimator revision:", _estimator_rev or "unknown")
+
+
+def _cleanup():
+    # Remove the temporary clone (never a user-supplied checkout).
+    if _estimator_tmp is not None and os.path.isdir(_estimator_tmp):
+        shutil.rmtree(_estimator_tmp, ignore_errors=True)
+        print("Removed temporary clone", _estimator_tmp)
+
+    # Remove the preparsed copy Sage writes next to this script.
+    preparsed = os.path.join(os.getcwd(), "parameters.sage.py")
+    if os.path.isfile(preparsed):
+        os.remove(preparsed)
+
+
+atexit.register(_cleanup)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+
+sys.path.insert(1, _estimator_dir)
 from estimator import *
 
 

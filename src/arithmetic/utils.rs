@@ -39,6 +39,25 @@ pub fn gadget(b: u64, l: usize) -> Vec<u64> {
     gadget
 }
 
+/// Largest non-negative integer representable with `delta` balanced base-`b` digits
+/// (digits in [-b/2, b/2 - 1]): (b/2 - 1) * (b^delta - 1) / (b - 1).
+pub fn window_top(b: u64, delta: usize) -> u64 {
+    let b_pow = b.checked_pow(delta as u32).expect("b^delta overflows u64");
+    (b / 2 - 1) * ((b_pow - 1) / (b - 1))
+}
+
+/// Map a residue x in [0, q) to a representative inside the balanced-digit window of `delta`
+/// base-`b` digits, as a wrapping (two's complement) u64: x itself if x <= `window_top`, and the
+/// negative integer x - q otherwise. Requires b^delta >= q so that the window (b^delta consecutive
+/// integers) contains a representative of every residue; this holds whenever delta >= ceil(log_b q).
+/// When b^delta > q a few residues have two representatives in the window; this rule picks the
+/// one of smaller absolute value.
+pub fn to_window(x: CoeffType, q: u64, b: u64, delta: usize) -> CoeffType {
+    assert!(x < q, "to_window expects a residue in [0, q), got {}", x);
+    debug_assert!(b.checked_pow(delta as u32).expect("b^delta overflows u64") >= q, "b^delta < q: window too small");
+    if x > window_top(b, delta) { x.wrapping_sub(q) } else { x }
+}
+
 /// Take the logarithm of the given type.
 pub trait Logarithm {
     fn log(&self) -> usize;

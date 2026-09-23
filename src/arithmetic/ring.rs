@@ -83,7 +83,7 @@ impl Ring {
                     }
                 }
                 else {
-                    if out[exp] > poly[j] {
+                    if out[exp] >= poly[j] {
                         out[exp] = out[exp].wrapping_sub(poly[j]);
                     }
                     else {
@@ -880,6 +880,23 @@ mod test_ring {
         let mut actual = vec![0u64; d];
         ring.int_mul_poly(a, &p, &mut actual);
         assert_eq!(expected[0..d], actual);
+    }
+
+    #[test]
+    fn test_chal_mul_poly_exact_cancellation() {
+        // a -1 challenge coefficient subtracting a value equal to the accumulator must leave 0, not q
+        let d = 32;
+        let chal = PChal::from_entries(&[(0, false)]);
+        let mut poly = vec![0u64; d];
+        poly[0] = 5;
+        let mut out = vec![0u64; 2 * d];
+        out[0] = 5;
+
+        let ring = Ring::init(Q, d, false);
+        ring.chal_mul_poly(&chal, &poly, &mut out);
+
+        assert_eq!(0, out[0]);
+        assert!(out.iter().all(|&c| c < Q));
     }
 
     #[test]

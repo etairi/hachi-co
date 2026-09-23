@@ -201,7 +201,7 @@ impl Prove<&mut U64FileStream, u64> for Hachi {
 
         // Form F_0,tau_0 and F_alpha_tau_1 for sum check
         let mut f_0 = F0::init(&z_r, params.b, tau_0, params.q, (mu + n * params.delta) * params.d);
-        let mut f_alpha = FAlpha::init(&z_r, alpha_pows, tau_1, m_alpha, params.q);
+        let mut f_alpha = FAlpha::init(&z_r, alpha_pows, tau_1, m_alpha);
 
         let (univariates_f_alpha, univariates_f_0, y_dash) = sumcheck_proof(&mut f_0, &mut f_alpha, &mut fs);
 
