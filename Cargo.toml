@@ -2,6 +2,12 @@
 name = "hachi-co"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Prototype of the Hachi lattice-based multilinear polynomial commitment scheme, and of its collaborative variant Hachi-Co"
+readme = "README.md"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex-header.html"]
 
 [dependencies]
 ark-ff = "0.6.0"

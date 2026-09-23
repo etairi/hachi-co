@@ -1,3 +1,86 @@
+//! # Evaluation proof, one round (paper, Sections 3.2, 4.2 and 4.3; Fig. 3 and Fig. 7)
+//!
+//! Proves that the committed polynomial $f \in \mathbb Z_q^{\le 1}\[X_1, \dots, X_\ell\]$ evaluates
+//! to $y$ at the public point $\mathbf x \in \mathbb Z_q^\ell$ (the base-field case, $k = 1$: the
+//! coefficients and the point are in $\mathbb Z_q$, the sumchecks run over
+//! $\mathbb F_{q^4}$ = [`ExtField`]). Coordinates of $\mathbf x$ are 0-based, `x[t]` $= x_t$,
+//! residues in $\[0, q)$. The prover is [`Prove::prove`]; its steps, in order, are:
+//!
+//! 1. **Reduction to $\mathbf R_q$ and first message** ([`compute_y_and_w`], one pass over the
+//!    witness). With $b_i = \prod_{t \lt r} x_t^{i_t}$ for $i \in \lbrace 0,1 \rbrace^r$ and
+//!    $a_j = \prod_{t \lt m} x_{r+t}^{j_t}$ for $j \in \lbrace 0,1 \rbrace^m$ (Eq. (12), (15)), the
+//!    prover computes $w_i = \mathbf a^{\mathsf T} \mathbf f_i \in \mathbf R_q$ and
+//!    $Y = \sum_i b_i w_i = \mathbf b^{\mathsf T} \mathbf w \in \mathbf R_q$ (Eq. (17)). The last
+//!    $\alpha$ variables are absorbed into the ring coefficient index, so the verifier checks
+//!    $y = \langle \mathrm{cf}(Y), \mathbf v_x \rangle$ with $v_{x,i} = \prod_{t \lt \alpha} x_{r+m+t}^{i_t}$:
+//!    this is the $k = 1$ form of the reduction of Section 3, where the trace-map check
+//!    degenerates to an inner product over $\mathbb Z_q$.
+//! 2. **Commitment to $\mathbf w$** ([`commit_w_and_lift`]): $\hat{\mathbf w} = \mathbf G^{-1}(\mathbf w) \in \mathbf R_q^{\delta 2^r}$
+//!    and $\mathbf v = \mathbf D \hat{\mathbf w} \in \mathbf R_q^{n}$ (Eq. (16)), computed over
+//!    $\mathbb Z_q\[X\]$ and divided by $X^d + 1$ so that the quotient $\mathbf v_{quo}$ with
+//!    $\mathbf D \hat{\mathbf w} = \mathbf v + (X^d+1)\mathbf v_{quo}$ is available for step 5.
+//! 3. **Challenges.** The transcript $(\mathbf u, Y, \mathbf v)$ is hashed ([`FS`]) into the seed
+//!    of $c_1, \dots, c_{2^r} \in \mathcal C$, each with $\omega$ nonzero $\pm 1$ coefficients
+//!    ([`PChal::rand_vec`]).
+//! 4. **Response** ([`compute_z`], second pass over the witness):
+//!    $\mathbf z = \sum_i c_i \mathbf s_i \in \mathbf R_q^{\delta 2^m}$ as wrapping-signed
+//!    integers, with $\lVert \mathbf z \rVert_\infty \le \beta$ asserted (the abort of Fig. 3).
+//! 5. **Ring switching** (Section 4.3): every row of the verification equation Eq. (20),
+//!    $$\begin{bmatrix} \mathbf D & 0 & 0 \cr 0 & \mathbf B & 0 \cr \mathbf b^{\mathsf T}\mathbf G_{2^r} & 0 & 0 \cr
+//!    \mathbf c^{\mathsf T} \otimes \mathbf G_1 & 0 & -\mathbf a^{\mathsf T}\mathbf G_{2^m}\mathbf J_{2^m} \cr
+//!    0 & \mathbf c^{\mathsf T} \otimes \mathbf G_n & -\mathbf A \mathbf J_{2^m} \end{bmatrix}
+//!    \begin{bmatrix} \hat{\mathbf w} \cr \hat{\mathbf t} \cr \hat{\mathbf z} \end{bmatrix} =
+//!    \begin{bmatrix} \mathbf v \cr \mathbf u \cr Y \cr 0 \cr 0 \end{bmatrix} \quad \text{over } \mathbf R_q,$$
+//!    is recomputed over $\mathbb Z_q\[X\]$ (products of degree $\lt 2d$, [`Ring`] with
+//!    `cyclotomic = false`) and divided by $X^d + 1$ ([`PVec::cyclotomic_div`]) to obtain the
+//!    quotient $\mathbf r$ with $\mathbf M^{\prime} \mathbf z^{\prime} = \mathbf y + (X^d+1)\mathbf r$. Here
+//!    $\mathbf J_{2^m}$ is the $\tau$-digit gadget and $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$.
+//!    Row by row: (1) $\mathbf v$, quotient from step 2; (2) $\mathbf u = \mathbf B \hat{\mathbf t}$
+//!    recomputed, its remainder asserted equal to $\mathbf u$, quotient $\mathbf u_{quo}$;
+//!    (3) $\mathbf b^{\mathsf T} \mathbf w = Y$ has integer scalars $b_i$, so the degree stays
+//!    $\lt d$ and the quotient is $0$; (4) $\sum_i c_i w_i - \mathbf a^{\mathsf T}\mathbf z = 0$:
+//!    only $\sum_i c_i w_i$ (computed from $\mathbf w$, which equals
+//!    $(\mathbf c^{\mathsf T} \otimes \mathbf G_1)\hat{\mathbf w}$) has a quotient, since the $a_j$
+//!    are integers; (5) $\sum_i c_i \mathbf t_i - \mathbf A \mathbf z = 0$: both terms have
+//!    quotients ([`lift_c_i_t_i`] and $\mathbf A \mathbf z$), their remainders are asserted equal
+//!    and the row's quotient is their difference.
+//! 6. **Next witness** ([`form_next_witness`]): $\mathbf z^{\prime} = (\hat{\mathbf w}, \hat{\mathbf t}, \hat{\mathbf z})$,
+//!    $\mu = \delta 2^r + n\delta 2^r + \delta\tau 2^m$ ring elements, followed by
+//!    $\mathbf r = \mathbf G^{-1}$ of the five quotients, $(3n+2)\delta$ elements in row order:
+//!    digits of $\mathbf v_{quo}$ ($n\delta$), of $\mathbf u_{quo}$ ($n\delta$), zeros for row 3
+//!    ($\delta$), digits of the row-4 quotient ($\delta$) and of the row-5 quotient ($n\delta$).
+//!    The elements are flattened coefficient-wise (witness index $= $ entry $\cdot d +$ coefficient)
+//!    and zero-padded to $2^\nu$ entries, $\nu = \lceil \log_2((\mu + (3n+2)\delta) d) \rceil$
+//!    (`num_vars`). This is the table of $\tilde w$ of Eq. (21), with the $\log d$ coefficient
+//!    bits as the low variables.
+//! 7. **Commitment to the next witness**: `Hachi::setup(num_vars, false)` and
+//!    [`Commit::commit`] without decomposition (Section 4.5), giving $\mathbf u^{\prime} \in \mathbf R_q^{n^{\prime}}$.
+//! 8. **Field challenges.** The transcript is extended by $\mathbf u^{\prime}$ and its hash seeds a
+//!    ChaCha12 generator that yields, in this order, $\alpha \in \mathbb F_{q^4}$,
+//!    $\tau_0 \in \mathbb F_{q^4}^{\nu}$ and $\tau_1 \in \mathbb F_{q^4}^{\lceil \log_2(3n+2) \rceil}$.
+//! 9. **Verification matrix** ([`crate::hachi::common`]): the table of
+//!    $\mathbf M_\alpha = \[\mathbf M^{\prime}(\alpha) \mid -(\alpha^d+1)\mathbf G_{3n+2}\]$.
+//! 10. **Sumchecks** ([`F0`], [`FAlpha`], [`sumcheck_proof`]) over the $\nu$ variables of
+//!     $\tilde w$, both folded least-significant bit first (the $\log d$ coefficient bits, then the
+//!     entry bits) and sharing every round's challenge $r_j$, which is derived from the transcript
+//!     after the round polynomial of $F_\alpha$ and then that of $F_0$ have been appended:
+//!     $$F_{0,\tau_0}(\mathbf x) = \mathrm{eq}(\tau_0, \mathbf x) \cdot \tilde w(\mathbf x) (\tilde w(\mathbf x) + b/2) \prod_{j=1}^{b/2-1} (\tilde w(\mathbf x)^2 - j^2),$$
+//!     claimed sum $0$, degree $b+1$ per variable, vanishing on the hypercube iff every entry is
+//!     a balanced digit in $\[-b/2, b/2-1\]$ (the paper's Eq. (23) instead uses the roots
+//!     $0, \pm 1, \dots, \pm(b-1)$; the code checks the exact digit set of $\mathbf G^{-1}$, which is
+//!     stricter), and
+//!     $$F_{\alpha,\tau_1}(\mathbf x, \mathbf y) = \tilde w(\mathbf x, \mathbf y) \cdot \tilde\alpha(\mathbf y) \cdot \sum_i \mathrm{eq}(\tau_1, i) \tilde M_\alpha(i, \mathbf x),$$
+//!     claimed sum $a = \sum_i \mathrm{eq}(\tau_1, i) y_i(\alpha)$ with $\mathbf y = (\mathbf v, \mathbf u, Y, 0, \mathbf 0_n)$,
+//!     degree $2$ per variable (Section 4.3, Fig. 5 and Fig. 6). Here $\mathbf y$ are the $\log d$
+//!     coefficient variables, $\mathbf x$ the entry variables and $\tilde\alpha(\mathbf y) = \alpha^{\mathbf y}$.
+//! 11. **Output**: [`ProofRound`] with $y^{\prime} = \tilde w(r_1, \dots, r_\nu)$, the evaluation of the
+//!     next witness at the sumcheck challenges.
+//!
+//! Not implemented (first-round prototype): the opening of $\mathbf u^{\prime}$ at $\mathbf r$ that would
+//! justify $y^{\prime}$, any hiding or zero-knowledge, and the recursion to the next round. The witness is
+//! read twice (steps 1 and 4); the table of $\mathbf M_\alpha$ and the sumcheck tables are held in
+//! memory.
+
 use ark_ff::AdditiveGroup;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
@@ -24,31 +107,42 @@ use crate::hachi::prover_utils::rq::{commit_w_and_lift, compute_z, lift_c_i_t_i,
 use crate::hachi::prover_utils::zq_zq::{compute_y_and_w, form_next_witness};
 use crate::hachi::common::{form_m_alpha_different_matrices, form_m_alpha_same_matrix};
 
-/// Structure to store a round of the evaluation proof.
+/// One round of the evaluation proof: the prover's messages of Fig. 3 and Fig. 7, made
+/// non-interactive by Fiat-Shamir (every challenge is re-derived by the verifier from
+/// $\mathbf u$ and these fields).
 pub struct ProofRound {
-    // single ring element produced when reducing Zq to Rq
+    /// $Y \in \mathbf R_q$ (a [`PVec`] of one element): the reduction of the evaluation claim to
+    /// $\mathbf R_q$, $Y = \mathbf b^{\mathsf T}\mathbf w$; the verifier checks
+    /// $y = \langle \mathrm{cf}(Y), \mathbf v_x \rangle$.
     pub y: PVec,
 
-    // commitment to w
+    /// $\mathbf v = \mathbf D \hat{\mathbf w} \in \mathbf R_q^{n}$: commitment to the decomposed
+    /// first message (Eq. (16)).
     pub v: PVec,
 
-    // commitment to new witness
+    /// $\mathbf u^{\prime} \in \mathbf R_q^{n^{\prime}}$: outer commitment to the next witness
+    /// $(\mathbf z^{\prime}, \mathbf r)$ under the parameters `Hachi::setup(num_vars, false)`.
     pub u_dash: PVec,
 
-    // sumcheck univariates for F_alpha
+    /// Round polynomials of the sumcheck for $F_{\alpha,\tau_1}$, one per variable of $\tilde w$,
+    /// each given by its $3$ evaluations at $0, 1, 2$.
     pub univariates_f_alpha: Vec<Univariate<ExtField>>,
 
-    // sumcheck univariates for 0
+    /// Round polynomials of the sumcheck for $F_{0,\tau_0}$, one per variable, each given by its
+    /// $b+2$ evaluations at $0, \dots, b+1$.
     pub univariates_f_0: Vec<Univariate<ExtField>>,
 
-    // claimed new evaluation
+    /// $y^{\prime} = \tilde w(r_1, \dots, r_\nu)$: the claimed evaluation of the next witness at the
+    /// sumcheck challenges. Supplied by the prover and trusted by the verifier in this prototype
+    /// (no opening of $\mathbf u^{\prime}$).
     pub y_dash: ExtField
 }
 
-/// Evaluation proof function.
+/// Evaluation proof for a witness of type `T` at a point with coordinates of type `F`.
 pub trait Prove<T, F> {
-    /// Evaluation proof for the multilinear polynomial witness provided as T,
-    /// with an evaluation point provided as a slice over F.
+    /// One round of the evaluation proof for the multilinear polynomial `witness`, committed as
+    /// `com` under `params`, at the point `x` (`x.len() == params.l`). The claimed value $y$ is not
+    /// an input: it is determined by the witness and checked by the verifier against $Y$.
     fn prove(
         witness: T,                     // witness polynomial
         params: &Parameters,            // parameters
@@ -57,7 +151,14 @@ pub trait Prove<T, F> {
     ) -> ProofRound;
 }
 
-/// Implementation of the evaluation proof for an evaluation point over integers.
+/// The prover for a witness streamed from a file and an evaluation point over $\mathbb Z_q$
+/// (coordinates as residues in $\[0, q)$). The steps are listed in the module documentation.
+///
+/// Preconditions: `params` from `Hachi::setup(l, true)` (the response is folded from the
+/// decomposed chunks, so `decomp_witness` must be set), `witness.length() >= 1 << params.l`, and
+/// `com` produced by [`Commit::commit`] from the same witness and parameters. Panics, via
+/// assertions, if $\lVert \mathbf z \rVert_\infty \gt \beta$ or if a lifted equation disagrees with
+/// its $\mathbf R_q$ counterpart. The commitment matrices are regenerated from the seeds.
 impl Prove<&mut U64FileStream, u64> for Hachi {
     #[time_graph::instrument]
     fn prove(
@@ -178,7 +279,7 @@ impl Prove<&mut U64FileStream, u64> for Hachi {
         // Get the powers of alpha
         let alpha_pows = powers(alpha, params.d);
 
-        // Get [M | -(X^d+1).In] evaluated at alpha
+        // Get [M' | -(X^d+1).G_{3n+2}] evaluated at alpha (the quotient r is gadget-decomposed)
         let m_alpha = if params.reuse_mats {
             form_m_alpha_same_matrix(params, x, &challenges, &alpha_pows, &mat_d)
         } else {

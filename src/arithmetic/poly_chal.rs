@@ -1,21 +1,57 @@
+//! Sparse challenge polynomials $c \in \mathcal C \subset \mathbf R_q$ (paper, Section 4.2 for the
+//! challenge space, Section 5.4 for the sampling and the sparse products).
+//!
+//! The challenge space of the prototype is the set of ring elements with *exactly* $k$ nonzero
+//! coefficients, each equal to $1$ or $-1$, where $k$ is `params.k`, the paper's $\omega$ (not
+//! the extension degree):
+//! $$\mathcal C = \Bigl\lbrace c = \sum_{i \lt k} \varepsilon_i X^{e_i} : 0 \le e_0 \lt e_1 \lt \dots \lt e_{k-1} \lt d, \quad \varepsilon_i \in \lbrace -1, 1 \rbrace \Bigr\rbrace,$$
+//! so that $\lVert c \rVert_1 = k$ and $\lVert c \rVert_\infty = 1$: a subset of the paper's
+//! $\lbrace c \in \mathbf R_q : \lVert c \rVert_1 \le \omega \rbrace$ with $\omega = k$
+//! (Section 4.2). Its size is $\binom{d}{k} 2^k$, about $2^{131.6}$ for the default $d = 1024$,
+//! $k = 16$ (Section 5.4). Two distinct challenges differ by an element of $\ell_\infty$ norm at
+//! most $2$, which is invertible in $\mathbf R_q$ by Lemma 3 of Section 2.1 because
+//! $q \equiv 5 \pmod 8$; the paper's extraction argument (Lemma 8, Section 4.2) assumes
+//! $\omega \lt q^{1/2} / (2\sqrt 2)$ (so that the difference of two challenges, of $\ell_1$ norm at most $2\omega$, is invertible by Lemma 3).
+//!
+//! ## Encoding
+//!
+//! A challenge is stored sparsely, as its $k$ nonzero coefficients only: a `Vec<u32>` in which
+//! the entry `(e << 1) | s` encodes the coefficient $\varepsilon X^e$, with sign bit `s = 1` for
+//! $\varepsilon = 1$ and `s = 0` for $\varepsilon = -1$. Entries are sorted increasingly, hence by
+//! exponent (exponents are distinct), which makes the shifted additions of the sparse products
+//! ([`crate::arithmetic::ring::Ring::chal_mul_poly`]) sweep memory in order. A challenge is
+//! never expanded to dense form: multiplying by it costs $k d$ additions instead of an NTT
+//! (paper, Section 5.4).
+
 use ark_ff::AdditiveGroup;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 
 use crate::arithmetic::{ExtField, utils::{Logarithm, rand_int}};
 
-/// Representation of a sparse polynomial challenge which contains exactly k coefficients
-/// with value -1 or 1, and all other coefficients zero.
-/// Store the k non-zero coefficients in a vector of integers where each element 
-/// stores the sign in the LSB and the index in the rest of the bits.
+/// A sparse challenge $c \in \mathcal C$: exactly $k$ coefficients equal to $\pm 1$, all others
+/// zero, stored as the packed `(exponent << 1) | sign` entries described in the module
+/// documentation.
 pub struct PChal {
+    /// The $k$ nonzero coefficients as `(exponent << 1) | sign`, sorted increasingly (sign bit
+    /// `1` means $+1$, `0` means $-1$).
     coeffs: Vec<u32>,
 }
 
 impl PChal {
-    /// Sample a random challenge.
+    /// Sample a uniformly random challenge of $\mathcal C$ for ring dimension `d` and sparsity
+    /// `k` ($k \le d$) from `rng`, by the partial Fisher-Yates shuffle of the paper's
+    /// Section 5.4. Starting from `arr = [0, 1, ..., d - 1]`, step $i$ ($i \lt k$) draws a
+    /// uniform integer in $\[0, 2(d - i))$ by rejection sampling ([`rand_int`]); its high bits
+    /// select a uniformly random not-yet-struck position `i + index` in `arr[i..d]` and its low
+    /// bit is the sign. The selected exponent, packed with its sign, is moved to position $i$
+    /// and the value it displaces takes its old place (the swap back is skipped at the last step,
+    /// where nothing reads it). The first $k$ entries are then sorted. The $k$ exponents thus form
+    /// a uniformly random $k$-subset of $\lbrace 0, \dots, d - 1 \rbrace$ and the signs are
+    /// independent uniform bits, so the output is uniform over $\mathcal C$. Cost: $O(d)$ to
+    /// build the array plus $O(k \log k)$ to sort. Exponents must fit in 31 bits.
     pub fn rand(d: usize, k: usize, rng: &mut impl Rng) -> Self {
-        // create array [0, 1, 2, ..., D]
+        // create array [0, 1, 2, ..., d - 1]
         let mut arr = vec![0u32; d];
 
         for i in 1..d {
@@ -48,7 +84,10 @@ impl PChal {
         Self { coeffs : v }
     }
 
-    /// Sample a vector of random challenge polynomials from the given seed.
+    /// Sample `num` independent challenges, in sequence, from a `ChaCha12Rng` seeded with `seed`.
+    /// This is the Fiat-Shamir derivation of the challenge vector $(c_1, \dots, c_{2^r})$ of the
+    /// paper's Fig. 3 from a transcript seed ([`crate::arithmetic::fs::FS::get_seed`]): prover
+    /// and verifier obtain identical vectors from identical seeds.
     pub fn rand_vec(num: usize, d: usize, k: usize, seed: [u8; 32]) -> Vec<Self> {
         let mut vec: Vec<Self> = Vec::with_capacity(num);
         let mut rng = ChaCha12Rng::from_seed(seed);
@@ -60,25 +99,29 @@ impl PChal {
         vec
     }
 
-    /// Build a challenge from explicit (exponent, sign) entries (tests only). Sign: false => -1, true => 1.
+    /// Build a challenge from explicit `(exponent, sign)` entries, in the given order and without
+    /// sorting or checking distinctness (tests only). Sign: `false` means $-1$, `true` means $+1$.
     #[cfg(test)]
     pub fn from_entries(entries: &[(usize, bool)]) -> Self {
         Self { coeffs: entries.iter().map(|&(exp, sign)| ((exp as u32) << 1) | (sign as u32)).collect() }
     }
 
-    /// Return the number of non-zero coefficients.
+    /// The number $k$ of nonzero coefficients, i.e. $\lVert c \rVert_1$.
     pub fn k(&self) -> usize {
         self.coeffs.len()
     }
 
-    /// Return the index and sign of the j-th non-zero coefficient of the i-th element.
-    /// Sign will be binary. False => -1, True => 1
+    /// The `(exponent, sign)` of the $i$-th nonzero coefficient of this challenge in increasing
+    /// order of exponent, $0 \le i \lt k$; `sign == true` means $+1$ and `false` means $-1$.
     pub fn get(&self, i: usize) -> (usize, bool) {
         ((self.coeffs[i] >> 1) as usize, (self.coeffs[i] & 1) == 1)
     }
 
-    /// Evaluate the polynomial at a given extension field element alpha in
-    /// given the powers [1, alpha, alpha^2 ... alpha^(d-1)].
+    /// Evaluate at $\alpha \in \mathbb F_{q^4}$: $c(\alpha) = \sum_{i \lt k} \varepsilon_i \alpha^{e_i}$,
+    /// given the table `alpha_pows[j]` $= \alpha^j$ for $j \lt d$
+    /// ([`crate::arithmetic::utils::powers`]). Costs $k$ additions or subtractions and no
+    /// multiplication. Used when the challenges enter the lifted verification equations at the
+    /// ring-switching point $\alpha$ (paper, Section 4.3).
     pub fn eval(&self, alpha_pows: &[ExtField]) -> ExtField { 
         let mut out = ExtField::ZERO;
 

@@ -1,20 +1,51 @@
+//! Vectors of polynomials over $\mathbb Z_q$ in coefficient form: the vectors over $\mathbf R_q$
+//! of the paper (witness chunks $\mathbf f_i$, their digits $\mathbf s_i = \mathbf G^{-1}(\mathbf f_i)$,
+//! the commitments $\mathbf t$, $\mathbf u$, $\mathbf v$, the response $\mathbf z$;
+//! Section 4.1-4.2) and, in the prover's ring switching (Section 4.3), their lifts to
+//! $\mathbb Z_q\[X\]$ of degree below $2d$. The gadget decomposition $\mathbf G^{-1}$ of
+//! Section 2.1 is implemented here as well.
+//!
+//! ## Layout
+//!
+//! A [`PVec`] of `len` elements with `d` coefficients each is one flat `Vec<u64>` of length
+//! `len * d`: the coefficient of $X^j$ of element $i$ is at index `i * d + j`. `d` must be a
+//! power of two (element slicing shifts by $\log_2 d$); it is the ring dimension $d$ for elements
+//! of $\mathbf R_q$ and $2d$ for the full products that [`crate::arithmetic::ring::Ring`]
+//! produces in full mode. Two coefficient conventions exist (see [`crate::arithmetic`]):
+//! residues in $\[0, q)$, produced by [`PVec::rand`] and by every reduced product, and wrapping
+//! two's-complement short integers, produced by [`PVec::b_decomp`] and [`PVec::b_decomp_zq`]
+//! and held by the response $\mathbf z$. Which one a vector holds is fixed by its producer; the
+//! type does not record it.
+//!
+//! ## Decomposed layout
+//!
+//! For a base $b$ and $\delta$ digits, the decomposition of a vector of $n$ elements is a vector
+//! of $n \delta$ elements in which digit $k$ of element $i$ is element $i \delta + k$. This is the
+//! column order of the gadget matrix $\mathbf G_{b,n} = \mathbf I_n \otimes (1, b, \dots, b^{\delta - 1})$
+//! of the paper's Section 2.1, so that $\mathbf G \cdot \mathbf G^{-1}(\mathbf t) = \mathbf t$ reads
+//! $\sum_{k \lt \delta} b^k \cdot \mathrm{out}\[i \delta + k\] = \mathbf t\[i\]$ coefficient by
+//! coefficient.
+
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 
 use crate::arithmetic::{CoeffType, fs::Serialise, poly::Poly, utils::{Logarithm, b_decomp, rand_int, to_window}};
 
-/// Representation of a vectors of polynomials over Zq with maximum degree d-1.
-/// Stored in default (coefficient) format one after another in a single vector
-/// (Array of Structure).
+/// A vector of polynomials over $\mathbb Z_q$ in coefficient form, stored flat (see the module
+/// documentation for the layout and the coefficient conventions).
 pub struct PVec {
+    /// Number of elements (polynomials).
     len: usize,
+    /// Number of coefficients of each element, a power of two.
     d: usize,
+    /// $\log_2$ of `d`, used to slice elements by shifting.
     logd: usize,
+    /// The `len * d` coefficients, element after element.
     vec: Vec<CoeffType>
 }
 
 impl PVec {
-    /// Initialize a zero vector.
+    /// The zero vector of `len` elements of dimension `d` (a power of two, asserted).
     pub fn zero(len: usize, d: usize) -> Self {
         assert!(d.is_power_of_two());
         let logd = d.log();
@@ -22,7 +53,12 @@ impl PVec {
         Self { len, d, logd, vec: vec![0; len * d] }
     }
 
-    /// Sample a vector with elements that have uniform random Zq coefficients.
+    /// A vector of `len` elements whose `len * d` coefficients are independent uniform residues in
+    /// $\[0, q)$, drawn from a `ChaCha12Rng` seeded with `seed` by rejection sampling
+    /// ([`rand_int`]). The output is a deterministic function of the seed: this is how the public
+    /// matrices $\mathbf A$, $\mathbf B$, $\mathbf D$ are expanded from their seeds
+    /// ([`crate::arithmetic::poly_mat::PMat::rand`]). With a small bound in place of `q` (as the
+    /// tests do) the coefficients are digits in $\[0, q)$, still read as unsigned.
     pub fn rand(len: usize, d: usize, q: CoeffType, seed: [u8; 32]) ->  Self {
         assert!(d.is_power_of_two());
         let logd = d.log();
@@ -34,48 +70,75 @@ impl PVec {
         Self { len, d, logd, vec }
     }
 
-    /// Length of vector.
+    /// Number of elements.
     pub fn length(&self) -> usize {
         self.len
     }
 
-    /// Get the i-th element of the vector as a slice.
+    /// Element $i$ as the slice of its `d` coefficients, the coefficient of $X^j$ at index $j$;
+    /// panics if `i >= len`.
     pub fn element(&self, i: usize) -> &[CoeffType] {
         &self.vec[(i << self.logd)..((i + 1) << self.logd)]
     }
 
-    /// Get the i-th element of the vector as a mutable slice.
+    /// Element $i$ as a mutable slice of its `d` coefficients; panics if `i >= len`.
     pub fn mut_element(&mut self, i: usize) -> &mut [CoeffType] {
         &mut self.vec[(i << self.logd)..((i + 1) << self.logd)]
     }
 
-    /// Get a reference to the whole internal vector.
+    /// All `len * d` coefficients, element after element (index `i * d + j`).
     pub fn slice(&self) -> &[CoeffType] {
         &self.vec
     }
 
-    /// Get a mutable reference to the whole internal vector.
+    /// All `len * d` coefficients as a mutable slice, element after element.
     pub fn mut_slice(&mut self) -> &mut [CoeffType] {
         &mut self.vec
     }
 
     #[cfg_attr(feature = "stats", time_graph::instrument)]
-    /// Balanced decomposition of the vector of polynomials, for wrapping-signed coefficients that
-    /// already lie inside the `delta`-digit balanced window (e.g. the bounded response z).
+    /// Balanced gadget decomposition $\mathbf G^{-1}$ of a vector of *short*, wrapping-signed
+    /// polynomials. Every coefficient $x$ is split by [`b_decomp`] into `delta` wrapping-signed
+    /// digits $a_0, \dots, a_{\delta - 1} \in \[-b/2, b/2 - 1\]$ with $x = \sum_k a_k b^k$, and digit
+    /// $k$ of element $i$ is stored as element $i \delta + k$ of `out` (module documentation).
+    /// `base` must be a power of two (its logarithm is taken), and `out` must have `len * delta`
+    /// elements (asserted) of the same dimension.
+    ///
+    /// The split is exact only for $x$ inside the balanced window
+    /// $\[-\frac{b}{2} \cdot \frac{b^\delta - 1}{b - 1}, (\frac{b}{2} - 1) \cdot \frac{b^\delta - 1}{b - 1}\]$
+    /// (see [`crate::arithmetic::utils::window_top`]); outside it the top carry is silently
+    /// lost. The prover applies it to the response $\mathbf z$ with `delta = params.delta_z`
+    /// ($\tau$ digits), whose coefficients are assumed to lie within `params.z_bound`, the top of
+    /// that window for $b = 16$, $\tau = 4$ (paper, Section 4.2, the decomposition
+    /// $\hat{\mathbf z}$ of $\mathbf z$ before Eq. (20)). For residues use
+    /// [`b_decomp_zq`](PVec::b_decomp_zq). Cost: linear in `len * d * delta`.
     pub fn b_decomp(&self, base: u64, delta: usize, out: &mut Self) {
         self.decomp_mapped(|x| x, base, delta, out);
     }
 
     #[cfg_attr(feature = "stats", time_graph::instrument)]
-    /// Balanced decomposition of a vector of polynomials whose coefficients are residues in [0, q).
-    /// Each coefficient is first mapped to its representative in the balanced-digit window
-    /// (see `to_window`), so that recomposition G . G^{-1}(x) = x holds modulo q for every residue.
+    /// Balanced gadget decomposition $\mathbf G^{-1}$ of a vector of residues in $\[0, q)$. Every
+    /// coefficient $x$ is first replaced by its representative in the balanced window, $x$ itself
+    /// if $x \le \mathrm{top}(b, \delta)$ and $x - q$ otherwise ([`to_window`]), and then split
+    /// into `delta` balanced digits exactly as in [`b_decomp`](PVec::b_decomp), with the same
+    /// output layout. The representative is congruent to $x$ and lies inside the window, so
+    /// $\mathbf G \cdot \mathbf G^{-1}(\mathbf t) \equiv \mathbf t \pmod q$ holds for every
+    /// residue, the property required in the paper's Section 2.1. Requires $b^\delta \ge q$,
+    /// i.e. $\delta \ge \lceil \log_b q \rceil$ (`params.delta`), and `base` a power of two;
+    /// panics if a coefficient is not below $q$.
+    ///
+    /// This is the decomposition of the witness chunks, $\mathbf s_i = \mathbf G^{-1}(\mathbf f_i)$,
+    /// of the inner commitments, $\hat{\mathbf t} = \mathbf G^{-1}(\mathbf t)$, of $\mathbf w$ into
+    /// $\hat{\mathbf w}$ (paper, Eq. (13), (14), (16)) and, in the prover's ring switching, of the
+    /// quotients by $X^d + 1$ (Section 4.3).
     pub fn b_decomp_zq(&self, q: u64, base: u64, delta: usize, out: &mut Self) {
         self.decomp_mapped(|x| to_window(x, q, base, delta), base, delta, out);
     }
 
-    /// Decompose each coefficient after applying `map`, scattering digit k of coefficient j of
-    /// polynomial i to out[i * d * delta + j + k * d].
+    /// Common body of the two decompositions: applies `map` to every coefficient, splits the
+    /// result with [`b_decomp`] into `delta` base-$2^{\log_2 b}$ digits, and scatters digit $k$ of
+    /// coefficient $j$ of element $i$ to `out[i * d * delta + k * d + j]`, i.e. to coefficient $j$
+    /// of element $i \delta + k$. Asserts `out.length() == len * delta`.
     fn decomp_mapped(&self, map: impl Fn(CoeffType) -> CoeffType, base: u64, delta: usize, out: &mut Self) {
         assert_eq!(self.length() * delta, out.length());
 
@@ -97,7 +160,13 @@ impl PVec {
         }
     }
 
-    /// Perform cyclotomic reduction of each element of the vector.
+    /// Elementwise division by $X^d + 1$ over $\mathbb Z_q$ ([`Poly::cyclotomic_div`]): `self`
+    /// holds full products of dimension $2d$ with residues in $\[0, q)$, and for every element
+    /// $i$ the quotient and the remainder (each of dimension $d$, the remainder being the element
+    /// reduced into $\mathbf R_q$) are written to element $i$ of `quotient` and `remainder`, which
+    /// must have `len` elements each. This is the split of a lifted product into
+    /// $\mathbf M \mathbf z = \mathbf y + (X^d + 1) \mathbf r$ in the prover's ring switching
+    /// (paper, Section 4.3).
     pub fn cyclotomic_div(&self, q: CoeffType, quotient: &mut Self, remainder: &mut Self) {
         for i in 0..self.length() {
             self.element(i).cyclotomic_div(q, quotient.mut_element(i), remainder.mut_element(i));
@@ -105,7 +174,9 @@ impl PVec {
     }
 }
 
-/// Serialisation of polynomial in coefficient form.
+/// Transcript encoding: every coefficient as 8 big-endian bytes, element after element
+/// (`len * d * 8` bytes). Used by [`crate::arithmetic::fs::FS`] to absorb the commitments
+/// $\mathbf u$, $\mathbf v$, $\mathbf u^{\prime}$ and the ring element $Y$.
 impl Serialise for PVec {
     fn serialise(&self) -> Vec<u8> {
         let mut bytes = Vec::<u8>::new();
@@ -118,7 +189,7 @@ impl Serialise for PVec {
     }
 }
 
-/// Clone the vector.
+/// Deep copy.
 impl Clone for PVec {
     fn clone(&self) -> Self {
         Self { len: self.len, d: self.d, logd: self.logd, vec: self.vec.clone() }

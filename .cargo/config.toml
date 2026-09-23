@@ -1,0 +1,8 @@
+# `cargo docs` builds this crate's documentation (including its private modules) with the KaTeX header
+# (katex-header.html) that renders the equations in the doc comments; `cargo docs-open` also opens it
+# in the browser. The header is passed only to this package's rustdoc invocation, so a plain `cargo doc`
+# (with dependencies) keeps working; docs.rs gets the same header through [package.metadata.docs.rs]
+# in Cargo.toml.
+[alias]
+docs = "rustdoc -- --document-private-items --html-in-header katex-header.html"
+docs-open = "rustdoc --open -- --document-private-items --html-in-header katex-header.html"
