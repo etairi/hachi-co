@@ -1,0 +1,19 @@
+[package]
+name = "hachi-co-math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Modulus-generic arithmetic for Hachi-Co: Z_q for a runtime prime, exact R_q products, decompositions, F_{q^k}, R_q^H and the field-to-ring maps"
+publish = false
+
+[dependencies]
+crypto-bigint.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+num-bigint.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+serde.workspace = true
+serde_json.workspace = true

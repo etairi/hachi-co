@@ -1,0 +1,19 @@
+[package]
+name = "hachi-co-sampling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Samplers for Hachi-Co: SHAKE-based PRG, exact uniform and short samplers, l1-ball challenges, seeded matrices, uniform rejection sampling"
+publish = false
+
+[dependencies]
+num-bigint.workspace = true
+num-traits.workspace = true
+rand.workspace = true
+shake.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
+serde_json.workspace = true

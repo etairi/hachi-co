@@ -1,0 +1,15 @@
+[package]
+name = "hachi-co-params"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Setup cascade of the Hachi-Co draft: derived parameters, constraint report and presets"
+publish = false
+
+[dependencies]
+num-bigint.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

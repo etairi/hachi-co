@@ -1,29 +1,37 @@
-[package]
-name = "hachi-co"
+# Hachi-Co workspace.
+#
+# crates/hachi        legacy single-prover Hachi prototype (moved here unchanged; reference and future base PCS)
+# crates/math         modulus-generic arithmetic: Z_q for a runtime prime q, exact R_q products,
+#                     gadget decompositions, F_{q^k} in Hachi's subfield basis, R_q^H, Tr_H, psi, E
+# crates/sampling     PRG, uniform and short samplers, l1-ball challenges, seeded matrices, rejection sampling
+# crates/transcript   framed, domain-separated Fiat-Shamir transcript
+# crates/params       the Setup cascade of the Hachi-Co draft, constraint report and presets
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 license = "MIT"
-description = "Prototype of the Hachi lattice-based multilinear polynomial commitment scheme, and of its collaborative variant Hachi-Co"
-readme = "README.md"
 
-[package.metadata.docs.rs]
-rustdoc-args = ["--html-in-header", "katex-header.html"]
-
-[dependencies]
-ark-ff = "0.6.0"
-ark-poly = "0.6.0"
-ark-std = "0.6.0"
-base64 = "0.23.1"
-memmap2 = "0.9.11"
+[workspace.dependencies]
+crypto-bigint = "0.7"
+num-bigint = "0.5"
+num-traits = "0.2"
 rand = "0.10.3"
 rand_chacha = "0.10.0"
-sha256 = "1.6.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shake = "0.1"
+thiserror = "2"
 tfhe-ntt = "0.7.1"
-time-graph = "0.3.3"
+hachi-co-math = { path = "crates/math" }
+hachi-co-params = { path = "crates/params" }
+hachi-co-sampling = { path = "crates/sampling" }
+hachi-co-transcript = { path = "crates/transcript" }
 
-[features]
-default = ["verbose"]
-verbose = []
-gen_file = []
-stats = []
-nightly = ["tfhe-ntt/avx512"]
+# Tests run optimized (the arithmetic tests are heavy); overflow checks and debug assertions stay on.
+[profile.test]
+opt-level = 3

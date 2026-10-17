@@ -1,0 +1,54 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+  # The Hachi-Co crates. The legacy crate `hachi` is kept byte-identical to the original prototype, so it is
+  # tested (including its golden test) but not held to the formatting and lint gates below.
+  NEW_CRATES: -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt $NEW_CRATES -- --check
+      - run: cargo clippy --locked $NEW_CRATES --all-targets -- -D warnings
+      - run: cargo doc --locked $NEW_CRATES --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo docs --locked
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --workspace --release
+      - run: cargo build --locked --release -p hachi --features gen_file
+  msrv:
+    # The minimum supported Rust version declared in the workspace manifest (rust-version).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo test --locked --workspace --release
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

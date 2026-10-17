@@ -1,0 +1,14 @@
+[package]
+name = "hachi-co-transcript"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Framed, domain-separated Fiat-Shamir transcript for Hachi-Co"
+publish = false
+
+[dependencies]
+shake.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

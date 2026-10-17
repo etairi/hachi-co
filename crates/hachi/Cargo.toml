@@ -1,0 +1,31 @@
+[package]
+name = "hachi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Legacy single-prover Hachi prototype (NOZ26), kept unchanged as the reference implementation and future base PCS of Hachi-Co"
+readme = "../../README.md"
+publish = false
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "../../katex-header.html"]
+
+[dependencies]
+ark-ff = "0.6.0"
+ark-poly = "0.6.0"
+ark-std = "0.6.0"
+base64 = "0.23.1"
+memmap2 = "0.9.11"
+rand.workspace = true
+rand_chacha.workspace = true
+sha256 = "1.6.0"
+tfhe-ntt.workspace = true
+time-graph = "0.3.3"
+
+[features]
+default = ["verbose"]
+verbose = []
+gen_file = []
+stats = []
+nightly = ["tfhe-ntt/avx512"]
