@@ -1,0 +1,31 @@
+[package]
+name = "hachi-co"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Hachi-Co WP11: the collaborative PCS composed with Fiat-Shamir, proof format, sizes and end-to-end tests"
+publish = false
+
+[dependencies]
+hachi-co-commit.workspace = true
+hachi-co-conv.workspace = true
+hachi-co-core.workspace = true
+hachi-co-math.workspace = true
+hachi-co-mpc.workspace = true
+hachi-co-params.workspace = true
+hachi-co-r2l.workspace = true
+hachi-co-sampling.workspace = true
+hachi-co-sumcheck.workspace = true
+hachi-co-transcript.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+# serde_json is a normal dependency of this crate, so the tests can use it without a dev-dependency.
+[dev-dependencies]
+hachi-co-core = { workspace = true, features = ["fixtures"] }
+num-bigint.workspace = true
+rand_chacha.workspace = true
+sha2.workspace = true

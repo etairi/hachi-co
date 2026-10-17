@@ -424,6 +424,79 @@ dependencies = [
 ]
 
 [[package]]
+name = "hachi-co"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-commit",
+ "hachi-co-conv",
+ "hachi-co-core",
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-r2l",
+ "hachi-co-sampling",
+ "hachi-co-sumcheck",
+ "hachi-co-transcript",
+ "num-bigint 0.5.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "hachi-co-commit"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-core",
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-sampling",
+ "hachi-co-transcript",
+ "num-bigint 0.5.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "hachi-co-conv"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-core",
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-sampling",
+ "hachi-co-transcript",
+ "num-bigint 0.5.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "hachi-co-core"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-sampling",
+ "hachi-co-transcript",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hachi-co-math"
 version = "0.1.0"
 dependencies = [
@@ -433,6 +506,13 @@ dependencies = [
  "rand_chacha 0.10.0",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "hachi-co-mpc"
+version = "0.1.0"
+dependencies = [
  "thiserror",
 ]
 
@@ -448,6 +528,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hachi-co-r2l"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-core",
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-sampling",
+ "hachi-co-transcript",
+ "num-bigint 0.5.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hachi-co-sampling"
 version = "0.1.0"
 dependencies = [
@@ -457,6 +555,24 @@ dependencies = [
  "rand_chacha 0.10.0",
  "serde_json",
  "shake",
+ "thiserror",
+]
+
+[[package]]
+name = "hachi-co-sumcheck"
+version = "0.1.0"
+dependencies = [
+ "hachi-co-core",
+ "hachi-co-math",
+ "hachi-co-mpc",
+ "hachi-co-params",
+ "hachi-co-sampling",
+ "hachi-co-transcript",
+ "num-bigint 0.5.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 

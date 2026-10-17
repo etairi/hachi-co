@@ -151,17 +151,22 @@ fn estimates_are_consistent_and_reach_the_target() {
 }
 
 #[test]
-fn presets_lists_toys_then_secure_presets() {
+fn presets_lists_toys_then_dev_then_secure_presets() {
     let all = presets().unwrap();
     let secure = secure_presets().unwrap();
-    assert_eq!(all.len(), 3 + secure.len());
+    assert_eq!(all.len(), 3 + 3 + secure.len());
     assert!(
         all[..3]
             .iter()
             .all(|p| p.kind == PresetKind::Toy && p.security.is_none())
     );
     assert!(
-        all[3..]
+        all[3..6]
+            .iter()
+            .all(|p| p.kind == PresetKind::Dev && p.security.is_none())
+    );
+    assert!(
+        all[6..]
             .iter()
             .all(|p| p.kind == PresetKind::Secure && p.security.is_some())
     );

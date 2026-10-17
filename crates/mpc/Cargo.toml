@@ -1,0 +1,11 @@
+[package]
+name = "hachi-co-mpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Communication layer of Hachi-Co: the Comm trait (F_AH sums, gather, abort agreement, pairwise exchange) and the one-party loopback"
+publish = false
+
+[dependencies]
+thiserror.workspace = true

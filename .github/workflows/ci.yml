@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   # The Hachi-Co crates. The legacy crate `hachi` is kept byte-identical to the original prototype, so it is
   # tested (including its golden test) but not held to the formatting and lint gates below.
-  NEW_CRATES: -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params
+  NEW_CRATES: -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params -p hachi-co-mpc -p hachi-co-core -p hachi-co-commit -p hachi-co-conv -p hachi-co-r2l -p hachi-co-sumcheck -p hachi-co
 jobs:
   lint:
     runs-on: ubuntu-latest

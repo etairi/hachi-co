@@ -1,5 +1,6 @@
-//! Named parameter sets: the toy presets of `docs/m0-spec.md` and the secure 64-bit presets
-//! that `parameters.sage` writes to `crates/params/presets/secure.json`.
+//! Named parameter sets: the toy presets of `docs/m0-spec.md`, the development presets of
+//! `docs/m1-spec.md` (WP11) and the secure 64-bit presets that `parameters.sage` writes to
+//! `crates/params/presets/secure.json`.
 //!
 //! The JSON file is embedded at compile time ([`SECURE_JSON`]). Each secure entry stores the
 //! [`Choices`] (inside its [`Params`]), the parameters Sage derived from them, and the lattice
@@ -20,6 +21,10 @@ pub const SECURE_JSON: &str = include_str!("../presets/secure.json");
 pub enum PresetKind {
     /// Small and insecure, for the Sage oracle and for tests (`docs/m0-spec.md`, "Toy presets").
     Toy,
+    /// Insecure like the toys (the same choices with $n = 1$ and a larger $\ell$), for the
+    /// development and the end-to-end tests of the composed PCS (`docs/m1-spec.md`, WP11):
+    /// [`dev_presets`].
+    Dev,
     /// Meets the $\lambda$-bit target according to the lattice estimator's estimates for the
     /// $\mathsf{MSIS}$ and $\mathsf{MLWE}$ instances of the draft (6_Collaborative_Hachi.tex:563,
     /// 5_Building_Blocks.tex:193), satisfies every condition of the report, and has
@@ -30,9 +35,9 @@ pub enum PresetKind {
 /// A named parameter set.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Preset {
-    /// The name, e.g. `toy-n2` or `secure-l20-n2-a10`.
+    /// The name, e.g. `toy-n2`, `dev-l16` or `secure-l20-n2-a10`.
     pub name: String,
-    /// Toy or secure.
+    /// Toy, development or secure.
     pub kind: PresetKind,
     /// The choices to [`derive`](fn@crate::derive) from.
     pub choices: Choices,
@@ -184,6 +189,39 @@ pub fn toy_presets() -> Vec<Preset> {
         .collect()
 }
 
+/// The numbers of variables $\ell$ of the development presets `dev-l12`, `dev-l16`, `dev-l20`.
+pub const DEV_ELLS: [u32; 3] = [12, 16, 20];
+
+/// The development choices with $\ell$ variables (`docs/m1-spec.md`, WP11): the toy choices
+/// of [`toy_choices`]`(1)` with this $\ell$, that is $n = 1$, $\alpha = 4$, $\kappa = 2$, $b = 4$,
+/// $\omega = 2$ (fixed) in the $\ell\_1$ ball, $n\_A = n\_B = n\_D = 1$, $m\_\rho = 2$, the tight
+/// $\tau$ and the smallest admissible $q$.
+///
+/// **Not secure.** Like the toys, these choices miss the knowledge-error target by far
+/// ($\lvert C \rvert$ is tiny with $d = 16$ and $\omega = 2$) and $q$ has no $\mathsf{MSIS}$
+/// margin; they exist to run the protocol at realistic sizes of the hypercube
+/// ($\ell'' = 18, 21, 23$ for $\ell = 12, 16, 20$).
+pub fn dev_choices(ell: u32) -> Choices {
+    Choices {
+        ell,
+        ..toy_choices(1)
+    }
+}
+
+/// The development presets `dev-l12`, `dev-l16`, `dev-l20`: [`dev_choices`] at each $\ell$ of
+/// [`DEV_ELLS`], of kind [`PresetKind::Dev`]. **Not secure** (see [`dev_choices`]).
+pub fn dev_presets() -> Vec<Preset> {
+    DEV_ELLS
+        .iter()
+        .map(|&ell| Preset {
+            name: format!("dev-l{ell}"),
+            kind: PresetKind::Dev,
+            choices: dev_choices(ell),
+            security: None,
+        })
+        .collect()
+}
+
 /// Parses the embedded [`SECURE_JSON`].
 ///
 /// # Errors
@@ -211,13 +249,14 @@ pub fn secure_presets() -> Result<Vec<Preset>> {
         .collect())
 }
 
-/// The toy presets followed by the secure presets.
+/// The toy presets, then the development presets, then the secure presets.
 ///
 /// # Errors
 ///
 /// As [`secure_preset_file`].
 pub fn presets() -> Result<Vec<Preset>> {
     let mut all = toy_presets();
+    all.extend(dev_presets());
     all.extend(secure_presets()?);
     Ok(all)
 }

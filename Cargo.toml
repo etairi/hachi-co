@@ -6,6 +6,13 @@
 # crates/sampling     PRG, uniform and short samplers, l1-ball challenges, seeded matrices, rejection sampling
 # crates/transcript   framed, domain-separated Fiat-Shamir transcript
 # crates/params       the Setup cascade of the Hachi-Co draft, constraint report and presets
+# crates/mpc          the Comm trait (F_AH sums, gather, abort agreement, pairwise exchange) and the loopback
+# crates/core         context, layout, the matrix M and vector y, inter-block types, randomness and challengers
+# crates/commit       WP7: Commit and Open
+# crates/conv         WP8: the field-to-ring reduction Pi_conv
+# crates/r2l          WP9: ring evaluation claims to linear relations (masks, Rej, aborts)
+# crates/sumcheck     WP10: the collaborative sumcheck and its verifier
+# crates/hachico      WP11: the Hachi-Co PCS with Fiat-Shamir, proof format and sizes
 [workspace]
 resolver = "3"
 members = ["crates/*"]
@@ -24,12 +31,20 @@ rand = "0.10.3"
 rand_chacha = "0.10.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 shake = "0.1"
 thiserror = "2"
 tfhe-ntt = "0.7.1"
+hachi-co = { path = "crates/hachico" }
+hachi-co-commit = { path = "crates/commit" }
+hachi-co-conv = { path = "crates/conv" }
+hachi-co-core = { path = "crates/core" }
 hachi-co-math = { path = "crates/math" }
+hachi-co-mpc = { path = "crates/mpc" }
 hachi-co-params = { path = "crates/params" }
+hachi-co-r2l = { path = "crates/r2l" }
 hachi-co-sampling = { path = "crates/sampling" }
+hachi-co-sumcheck = { path = "crates/sumcheck" }
 hachi-co-transcript = { path = "crates/transcript" }
 
 # Tests run optimized (the arithmetic tests are heavy); overflow checks and debug assertions stay on.

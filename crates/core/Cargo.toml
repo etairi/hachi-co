@@ -1,0 +1,23 @@
+[package]
+name = "hachi-co-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared foundation of the Hachi-Co building blocks: context and public parameters, the z' layout and ownership, the matrix M and vector y, inter-block data types, party randomness and verifier challengers, and (feature `fixtures`) the Sage fixtures with replay providers"
+publish = false
+
+[features]
+# The loader of the Sage oracle's fixtures (`ref/fixtures/*.json`) and the replay providers, used by
+# the tests of every block crate through their dev-dependencies.
+fixtures = ["dep:serde_json", "dep:sha2"]
+
+[dependencies]
+hachi-co-math.workspace = true
+hachi-co-mpc.workspace = true
+hachi-co-params.workspace = true
+hachi-co-sampling.workspace = true
+hachi-co-transcript.workspace = true
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
