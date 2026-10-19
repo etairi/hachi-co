@@ -1,6 +1,6 @@
 //! Fresh honest runs of $\Pi\_{\mathsf{conv}}$ (random $f$ and $\mathbf x$, fresh public
 //! parameters, the parties' resharing from `PrgRandomness`): at toy-n1 on the loopback and at
-//! toy-n2 and toy-n3 on the in-memory network, V's check accepts $y = f(\mathbf x)$ and the
+//! toy-n2, n3, n4 and n8 on the in-memory network, V's check accepts $y = f(\mathbf x)$ and the
 //! relation checker holds; tampered witnesses break the relation where they should. Seeds are
 //! recorded in each test.
 mod common;
@@ -77,8 +77,8 @@ fn fresh_runs_at_toy_n1_pass_the_check_on_the_loopback() {
 }
 
 #[test]
-fn fresh_runs_at_toy_n2_and_n3_pass_the_check_on_the_network() {
-    for n in [2u64, 3] {
+fn fresh_multi_party_runs_pass_the_check_on_the_network() {
+    for n in [2u64, 3, 4, 8] {
         for seed in 0..4u64 {
             let seed = 200 + 10 * n + seed;
             let ctx = context(n, seed);

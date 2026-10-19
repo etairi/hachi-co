@@ -1,9 +1,14 @@
-//! Exact arithmetic on short integer polynomials and infinity norms, shared by the blocks that
-//! handle masks, folds and responses (the ring-to-linear step, `5_Building_Blocks.tex`:127-133,
-//! and the test oracle Open, `6_Collaborative_Hachi.tex`:401).
+//! Exact arithmetic on short integer polynomials, infinity norms and centered representatives,
+//! shared by the blocks that handle masks, folds and responses (the ring-to-linear step,
+//! `5_Building_Blocks.tex`:127-133, and the test oracle Open, `6_Collaborative_Hachi.tex`:401).
 //!
 //! A short polynomial is the vector of its $d$ signed coefficients (index $j$ for $X^j$), an
 //! element of $\mathcal R = \mathbb Z\[X\]/(X^d + 1)$ (`4_preliminaries.tex`:67).
+//!
+//! Three functions center residues ($x \bmod^{\pm} q$, `4_preliminaries.tex`:86): [`center`] for
+//! one canonical residue (unchecked), [`center_poly`] for one polynomial (checked: canonical
+//! residues, odd $q \lt 2^{63}$, any length), and [`centered`] for polynomials of
+//! $\mathcal R\_q$ through [`Ring`] (residues read modulo $q$, $d$ coefficients each).
 
 use crate::data::check_len;
 use crate::{Error, Result};
@@ -66,8 +71,49 @@ pub fn inf_norm_rows(rows: &[Vec<i64>]) -> u64 {
     rows.iter().map(|r| inf_norm(r)).max().unwrap_or(0)
 }
 
+/// $x \bmod^{\pm} q \in \[-(q-1)/2, (q-1)/2\]$ for a residue $x \lt q$ and an odd $q \lt 2^{63}$
+/// (`4_preliminaries.tex`:86), by arithmetic only: $x - q$ if $x \gt (q-1)/2$, else $x$, with
+/// the comparison done by the sign of $(q-1)/2 - x$. For a prime $q$ it equals
+/// [`hachi_co_math::Zq::to_centered`]. Outside these inputs the result is unspecified (the
+/// arithmetic wraps, nothing panics); [`center_poly`] checks the inputs.
+#[inline]
+pub fn center(x: u64, q: u64) -> i64 {
+    let (x, q) = (x as i64, q as i64);
+    // All ones iff x > (q - 1)/2.
+    let negative = (q >> 1).wrapping_sub(x) >> 63;
+    x.wrapping_sub(q & negative)
+}
+
+/// The centered representatives of the coefficients of `p` ([`center`]), after checking that $q$
+/// is odd and below $2^{63}$ and that every coefficient is a canonical residue (one branch on the
+/// combined result). Unlike [`centered`], it refuses residues $\ge q$ and does not check the
+/// length.
+///
+/// # Errors
+/// [`Error::Parameter`] unless $q$ is odd and below $2^{63}$; [`Error::NonCanonical`] naming
+/// `what` if a coefficient is $\ge q$ (the reported value is the largest coefficient, which is not
+/// secret once the input is malformed).
+pub fn center_poly(p: &Poly, q: u64, what: &'static str) -> Result<Vec<i64>> {
+    if q.is_multiple_of(2) || q >= 1 << 63 {
+        return Err(Error::Parameter(format!(
+            "centering needs an odd modulus below 2^63, got q = {q}"
+        )));
+    }
+    let mut bad = 0u8;
+    for x in &p.0 {
+        bad |= u8::from(*x >= q);
+    }
+    if bad != 0 {
+        let value = p.0.iter().copied().max().unwrap_or(0);
+        return Err(Error::NonCanonical { what, value, q });
+    }
+    Ok(p.0.iter().map(|x| center(*x, q)).collect())
+}
+
 /// The centered representatives $a\_j \bmod^{\pm} q \in \[-(q-1)/2, (q-1)/2\]$ of every
-/// polynomial (`4_preliminaries.tex`:86), e.g. the digits of $\mathbf s\_i$ as integers.
+/// polynomial (`4_preliminaries.tex`:86), e.g. the digits of $\mathbf s\_i$ as integers, through
+/// [`Ring::to_centered`]: residues are read modulo $q$, and every polynomial must have $d$
+/// coefficients ([`center_poly`] refuses residues $\ge q$ instead).
 ///
 /// # Errors
 /// [`Error::Math`] for a polynomial without $d$ coefficients.
@@ -182,6 +228,107 @@ mod tests {
         assert_eq!(
             negacyclic_mul(&[0, 1], &[0, i64::MIN + 1]).unwrap(),
             vec![i64::MAX, 0]
+        );
+    }
+
+    /// The toy moduli (`docs/m0-spec.md`, "Toy presets") and two extreme odd primes.
+    const MODULI: [u64; 5] = [3, 8388637, 33554501, 134217757, 9223372036854775783];
+
+    #[test]
+    fn center_matches_zq_at_the_boundaries() {
+        for q in MODULI {
+            let zq = hachi_co_math::Zq::new(q).unwrap();
+            let half = q / 2;
+            let residues = [0, 1, half.saturating_sub(1), half, half + 1, q - 2, q - 1];
+            for x in residues.into_iter().filter(|x| *x < q) {
+                assert_eq!(center(x, q), zq.to_centered(x), "q = {q}, x = {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn center_is_the_centered_representative_for_every_small_odd_modulus() {
+        // Every odd q < 256, prime or not, and every residue, against the definition.
+        for q in (1..256u64).step_by(2) {
+            for x in 0..q {
+                let want = if x > (q - 1) / 2 {
+                    x as i64 - q as i64
+                } else {
+                    x as i64
+                };
+                assert_eq!(center(x, q), want, "q = {q}, x = {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn center_does_not_panic_outside_its_domain() {
+        // Unspecified values, but no overflow panic (overflow checks are on in tests).
+        for (x, q) in [
+            (u64::MAX, 3),
+            (5, 4),
+            (0, 0),
+            (7, 5),
+            (1 << 63, (1 << 63) + 1),
+            (u64::MAX, u64::MAX),
+            // These overflow (q >> 1) - x and x - q in i64.
+            (1 << 63, 3),
+            (1 << 63, 1 << 62),
+        ] {
+            let _ = center(x, q);
+        }
+    }
+
+    #[test]
+    fn center_poly_checks_its_inputs() {
+        let q = 8388637;
+        assert_eq!(
+            center_poly(&Poly(vec![0, q - 1, 1]), q, "s").unwrap(),
+            vec![0, -1, 1]
+        );
+        assert_eq!(
+            center_poly(&Poly(vec![0, q, 1]), q, "s"),
+            Err(Error::NonCanonical {
+                what: "s",
+                value: q,
+                q
+            })
+        );
+        // The largest coefficient is reported.
+        assert_eq!(
+            center_poly(&Poly(vec![q + 3, 0, u64::MAX]), q, "s"),
+            Err(Error::NonCanonical {
+                what: "s",
+                value: u64::MAX,
+                q
+            })
+        );
+        assert_eq!(
+            center_poly(&Poly(vec![]), q, "s").unwrap(),
+            Vec::<i64>::new()
+        );
+        for bad in [0, 2, q - 1, 1 << 63, u64::MAX] {
+            assert!(
+                matches!(
+                    center_poly(&Poly(vec![0]), bad, "s"),
+                    Err(Error::Parameter(_))
+                ),
+                "q = {bad}"
+            );
+        }
+        // Both ends of the centered range at the largest odd prime below 2^63.
+        let big = 9223372036854775783u64;
+        let half = (big / 2) as i64;
+        assert_eq!(
+            center_poly(&Poly(vec![big / 2, big / 2 + 1, big - 1]), big, "s").unwrap(),
+            vec![half, -half, -1]
+        );
+        // On canonical residues it agrees with `centered`.
+        let ring = Ring::new(q, 4).unwrap();
+        let p = Poly(vec![0, 1, q - 1, q / 2 + 1]);
+        assert_eq!(
+            center_poly(&p, q, "s").unwrap(),
+            centered(&ring, core::slice::from_ref(&p)).unwrap()[0]
         );
     }
 

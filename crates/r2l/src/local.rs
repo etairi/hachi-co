@@ -8,8 +8,9 @@
 //! $Ld$ integers, coefficient $j$ of element $i$ at $id + j$; masks, folds and responses have
 //! $N = d\delta 2^m$ entries (`6_Collaborative_Hachi.tex`:275).
 
-use crate::ct::{center_poly, lift_polys, wipe_polys};
+use crate::ct::{lift_polys, wipe_polys};
 use crate::{Error, Result};
+use hachi_co_core::short::center_poly;
 use hachi_co_core::{BlockState, Context, PartyId, PartyRandomness, PartyState, PublicVectors};
 use hachi_co_math::{Poly, decompose};
 use hachi_co_sampling::{l1ball, rej};
@@ -441,9 +442,10 @@ pub fn check_challenges<const K: usize>(ctx: &Context<K>, c: &[Vec<i64>]) -> Res
 /// $\Vert \cdot \Vert\_\infty \le |\mathcal I\_p| \omega \lfloor b/2 \rfloor \le \beta\_1$
 /// (line 129); [`respond`] refuses a fold above $\beta\_1$.
 ///
-/// The digits are secret: they are centered without branches on their values (best effort), the
-/// product branches only on the public challenge's zero coefficients and on overflow, and the
-/// sums only on overflow, which is impossible within the protocol's bounds.
+/// The digits are secret: they are centered without branches on their values (best effort,
+/// [`hachi_co_core::short::center_poly`]), the product branches only on the public challenge's
+/// zero coefficients and on overflow, and the sums only on overflow, which is impossible within
+/// the protocol's bounds.
 ///
 /// # Errors
 /// [`Error::Core`] if the state has the wrong shape; as [`check_challenges`];
@@ -462,7 +464,7 @@ pub fn fold<const K: usize>(
     for block in &state.blocks {
         let ci = &c[block.index];
         for (row, s) in block.s.iter().enumerate() {
-            let mut digits = center_poly(s, q, "s_i (digits)")?;
+            let mut digits = centered_digits(s, q)?;
             let product = hachi_co_core::short::negacyclic_mul(ci, &digits);
             crate::ct::wipe(&mut digits);
             let mut product = product?;
@@ -473,6 +475,17 @@ pub fn fold<const K: usize>(
         }
     }
     Ok(acc)
+}
+
+/// The centered digits of one entry of $\mathbf s\_i$ ([`center_poly`]); a digit $\ge q$ is this
+/// crate's [`Error::NonCanonical`], as for every residue the crate checks itself.
+fn centered_digits(s: &Poly, q: u64) -> Result<Vec<i64>> {
+    center_poly(s, q, "s_i (digits)").map_err(|e| match e {
+        hachi_co_core::Error::NonCanonical { what, value, q } => {
+            Error::NonCanonical { what, value, q }
+        }
+        e => Error::Core(e),
+    })
 }
 
 /// Prover $p$'s response $\mathbf z\_p = \mathsf{Rej}(\sum\_{i \in \mathcal I\_p} c\_i

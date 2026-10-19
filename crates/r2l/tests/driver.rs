@@ -1,11 +1,11 @@
 //! The driver `run`: it reproduces the fixtures with replayed randomness and coins (toy-n1 on the
-//! loopback; toy-n2 and toy-n3 on the threaded test network), honest Fiat-Shamir runs satisfy
+//! loopback; the other fixtures on the in-memory network), honest Fiat-Shamir runs satisfy
 //! M z' = y and the verifier re-derives their challenges, the attempt cap holds, and misbehaving
 //! components (network, challenger, randomness) give errors, not panics.
 
 mod common;
 
-use common::{Hub, K, attempts, load, u_com, u_share};
+use common::{K, attempts, load, run_parties, u_com, u_share};
 use hachi_co_core::{
     Challenger, Context, Ext, Fixture, Fqk, FsChallenger, PartyRandomness, PartyState, Poly,
     PrgRandomness, PublicVectors, ReplayChallenger, ReplayRandomness, SumcheckCoins,
@@ -16,6 +16,7 @@ use hachi_co_r2l::{
     verifier_challenges,
 };
 use sha2::{Digest, Sha256};
+use std::sync::Mutex;
 
 const DOMAIN: &[u8] = b"hachi-co r2l driver test";
 
@@ -61,31 +62,37 @@ fn compare_with_fixture(fx: &Fixture, out: &R2lOutput, p: PartyId) {
     assert_eq!(out.c, fx.int_rows(&at("c")).unwrap());
 }
 
-/// Runs every party of the fixture's instance in its own thread on a fresh test network.
+/// Runs every party of the fixture's instance in its own thread over the in-memory network.
 fn run_threaded<R, H>(
     ctx: &Context<K>,
     pv: &PublicVectors<K>,
     states: &[PartyState<K>],
     u_shares: &[Poly],
     u: &[Poly],
-    mut providers: Vec<(R, H)>,
+    providers: Vec<(R, H)>,
 ) -> Vec<hachi_co_r2l::Result<R2lOutput>>
 where
     R: PartyRandomness<K> + Send,
     H: Challenger<K> + Send,
 {
-    let hub = Hub::new(states.len(), ctx.q());
-    let comms = hub.parties();
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = comms
-            .into_iter()
-            .zip(providers.drain(..))
-            .zip(states.iter().zip(u_shares))
-            .map(|((mut comm, (mut rng, mut ch)), (st, us))| {
-                scope.spawn(move || run(ctx, &mut comm, &mut rng, &mut ch, st, pv, us, u))
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    let providers: Vec<Mutex<Option<(R, H)>>> =
+        providers.into_iter().map(|p| Mutex::new(Some(p))).collect();
+    run_parties(states.len(), ctx.q(), |p, comm| {
+        let (mut rng, mut ch) = providers[p - 1]
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one provider per party");
+        run(
+            ctx,
+            comm,
+            &mut rng,
+            &mut ch,
+            &states[p - 1],
+            pv,
+            &u_shares[p - 1],
+            u,
+        )
     })
 }
 
@@ -299,11 +306,11 @@ fn honest_fiat_shamir_runs_at_toy_n1_satisfy_the_relation() {
     println!("toy-n1: {runs} honest Fiat-Shamir runs, {aborted} aborted attempts");
 }
 
-/// Honest Fiat-Shamir runs of n = 2 and 3 parties on the threaded network: every party has its
+/// Honest Fiat-Shamir runs of n = 2, 3, 4 and 8 parties on the in-memory network: every party has its
 /// own randomness and its own challenger replica, and all reach the same v, c and attempt.
 #[test]
 fn honest_fiat_shamir_runs_with_threads_agree_and_satisfy_the_relation() {
-    for name in ["toy-n2", "toy-n3"] {
+    for name in ["toy-n2", "toy-n3", "toy-n4", "toy-n8"] {
         let (fx, ctx, pv, states) = load(name);
         let n = fx.n();
         let u = u_com(&fx);
@@ -515,6 +522,13 @@ impl Comm for Faulty {
     ) -> hachi_co_mpc::Result<Vec<Vec<u64>>> {
         self.inner.exchange(label, outgoing)
     }
+    fn all_gather(
+        &mut self,
+        label: &'static str,
+        local: &[u64],
+    ) -> hachi_co_mpc::Result<Vec<Vec<u64>>> {
+        self.inner.all_gather(label, local)
+    }
 }
 
 /// The replay challenger, with challenge `c_0` replaced in every attempt.
@@ -649,24 +663,22 @@ fn misbehaving_components_give_errors() {
             ..
         })
     ));
-    let hub = Hub::new(2, ctx2.q());
-    let mut comms = hub.parties();
+    // Party 1 of a two-party network passes party 2's state; party 2 does nothing.
+    let mismatched = run_parties(2, ctx2.q(), |p, comm| {
+        (p == 1).then(|| {
+            let mut rng = ReplayRandomness::new(&fx2, 1).unwrap();
+            let mut ch = ReplayChallenger::new(&fx2).unwrap();
+            let us = u_share(&fx2, 2);
+            run(&ctx2, comm, &mut rng, &mut ch, &states2[1], &pv2, &us, &u2)
+        })
+    });
     assert!(matches!(
-        run(
-            &ctx2,
-            &mut comms[0],
-            &mut rng,
-            &mut ch,
-            &states2[1],
-            &pv2,
-            &u_share(&fx2, 2),
-            &u2
-        ),
-        Err(Error::PartyMismatch {
+        mismatched[0],
+        Some(Err(Error::PartyMismatch {
             expected: 2,
             actual: 1,
             ..
-        })
+        }))
     ));
     let (mut rng, mut ch) = replay();
     let mut lb = Loopback::new(q + 2).unwrap();

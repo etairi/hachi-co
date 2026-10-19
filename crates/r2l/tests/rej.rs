@@ -124,9 +124,10 @@ const C_DOMAIN: &[u8] = b"hachi-co-r2l/abort-rate/c";
 const TRIALS: u64 = 10_000;
 
 /// `num / den` in floating point for `num <= den`, from the top 64 bits of both (exact shifts),
-/// so that the relative error is about 2^-52. (`Ratio::log2` subtracts two logarithms of about
-/// 34000 bits at toy-n3 and loses about 4e-12 to cancellation, which the cross-check against the
-/// oracle's float at 1e-12 detects.)
+/// so that the relative error is about 2^-52: an independent path to the acceptance probability,
+/// cross-checked against the oracle's float at 1e-12. (`Ratio::log2` used to subtract two
+/// logarithms of about 34000 bits at toy-n3 and lost about 4e-12 to cancellation; it is now
+/// accurate to about half an ulp.)
 fn to_f64(num: &BigUint, den: &BigUint) -> f64 {
     let shift = den.bits().saturating_sub(64);
     let top = |x: &BigUint| (x >> shift).iter_u64_digits().next().unwrap_or(0) as f64;

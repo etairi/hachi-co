@@ -1,8 +1,9 @@
-//! The toy presets reproduce the table of `docs/m0-spec.md` ("Toy presets") exactly, and every
-//! other derived value is checked against a direct evaluation of the draft's formulas
+//! The toy presets reproduce the table of `docs/m0-spec.md` ("Toy presets") and the rows the Sage
+//! oracle adds for $n = 4, 8$ (`ref/hachico_ref/params.py`, `TOY_TABLE`) exactly, and every other
+//! derived value is checked against a direct evaluation of the draft's formulas
 //! (6_Collaborative_Hachi.tex:274-288) with big integers.
 
-use hachi_co_params::presets::{toy_choices, toy_presets};
+use hachi_co_params::presets::{TOY_NS, toy_choices, toy_presets};
 use hachi_co_params::{ConstraintId, PresetKind, Severity, derive, preset};
 use num_bigint::BigUint;
 
@@ -24,8 +25,10 @@ type Row = (
     u64,
 );
 
-/// The table of `docs/m0-spec.md`, computed by the main session (independent of this crate).
-const TABLE: [Row; 3] = [
+/// The table of `docs/m0-spec.md`, computed by the main session (independent of this crate), and
+/// the rows `toy-n4`, `toy-n8` of the Sage oracle's `TOY_TABLE` (`ref/hachico_ref/params.py`:
+/// $q$ by its `choose_q`, the rest by its `derive`, also independent of this crate).
+const TABLE: [Row; 5] = [
     (
         "toy-n1", 1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 555, 15, 14,
     ),
@@ -35,12 +38,19 @@ const TABLE: [Row; 3] = [
     (
         "toy-n3", 3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1547, 16, 14,
     ),
+    (
+        "toy-n4", 4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1577, 16, 14,
+    ),
+    (
+        "toy-n8", 8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2177, 17, 14,
+    ),
 ];
 
 #[test]
 fn toy_presets_reproduce_the_brief_table() {
     let presets = toy_presets();
     assert_eq!(presets.len(), TABLE.len());
+    assert_eq!(TOY_NS.len(), TABLE.len());
     for (preset, row) in presets.iter().zip(TABLE) {
         let (name, n, q, delta, r, m, beta1, big_n, gamma, beta, tau, mu, ell_dprime, d0) = row;
         assert_eq!(preset.name, name);
@@ -75,7 +85,7 @@ fn toy_presets_reproduce_the_brief_table() {
 /// The remaining quantities, recomputed from the draft's formulas with `BigUint`.
 #[test]
 fn toy_presets_match_the_formulas_with_big_integers() {
-    for n in 1..=3u64 {
+    for n in TOY_NS {
         let (p, _) = derive(&toy_choices(n)).unwrap();
         let big = |x: u128| BigUint::from(x);
         let (b, omega, d) = (big(4), big(2), big(16));
@@ -154,9 +164,16 @@ fn toy_reports_pass_every_fatal_condition_and_warn_about_the_knowledge_error() {
 
 #[test]
 fn toy_presets_are_found_by_name() {
-    assert_eq!(preset("toy-n2").unwrap().choices, toy_choices(2));
-    assert!(matches!(
-        preset("toy-n4"),
-        Err(hachi_co_params::Error::UnknownPreset(name)) if name == "toy-n4"
-    ));
+    for n in TOY_NS {
+        let p = preset(&format!("toy-n{n}")).unwrap();
+        assert_eq!((p.kind, p.choices), (PresetKind::Toy, toy_choices(n)));
+    }
+    // No toy preset between and beyond the listed party counts.
+    for n in [0, 5, 6, 7, 9, 16] {
+        let name = format!("toy-n{n}");
+        assert!(matches!(
+            preset(&name),
+            Err(hachi_co_params::Error::UnknownPreset(unknown)) if unknown == name
+        ));
+    }
 }

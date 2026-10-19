@@ -1,14 +1,23 @@
-//! The communication layer of Hachi-Co (milestone 1, `docs/m1-spec.md`, section `hachi-co-mpc`).
+//! The communication layer of Hachi-Co (`docs/m1-spec.md`, section `hachi-co-mpc`).
 //!
 //! The party code of every building block is written once against the [`Comm`] trait: the
 //! additively homomorphic functionality $\mathcal F\_{\mathsf{AH}}$ (draft
 //! `4_preliminaries.tex`:185-200), the gather of the masked responses $\mathbf z\_i$ at prover 1
-//! (`5_Building_Blocks.tex`:129-130), the agreement on an abort (`5_Building_Blocks.tex`:129, 131)
-//! and the pairwise exchange of the resharing in Commit (`6_Collaborative_Hachi.tex`:303-305).
-//! Milestone 1 runs it with $n = 1$ on [`Loopback`], where every call is the identity; milestone 2
-//! adds an in-memory $n$-party network with byte and round accounting behind the same trait
-//! (plan `docs/hachi-co-plan.md`, design rule 5: the MPC primitives know nothing about the
-//! protocol).
+//! (`5_Building_Blocks.tex`:129-130), the agreement on an abort (`5_Building_Blocks.tex`:129, 131),
+//! the pairwise exchange of the resharing in Commit (`6_Collaborative_Hachi.tex`:303-305), and the
+//! publication of per-party values ([`Comm::all_gather`]). Nothing protocol-specific enters this
+//! crate (plan `docs/hachi-co-plan.md`, design rule 5).
+//!
+//! Two implementations of [`Comm`]:
+//! - [`Loopback`], the network of a single party, where every call is the identity;
+//! - [`Endpoint`], the $n$-party realization over any point-to-point [`Transport`]: framing and
+//!   desynchronisation checks, $\mathcal F\_{\mathsf{AH}}$ by masked broadcast (each party adds
+//!   its share of a random additive sharing of 0 to its output share, broadcasts the sum and
+//!   adds everything up; [`ZeroSharing`]), and per-label accounting ([`Stats`]).
+//!
+//! [`MemoryTransport`] connects $n$ parties of the same program; [`run_in_memory`] runs one thread per
+//! party over it. [`Faulty`] injects failures into any transport, and a [`Tap`] records the
+//! frames of an in-memory network for tests.
 //!
 //! **Conventions.** Parties are numbered $1, \dots, n$ ([`PartyId`]). Values in $\mathbb Z_q$ are
 //! `u64` residues; a call reads them modulo [`Comm::modulus`] where it adds them, and returns
@@ -22,11 +31,23 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod endpoint;
 mod error;
+mod fault;
 mod loopback;
+mod memory;
+mod run;
+mod stats;
+mod transport;
 
+pub use endpoint::{Endpoint, LABEL_SETUP, ZeroSharing};
 pub use error::{Error, Result};
+pub use fault::{Fault, Faulty};
 pub use loopback::Loopback;
+pub use memory::{MemoryTransport, Tap, TapRecord, memory_network};
+pub use run::{MemoryConfig, MemoryEndpoint, PartyRun, run_in_memory};
+pub use stats::{LabelStats, Stats};
+pub use transport::{Frame, Transport};
 
 /// A party (prover) index, in $1, \dots, n$ (`docs/m1-spec.md`, "Conventions"; the draft numbers
 /// the provers $i \in \[n\]$, `4_preliminaries.tex`:154).
@@ -57,8 +78,9 @@ pub trait Comm {
     /// modulo $q$, so an unreduced entry stands for its residue class.
     ///
     /// # Errors
-    /// [`Error::LengthMismatch`] if the parties' inputs differ in length; [`Error::Transport`] for
-    /// a network failure.
+    /// [`Error::LengthMismatch`] if the parties' inputs differ in length; a transport error
+    /// ([`Error::PeerLeft`], [`Error::Timeout`], [`Error::Desync`], [`Error::Malformed`],
+    /// [`Error::Transport`]) for a network failure.
     fn fah(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<u64>>;
 
     /// Gathers one signed vector from every party at party `to` (draft
@@ -67,7 +89,7 @@ pub trait Comm {
     /// party receives `None`. The vectors are delivered unchanged.
     ///
     /// # Errors
-    /// [`Error::InvalidParty`] if `to` is not in $1, \dots, n$; [`Error::Transport`] for a network
+    /// [`Error::InvalidParty`] if `to` is not in $1, \dots, n$; a transport error for a network
     /// failure.
     fn gather(
         &mut self,
@@ -81,7 +103,7 @@ pub trait Comm {
     /// `true` iff some party passed `true`.
     ///
     /// # Errors
-    /// [`Error::Transport`] for a network failure.
+    /// A transport error for a network failure.
     fn any(&mut self, label: &'static str, local: bool) -> Result<bool>;
 
     /// Pairwise exchange (draft `6_Collaborative_Hachi.tex`:303-305: every party $i$ sends
@@ -90,7 +112,18 @@ pub trait Comm {
     /// sent to this party. The vectors are delivered unchanged (not reduced).
     ///
     /// # Errors
-    /// [`Error::WrongMessageCount`] unless `outgoing` has $n$ vectors; [`Error::Transport`] for a
+    /// [`Error::WrongMessageCount`] unless `outgoing` has $n$ vectors; a transport error for a
     /// network failure.
     fn exchange(&mut self, label: &'static str, outgoing: Vec<Vec<u64>>) -> Result<Vec<Vec<u64>>>;
+
+    /// Publication of per-party values: every party passes a vector and every party receives
+    /// all of them, `result[p - 1]` being the vector of party $p$ (its own included), unchanged.
+    /// The collaborative sumcheck uses it for the per-prover values that the draft has every
+    /// prover send to the verifier ($G\_{0,i}, G\_{1,i}$, defined at `5_Building_Blocks.tex`:218-219
+    /// and sent at line 241, and the final evaluations, lines 314-320).
+    ///
+    /// # Errors
+    /// [`Error::LengthMismatch`] if the parties' vectors differ in length; a transport error for
+    /// a network failure.
+    fn all_gather(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<Vec<u64>>>;
 }

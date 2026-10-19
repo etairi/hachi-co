@@ -43,15 +43,18 @@ fn components_follow_the_formula_for_every_preset() {
 }
 
 /// Hand-computed totals: toy-n1 (n = 1, l'' = 15, 2^23 < q < 2^24), toy-n2 (n = 2, l'' = 15,
-/// 2^25 < q < 2^26), toy-n3 (n = 3, l'' = 16, 2^27 < q < 2^28) and the development presets
+/// 2^25 < q < 2^26), toy-n3 (n = 3, l'' = 16, 2^27 < q < 2^28), toy-n4 (n = 4, l'' = 16,
+/// 2^27 < q < 2^28), toy-n8 (n = 8, l'' = 17, 2^29 < q < 2^30) and the development presets
 /// (n = 1, l'' = 18, 21, 23, q just above 2^29, 2^33, 2^37); d0 = 14 for all of them.
 #[test]
 fn toy_and_dev_sizes_by_hand() {
     // total = 16 + 8 (1 + 16 + 16 + 8n + 76 l'' + 12n); residues = 32 + 20n + 76 l''.
-    let table: [(&str, u128, u128, u32); 6] = [
+    let table: [(&str, u128, u128, u32); 8] = [
         ("toy-n1", 9560, 1192, 24),
         ("toy-n2", 9720, 1212, 26),
         ("toy-n3", 10488, 1308, 28),
+        ("toy-n4", 10648, 1328, 28),
+        ("toy-n8", 11896, 1484, 30),
         ("dev-l12", 11384, 1420, 30),
         ("dev-l16", 13208, 1648, 34),
         ("dev-l20", 14424, 1800, 38),

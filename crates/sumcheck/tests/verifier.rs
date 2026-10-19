@@ -1,4 +1,4 @@
-//! The verifier against the fixtures: it accepts the three recorded transcripts with replayed
+//! The verifier against the fixtures: it accepts every recorded transcript with replayed
 //! coins, its named checks are the oracle's, the final claims match the provers' polynomials
 //! (ideal PCS), and every case of `negative_tests.transcript` and `negative_tests.witness` fails
 //! exactly as recorded (the same set of failing checks, with the PCS openings checked by the
@@ -82,8 +82,10 @@ fn recorded_cases(fx: &Fixture, section: &str) -> BTreeSet<String> {
 }
 
 /// The recorded transcripts are accepted with replayed coins; the named checks, together with
-/// the ideal PCS openings and the Pi_conv check, are exactly the fixture's `verifier/checks`
-/// (36, 39 and 44 checks), all passing; a and M~*(a) are the recorded ones; the claims are the
+/// the ideal PCS openings and the Pi_conv check, are exactly the fixture's `verifier/checks`,
+/// all passing, and there are 1 + 2 l'' + 3n + 2 of them (the conv check, two per round, three
+/// openings per prover and the two final checks, as `ref/run_oracle.py` counts them: 36, 39, 44,
+/// 47 and 61 for toy-n1, n2, n3, n4, n8); a and M~*(a) are the recorded ones; the claims are the
 /// provers' polynomials at the point.
 #[test]
 fn fixture_transcripts_are_accepted() {
@@ -144,7 +146,7 @@ fn fixture_transcripts_are_accepted() {
         let mut want_sorted = want.clone();
         want_sorted.sort();
         assert_eq!(sorted, want_sorted, "{}: the named checks", inst.name);
-        assert_eq!(want.len(), [36, 39, 44][inst.n() - 1]);
+        assert_eq!(want.len(), 1 + 2 * ctx.layout.ell_pp + 3 * inst.n() + 2);
         assert!(fx.bool("/verifier/accept").unwrap());
         let mut all = vec!["conv_y_eq_E(u)".to_owned()];
         all.extend(check_names(&ctx.layout));

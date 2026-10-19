@@ -33,7 +33,7 @@
 //!
 //! **Choices where the draft and the oracle are silent** (each is documented at its item):
 //! - the transcript holds the per-party $G\_{0,p}, G\_{1,p}$ and final values, which every party
-//!   learns through one $\mathcal F\_{\mathsf{AH}}$ call with one slot per party ([`prove`]);
+//!   learns through one [`Comm::all_gather`](hachi_co_mpc::Comm::all_gather) call ([`prove`]);
 //! - the absorb labels ([`LABEL_G0`], …) and the absorption of the final values after the last
 //!   coin ([`prove`], [`verify_checks`]);
 //! - the provers compute the round polynomials of $F\_{0,p}$ at $2b + 2$ nodes and of $F\_{1,p}$
@@ -64,8 +64,8 @@ mod verifier;
 
 pub use blinder::{evaluate, hypercube_sum, round_poly};
 pub use driver::{
-    FAH_FINAL, FAH_ROUND, FAH_SUMS, LABEL_FINAL_G0, LABEL_FINAL_G1, LABEL_FINAL_W, LABEL_G0,
-    LABEL_G1, LABEL_H0, LABEL_H1, prove,
+    ALL_GATHER_FINAL, ALL_GATHER_SUMS, FAH_ROUND, LABEL_FINAL_G0, LABEL_FINAL_G1, LABEL_FINAL_W,
+    LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1, prove,
 };
 pub use eq::{bind_top, eq_eval, eq_point, eq_table, mle_eval, msb_bits};
 pub use error::{Error, Result, VerifyError};

@@ -1,4 +1,4 @@
-//! The Sage oracle's fixtures (`ref/fixtures/toy-n{1,2,3}.json`, format
+//! The Sage oracle's fixtures (`ref/fixtures/toy-n{1,2,3,4,8}.json`, format
 //! `hachi-co-ref-fixture/v1`; `ref/README.md`, "Fixture format"), for the tests of every block
 //! crate (feature `fixtures`).
 //!
@@ -81,8 +81,10 @@ fn flatten_ints(v: &Value, pointer: &str, out: &mut Vec<i64>) -> Result<()> {
 }
 
 impl Fixture {
-    /// The names of the three fixtures, for $n = 1, 2, 3$.
-    pub const TOY: [&'static str; 3] = ["toy-n1", "toy-n2", "toy-n3"];
+    /// The names of the five fixtures, for $n = 1, 2, 3, 4, 8$: one per toy preset, in the
+    /// order of [`TOY_NS`](hachi_co_params::presets::TOY_NS) (`docs/m0-spec.md`, "Toy presets",
+    /// with $n = 4, 8$ added).
+    pub const TOY: [&'static str; 5] = ["toy-n1", "toy-n2", "toy-n3", "toy-n4", "toy-n8"];
 
     /// The format the loader accepts (fixture key `format`).
     pub const FORMAT: &'static str = "hachi-co-ref-fixture/v1";

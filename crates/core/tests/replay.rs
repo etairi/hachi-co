@@ -197,7 +197,7 @@ fn replay_challenger_serves_the_recorded_coins() {
         }
         ch.absorb_exts("G", &[f.one()]);
         let coins = ch.sumcheck_coins(f, l.ell_pp, l.log_n, l.log_nu).unwrap();
-        coins.validate(l).unwrap();
+        coins.validate(l, ctx.q()).unwrap();
         assert_eq!(coins.alpha, fx.ext::<K>("/sumcheck/coins/alpha").unwrap());
         assert_eq!(coins.rho, fx.ext::<K>("/sumcheck/coins/rho").unwrap());
         assert_eq!(coins.tau0, fx.exts::<K>("/sumcheck/coins/tau0").unwrap());

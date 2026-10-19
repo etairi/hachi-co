@@ -3,8 +3,8 @@
 use crate::PartyId;
 
 /// A malformed collective call or a transport failure: errors are values at API boundaries
-/// (`docs/m1-spec.md`, rule 5). The enum is non-exhaustive so that the network of milestone 2 can
-/// add failure kinds.
+/// (`docs/m1-spec.md`, rule 5). The enum is non-exhaustive, so that transports can add failure
+/// kinds.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -41,13 +41,56 @@ pub enum Error {
     /// convention of `docs/m0-spec.md`, "Conventions").
     #[error("invalid modulus {0}: F_AH needs 2 <= q < 2^63")]
     InvalidModulus(u64),
-    /// A transport failure (a closed channel, a peer that left, a desynchronised call); the
-    /// message names it.
+    /// A transport failure that no other variant describes; the message names it.
     #[error("{label}: {message}")]
     Transport {
         /// The label of the call.
         label: &'static str,
         /// What failed.
+        message: String,
+    },
+    /// A peer left: its end of the network is closed, so nothing more can be sent to it or
+    /// received from it (it crashed, or it stopped after an error of its own).
+    #[error("{label}: party {party} left")]
+    PeerLeft {
+        /// The label of the call.
+        label: &'static str,
+        /// The party that left.
+        party: PartyId,
+    },
+    /// No message arrived from a party within the transport's timeout.
+    #[error("{label}: no message from party {party} within {millis} ms")]
+    Timeout {
+        /// The label of the call.
+        label: &'static str,
+        /// The silent party.
+        party: PartyId,
+        /// The timeout in milliseconds.
+        millis: u64,
+    },
+    /// A message of another collective call arrived (another label or call index): the parties
+    /// are out of step.
+    #[error("{label} (round {round}): party {party} sent a message of {got}")]
+    Desync {
+        /// The label of this party's call.
+        label: &'static str,
+        /// This party's round index.
+        round: u64,
+        /// The sender.
+        party: PartyId,
+        /// The label and round index of the message received.
+        got: String,
+    },
+    /// A message whose payload does not have the shape that the call expects (a flag that is
+    /// neither 0 nor 1, a residue that is not below $q$, a set-up message of the wrong length,
+    /// parameters that differ between the parties).
+    #[error("{label}: malformed message from party {party}: {message}")]
+    Malformed {
+        /// The label of the call.
+        label: &'static str,
+        /// The sender.
+        party: PartyId,
+        /// What is wrong.
         message: String,
     },
 }

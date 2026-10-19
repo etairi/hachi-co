@@ -161,6 +161,9 @@ impl Comm for Tampering {
         incoming[0][3] += self.0.modulus();
         Ok(incoming)
     }
+    fn all_gather(&mut self, label: &'static str, local: &[u64]) -> MpcResult<Vec<Vec<u64>>> {
+        self.0.all_gather(label, local)
+    }
 }
 
 #[test]

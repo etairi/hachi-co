@@ -120,6 +120,17 @@ pub enum Error {
         /// The cap that was reached.
         attempts: u64,
     },
+    /// The index $a^\ast$ of the accepted attempt, a proof value, is at or beyond the cap
+    /// [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) on the attempts of [`run`](crate::run)
+    /// (`5_Building_Blocks.tex`:129); honest provers never produce it.
+    /// [`verifier_challenges`](crate::verifier_challenges) refuses it.
+    #[error("attempt index {attempt} is not below the cap {cap}")]
+    AttemptOutOfRange {
+        /// The index that was passed.
+        attempt: u64,
+        /// The cap, [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS).
+        cap: u64,
+    },
     /// A party index outside $1, \dots, n$.
     #[error("party {party} is not in 1..={n}")]
     InvalidParty {

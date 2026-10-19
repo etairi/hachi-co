@@ -1,6 +1,6 @@
 //! The proof encoding and its size: `from_bytes(to_bytes(p)) == p` for the fixture proofs and
 //! for honest proofs; `to_bytes(p).len()` equals the size formula of `hachi-co-params` for every
-//! preset run here (toy-n1, toy-n2, toy-n3; the development presets in `tests/honest.rs`); the
+//! preset run here (the toy presets; the development presets in `tests/honest.rs`); the
 //! length computed from the layout (`encoded_len`) equals the formula for every preset, secure
 //! ones included; the layout of the bytes is the documented one.
 

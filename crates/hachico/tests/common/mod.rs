@@ -1,7 +1,7 @@
 //! Shared helpers of the integration tests: the fixtures (context, statement, the proof built
 //! from the recorded values), seeded inputs and an independent evaluation of $f(\mathbf x)$, an
 //! ideal PCS for the final claims (the oracle's `IdealPCS`, as in the sumcheck crate's tests), a
-//! challenger that records the calls made to it, and the threaded $n$-party test network.
+//! challenger that records the calls made to it, and the parties run over the in-memory network.
 #![allow(dead_code)]
 
 pub mod net;
@@ -176,33 +176,9 @@ pub fn fixture_claims(fx: &Fixture) -> FinalClaims<K> {
     }
 }
 
-/// Party $p$'s state as recorded by the oracle's Commit (`commit/f_shares`, `commit/f_prime`,
-/// `commit/blocks`).
+/// Party $p$'s state as recorded by the oracle's Commit ([`Fixture::party_state`]).
 pub fn recorded_state(fx: &Fixture, ctx: &Context<K>, p: usize) -> PartyState<K> {
-    let l = &ctx.layout;
-    let f_prime = fx.polys("/commit/f_prime").unwrap();
-    let recorded = fx.get("/commit/blocks").unwrap().as_array().unwrap().len();
-    let blocks = l
-        .blocks_of(p)
-        .map(|i| {
-            let j = (0..recorded)
-                .find(|j| fx.usize(&format!("/commit/blocks/{j}/index")).unwrap() == i)
-                .unwrap();
-            let key = |k: &str| fx.polys(&format!("/commit/blocks/{j}/{k}")).unwrap();
-            hachi_co_core::BlockState {
-                index: i,
-                f_prime: f_prime[i * l.block_len..(i + 1) * l.block_len].to_vec(),
-                s: key("s"),
-                t: key("t"),
-                t_hat: key("t_hat"),
-            }
-        })
-        .collect();
-    PartyState {
-        party: p,
-        share: fx.exts(&format!("/commit/f_shares/{}", p - 1)).unwrap(),
-        blocks,
-    }
+    fx.party_state(ctx, p).unwrap()
 }
 
 /// The oracle's `IdealPCS` (`ref/README.md`, choice 13), as in the sumcheck crate's tests: a

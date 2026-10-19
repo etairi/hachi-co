@@ -2,8 +2,9 @@
 negative tests, and the JSON fixtures in ref/fixtures/.
 
 Usage (any working directory):
-    sage -python ref/run_oracle.py                # self-tests, n = 1, 2, 3, negative tests, fixtures
+    sage -python ref/run_oracle.py                # self-tests, n = 1, 2, 3, 4, 8, negative tests, fixtures
     sage -python ref/run_oracle.py --n 2          # only toy-n2
+    sage -python ref/run_oracle.py --out DIR      # write the fixtures to DIR instead of ref/fixtures
     sage -python ref/run_oracle.py --no-write     # do not write fixtures
     sage -python ref/run_oracle.py --sweep 3      # also 3 extra honest runs per n (seeds .../1 .. .../3)
 Exit status 0 iff every check passed.
@@ -47,7 +48,7 @@ def select_run(P, seed_index=None, max_index=32):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, nargs="*", default=[1, 2, 3])
+    ap.add_argument("--n", type=int, nargs="*", default=[1, 2, 3, 4, 8])
     ap.add_argument("--no-write", action="store_true")
     ap.add_argument("--no-selftest", action="store_true")
     ap.add_argument("--no-negative", action="store_true")

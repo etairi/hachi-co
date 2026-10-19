@@ -14,13 +14,13 @@ the single-prover **Hachi** prototype, which is kept unchanged as its own crate.
 | `crates/sampling` | `hachi-co-sampling` | SHAKE-based PRG, exact uniform and short samplers, $\ell_1$-ball challenges, matrices from seeds, uniform rejection sampling. |
 | `crates/transcript` | `hachi-co-transcript` | Framed, domain-separated Fiat–Shamir transcript with an attempt counter. |
 | `crates/params` | `hachi-co-params` | The draft's Setup cascade, a constraint report, toy and secure presets. |
-| `crates/mpc` | `hachi-co-mpc` | The communication interface of the party code (F_AH sums, gather, abort agreement, pairwise exchange), with a loopback network for one party. |
+| `crates/mpc` | `hachi-co-mpc` | The communication interface of the party code (F_AH, gather, abort agreement, pairwise exchange, all-gather) and its implementations: a loopback for one party, and an n-party endpoint over any point-to-point transport, which realizes F_AH as a masked broadcast (pseudorandom zero sharings from pairwise seeds, or fresh uniform ones), checks the framing, injects failures and counts bytes per call. An in-memory transport runs the parties on threads. |
 | `crates/core` | `hachi-co-core` | The shared protocol context: parameters and public matrices, the layout of the witness z′, the matrix M of the linear relation, the data passed between the building blocks, and the sources of randomness and Fiat–Shamir coins (with replay of the Sage fixtures for tests). |
 | `crates/commit` | `hachi-co-commit` | Commit (resharing, PConv, inner Ajtai commitments, F_AH(B)) and Open. |
 | `crates/conv` | `hachi-co-conv` | Πconv, the reduction from F_{q^k} to R_q, and the verifier's check y = E(u). |
 | `crates/r2l` | `hachi-co-r2l` | The ring-to-linear step: masks, rejection sampling, aborts and retries, and the shares of the linear relation. |
 | `crates/sumcheck` | `hachi-co-sumcheck` | The collaborative sumcheck and its verifier, which returns the final evaluation claims for the base PCS. |
-| `crates/hachico` | `hachi-co` | The PCS: Setup, Commit, Eval and Verify with Fiat–Shamir, the proof format and its size. Hachi is not yet the base PCS: the verifier returns the final evaluation claims that Hachi will prove. |
+| `crates/hachico` | `hachi-co` | The PCS: Setup, Commit, Eval and Verify with Fiat–Shamir, the proof format and its size. Its tests run Commit and Eval with 1 to 8 provers, one thread each. Hachi is not yet the base PCS: the verifier returns the final evaluation claims that Hachi will prove. |
 | `ref/` | — | A SageMath reference implementation of the building blocks, used as a test oracle and fixture generator. |
 
 `parameters.sage` computes parameters and security estimates. It clones the lattice estimator into a

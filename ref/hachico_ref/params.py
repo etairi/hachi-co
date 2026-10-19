@@ -205,11 +205,17 @@ def choose_q(n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_rho, tau_rule="tig
 
 TOY_COMMON = dict(ell=6, alpha=4, kappa=2, b=4, omega=2, n_A=1, n_B=1, n_D=1, m_rho=2)
 
-# m0-spec "Toy presets" table: name -> (n, q, delta, r, m, beta1, N, gamma, beta, tau, mu, l'', d0)
+# name -> (n, q, delta, r, m, beta1, N, gamma, beta, tau, mu, l'', d0).
+# toy-n1..n3: the m0-spec "Toy presets" table.  toy-n4 and toy-n8: the same
+# choices with n = 4 and 8, every number produced by choose_q and derive below.  check_toy_table re-derives
+# every row.  toy-n4 has the modulus of toy-n3: both have tau = 11, so the binding guard 16 omega b^tau = 2^27
+# is the largest bound for both.
 TOY_TABLE = {
     "toy-n1": (1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 555, 15, 14),
     "toy-n2": (2, 33554501, 13, 3, 2, 32, 832, 106496, 212992, 10, 785, 15, 14),
     "toy-n3": (3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1547, 16, 14),
+    "toy-n4": (4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1577, 16, 14),
+    "toy-n8": (8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2177, 17, 14),
 }
 
 
@@ -220,7 +226,7 @@ def toy_preset(n):
 
 
 def check_toy_table():
-    """Re-derives the m0-spec toy table (including q by the selection rule); returns a list of lines."""
+    """Re-derives every row of TOY_TABLE (including q by the selection rule); returns a list of lines."""
     out = []
     for name, row in TOY_TABLE.items():
         n = row[0]

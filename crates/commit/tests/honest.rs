@@ -1,5 +1,5 @@
 //! Honest Commit runs with fresh randomness (`PrgRandomness`) and fresh public parameters
-//! (`Context::setup`): at toy-n1 on the loopback, and at toy-n2 and toy-n3 on the in-memory
+//! (`Context::setup`): at toy-n1 on the loopback, and at toy-n2, n3, n4 and n8 on the in-memory
 //! network; every run passes Open with $c^\*$. Seeds are recorded in each test (inputs from
 //! `ChaCha8Rng::seed_from_u64(seed)`, party seeds and setup seeds derived from it).
 mod common;
@@ -70,8 +70,8 @@ fn fresh_runs_at_toy_n1_pass_open_on_the_loopback() {
 }
 
 #[test]
-fn fresh_runs_at_toy_n2_and_n3_pass_open_on_the_network() {
-    for n in [2u64, 3] {
+fn fresh_multi_party_runs_pass_open_on_the_network() {
+    for n in [2u64, 3, 4, 8] {
         for seed in 0..4u64 {
             let ctx = context(n, 100 + seed);
             let n = n as usize;

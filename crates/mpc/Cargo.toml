@@ -4,8 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Communication layer of Hachi-Co: the Comm trait (F_AH sums, gather, abort agreement, pairwise exchange) and the one-party loopback"
+description = "Communication layer of Hachi-Co: the Comm trait (F_AH, gather, abort agreement, pairwise exchange, all-gather), the one-party loopback, and the n-party endpoint over in-memory transports"
 publish = false
 
 [dependencies]
+hachi-co-sampling.workspace = true
+rand.workspace = true
 thiserror.workspace = true

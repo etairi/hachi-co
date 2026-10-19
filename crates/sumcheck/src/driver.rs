@@ -1,6 +1,6 @@
 //! The driver of one party: the whole sumcheck of `5_Building_Blocks.tex`:195-320 against a
 //! [`Comm`], a [`PartyRandomness`] and a [`Challenger`] (`docs/m1-spec.md`, "Randomness and
-//! coins"), with the absorb labels and the $\mathcal F\_{\mathsf{AH}}$ calls of the crate.
+//! coins"), with the absorb labels and the collective calls of the crate.
 
 use crate::eq::eq_table;
 use crate::error::{Error, Result, check_len};
@@ -30,31 +30,27 @@ pub const LABEL_FINAL_W: &str = "hachi-co/sumcheck/final/w";
 pub const LABEL_FINAL_G0: &str = "hachi-co/sumcheck/final/g0";
 /// The absorb label of the final values $g\_{1,p}(\mathbf a)$.
 pub const LABEL_FINAL_G1: &str = "hachi-co/sumcheck/final/g1";
-/// The label of the $\mathcal F\_{\mathsf{AH}}$ call that makes every $(G\_{0,p}, G\_{1,p})$ public.
-pub const FAH_SUMS: &str = "hachi-co/sumcheck/fah/G";
+/// The label of the [`Comm::all_gather`] call that makes every $(G\_{0,p}, G\_{1,p})$ public.
+pub const ALL_GATHER_SUMS: &str = "hachi-co/sumcheck/all-gather/G";
 /// The label of the $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ call of each round
 /// (`5_Building_Blocks.tex`:293-300).
 pub const FAH_ROUND: &str = "hachi-co/sumcheck/fah/I";
-/// The label of the $\mathcal F\_{\mathsf{AH}}$ call that makes every party's final values public.
-pub const FAH_FINAL: &str = "hachi-co/sumcheck/fah/final";
+/// The label of the [`Comm::all_gather`] call that makes every party's final values public.
+pub const ALL_GATHER_FINAL: &str = "hachi-co/sumcheck/all-gather/final";
 
-/// Every party's values through one $\mathcal F\_{\mathsf{AH}}$ call: party $p$ places its
-/// `values` in slot $p - 1$ of a vector of $n$ slots, zero elsewhere, so that the sum is the
-/// concatenation of all parties' values. Returns `count` values per party, party by party.
+/// Every party's values through one [`Comm::all_gather`] call: `count` values per party, party
+/// by party.
 fn all_gather<const K: usize, C: Comm>(
     comm: &mut C,
     label: &'static str,
-    party: usize,
     n: usize,
     values: &[Ext<K>],
 ) -> Result<Vec<Vec<Ext<K>>>> {
-    let count = values.len();
-    let slot = count * K;
-    let mut local = vec![0u64; n * slot];
-    local[(party - 1) * slot..party * slot].copy_from_slice(&flatten_exts(values));
-    let sum = comm.fah(label, &local)?;
-    let all = unflatten_exts::<K>(&sum, n * count)?;
-    Ok(all.chunks(count.max(1)).map(<[Ext<K>]>::to_vec).collect())
+    let all = comm.all_gather(label, &flatten_exts(values))?;
+    check_len("all-gathered vectors (one per party)", n, all.len())?;
+    all.iter()
+        .map(|v| Ok(unflatten_exts::<K>(v, values.len())?))
+        .collect()
 }
 
 /// Column `index` of per-party rows.
@@ -73,9 +69,9 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), lines 198-229;
 /// 2. $g\_{0,p}, g\_{1,p}$ from [`PartyRandomness::blinder`] ($\ell'' \times d\_0$ and
 ///    $\ell'' \times d\_1$) and their hypercube sums, lines 209-219;
-/// 3. $\mathcal F\_{\mathsf{AH}}$ (label [`FAH_SUMS`]) with $(G\_{0,p}, G\_{1,p})$ in slot $p$, so
-///    that every party learns all $n$ pairs, which are public messages (line 241; the transcript
-///    holds the per-party values, as the oracle's); absorb $G\_{0,1..n}$ ([`LABEL_G0`]) and
+/// 3. [`Comm::all_gather`] (label [`ALL_GATHER_SUMS`]) of $(G\_{0,p}, G\_{1,p})$, so that every
+///    party learns all $n$ pairs, which are public messages (line 241; the transcript holds the
+///    per-party values, as the oracle's); absorb $G\_{0,1..n}$ ([`LABEL_G0`]) and
 ///    $G\_{1,1..n}$ ([`LABEL_G1`]); draw $\alpha, \rho, \tau\_0, \tau\_1$
 ///    ([`Challenger::sumcheck_coins`]), lines 243-250;
 /// 4. the tables $\widetilde{eq}(\tau\_1, \cdot)$ and $M^\ast$ ([`mstar_table`]);
@@ -84,7 +80,7 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///    (label [`FAH_ROUND`], lines 293-300), absorb $H\_{0,r}$ ([`LABEL_H0`]) and $H\_{1,r}$
 ///    ([`LABEL_H1`]), draw $a\_r$ ([`Challenger::round_coin`]), bind;
 /// 6. the openings $\langle \widetilde w \rangle\_p(\mathbf a), g\_{0,p}(\mathbf a), g\_{1,p}(\mathbf a)$
-///    through $\mathcal F\_{\mathsf{AH}}$ (label [`FAH_FINAL`], slot $p$), absorbed with
+///    through [`Comm::all_gather`] (label [`ALL_GATHER_FINAL`]), absorbed with
 ///    [`LABEL_FINAL_W`], [`LABEL_FINAL_G0`], [`LABEL_FINAL_G1`] (lines 314-320).
 ///
 /// The commitments of the base PCS (lines 220-221, 229) are not modelled in milestone 1
@@ -127,12 +123,12 @@ pub fn prove<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     let mut prover = PartyProver::new(ctx, party, table, g0, g1)?;
     // Step 3.
     let (s0, s1) = prover.hypercube_sums();
-    let sums = all_gather(comm, FAH_SUMS, party, n, &[s0, s1])?;
+    let sums = all_gather(comm, ALL_GATHER_SUMS, n, &[s0, s1])?;
     let (g0_sums, g1_sums) = (column(&sums, 0), column(&sums, 1));
     ch.absorb_exts(LABEL_G0, &g0_sums);
     ch.absorb_exts(LABEL_G1, &g1_sums);
     let coins = ch.sumcheck_coins(field, l.ell_pp, l.log_n, l.log_nu)?;
-    coins.validate(l)?;
+    coins.validate(l, ctx.q())?;
     // Step 4.
     let eq1 = eq_table(field, &coins.tau1)?;
     let mstar = mstar_table(ctx, m, e_matrix, &eq1, &coins.alpha)?;
@@ -159,7 +155,7 @@ pub fn prove<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     }
     // Step 6.
     let (w_a, g0_a, g1_a) = prover.final_values()?;
-    let finals = all_gather(comm, FAH_FINAL, party, n, &[w_a, g0_a, g1_a])?;
+    let finals = all_gather(comm, ALL_GATHER_FINAL, n, &[w_a, g0_a, g1_a])?;
     let finals = FinalValues {
         w: column(&finals, 0),
         g0: column(&finals, 1),

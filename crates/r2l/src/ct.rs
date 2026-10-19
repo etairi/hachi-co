@@ -1,5 +1,6 @@
-//! Conversions of secret values between residues and signed integers without branches on the
-//! values, and best-effort wiping of secret buffers.
+//! Conversions of secret signed values to residues without branches on the values, and
+//! best-effort wiping of secret buffers. (The other direction, the centering of residues, is
+//! [`hachi_co_core::short::center_poly`].)
 //!
 //! "Without branches" is best effort: the code uses only arithmetic, shifts and masks on the
 //! secret values, but Rust does not guarantee constant-time code generation.
@@ -7,41 +8,12 @@
 use crate::{Error, Result};
 use hachi_co_math::Poly;
 
-/// $x \bmod^{\pm} q \in \[-(q-1)/2, (q-1)/2\]$ for a residue $x \lt q$, odd $q \lt 2^{63}$
-/// (`4_preliminaries.tex`:86), by arithmetic only.
-#[inline]
-pub(crate) fn center(x: u64, q: u64) -> i64 {
-    debug_assert!(x < q && q < 1 << 63 && q % 2 == 1);
-    let (x, q) = (x as i64, q as i64);
-    // All ones iff x > (q - 1)/2.
-    let negative = ((q >> 1) - x) >> 63;
-    x - (q & negative)
-}
-
 /// $x \bmod^+ q \in \[0, q)$ for $|x| \lt q \lt 2^{63}$, by arithmetic only.
 #[inline]
 pub(crate) fn lift(x: i64, q: u64) -> u64 {
     debug_assert!(q < 1 << 63 && x.unsigned_abs() < q);
     // x >> 63 is all ones iff x < 0.
     (x + ((q as i64) & (x >> 63))) as u64
-}
-
-/// The centered representatives of the coefficients of `p` ([`center`]), after checking that
-/// every coefficient is a canonical residue (one branch on the combined result).
-///
-/// # Errors
-/// [`Error::NonCanonical`] naming `what` if a coefficient is $\ge q$ (the reported value is the
-/// largest coefficient, which is not secret once the input is malformed).
-pub(crate) fn center_poly(p: &Poly, q: u64, what: &'static str) -> Result<Vec<i64>> {
-    let mut bad = 0u8;
-    for x in &p.0 {
-        bad |= u8::from(*x >= q);
-    }
-    if bad != 0 {
-        let value = p.0.iter().copied().max().unwrap_or(0);
-        return Err(Error::NonCanonical { what, value, q });
-    }
-    Ok(p.0.iter().map(|x| center(*x, q)).collect())
 }
 
 /// The residues of the signed coefficients `xs` ([`lift`]), $d$ per polynomial, after checking
@@ -108,13 +80,12 @@ mod tests {
     const MODULI: [u64; 5] = [3, 8388637, 33554501, 134217757, 9223372036854775783];
 
     #[test]
-    fn center_and_lift_match_the_reference_at_the_boundaries() {
+    fn lift_matches_the_reference_at_the_boundaries() {
         for q in MODULI {
             let zq = Zq::new(q).unwrap();
             let half = q / 2;
             let residues = [0, 1, half.saturating_sub(1), half, half + 1, q - 2, q - 1];
             for x in residues.into_iter().filter(|x| *x < q) {
-                assert_eq!(center(x, q), zq.to_centered(x), "q = {q}, x = {x}");
                 let c = zq.to_centered(x);
                 assert_eq!(lift(c, q), x, "q = {q}, x = {c}");
             }
@@ -128,18 +99,6 @@ mod tests {
     #[test]
     fn checked_conversions_refuse_bad_inputs() {
         let q = 8388637;
-        assert_eq!(
-            center_poly(&Poly(vec![0, q - 1, 1]), q, "s").unwrap(),
-            vec![0, -1, 1]
-        );
-        assert_eq!(
-            center_poly(&Poly(vec![0, q, 1]), q, "s"),
-            Err(Error::NonCanonical {
-                what: "s",
-                value: q,
-                q
-            })
-        );
         let oor = || Error::Overflow("test");
         assert_eq!(
             lift_polys(&[-3, 3, 0, 1], 2, q, 3, oor).unwrap(),

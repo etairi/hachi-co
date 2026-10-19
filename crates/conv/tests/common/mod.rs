@@ -22,38 +22,9 @@ pub fn load(name: &str) -> (Fixture, Context<K>) {
     (fx, ctx)
 }
 
-/// Party $p$'s state as recorded by the oracle's Commit: `commit/f_shares[p-1]`, and for each
-/// of its blocks $\mathbf f'\_i$ from `commit/f_prime` and $\mathbf s, \mathbf t, \hat{\mathbf t}$
-/// from `commit/blocks`.
+/// Party $p$'s state as recorded by the oracle's Commit ([`Fixture::party_state`]).
 pub fn recorded_state(fx: &Fixture, ctx: &Context<K>, p: PartyId) -> PartyState<K> {
-    let l = &ctx.layout;
-    let f_prime = fx.polys("/commit/f_prime").unwrap();
-    let count = fx.get("/commit/blocks").unwrap().as_array().unwrap().len();
-    let mut blocks = Vec::new();
-    for k in 0..count {
-        let key = |field: &str| format!("/commit/blocks/{k}/{field}");
-        if fx.usize(&key("owner")).unwrap() != p {
-            continue;
-        }
-        let index = fx.usize(&key("index")).unwrap();
-        blocks.push(BlockState {
-            index,
-            f_prime: f_prime[index * l.block_len..(index + 1) * l.block_len].to_vec(),
-            s: fx.polys(&key("s")).unwrap(),
-            t: fx.polys(&key("t")).unwrap(),
-            t_hat: fx.polys(&key("t_hat")).unwrap(),
-        });
-    }
-    blocks.sort_by_key(|b| b.index);
-    let state = PartyState {
-        party: p,
-        share: fx
-            .exts::<K>(&format!("/commit/f_shares/{}", p - 1))
-            .unwrap(),
-        blocks,
-    };
-    state.validate(l).unwrap();
-    state
+    fx.party_state(ctx, p).unwrap()
 }
 
 /// Party $p$'s state from its share $\langle \mathbf f \rangle\_p$, written out from the draft

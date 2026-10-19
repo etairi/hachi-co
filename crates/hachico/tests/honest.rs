@@ -7,7 +7,7 @@
 //!
 //! - toy-n1 (four seeds) and dev-l12, dev-l16 on the loopback, in the default run;
 //! - dev-l20 on the loopback, `#[ignore]`d (run with `-- --ignored --nocapture`);
-//! - toy-n2 and toy-n3 on the threaded test network.
+//! - toy-n2, n3, n4 and n8 on the in-memory network.
 //!
 //! Seeds: setup `seed("setup/<preset>", [i])`, instance `ChaCha8Rng::seed_from_u64(s)`, party
 //! `seed("party/<preset>", [i, p])` (common::seed is SHA-256 of the tag and the indices); the
@@ -113,13 +113,18 @@ fn honest_run_at_dev_l20_verifies() {
     honest_loopback_run("dev-l20", 0, 2000, false);
 }
 
-/// Honest runs of n = 2 and 3 parties on the threaded network: each party commits its additive
+/// Honest runs of n = 2, 3, 4 and 8 parties on the in-memory network: each party commits its additive
 /// share, runs Eval with its own randomness and challenger, and obtains the same proof; Open = 1
 /// on the states; the verifier accepts; every party's transcript and the verifier's end in the
 /// same state; the claims are the parties' polynomials.
 #[test]
-fn honest_runs_at_toy_n2_and_n3_on_the_network() {
-    for (preset, n) in [("toy-n2", 2usize), ("toy-n3", 3)] {
+fn honest_multi_party_runs_on_the_network() {
+    for (preset, n) in [
+        ("toy-n2", 2usize),
+        ("toy-n3", 3),
+        ("toy-n4", 4),
+        ("toy-n8", 8),
+    ] {
         for i in 0..2u64 {
             let ctx = fresh_context(preset, i);
             let (f, x, y) = random_instance(&ctx, 3000 + 10 * n as u64 + i);

@@ -1,15 +1,16 @@
-//! The one-party network of milestone 1.
+//! The one-party network.
 
 use crate::{Comm, Error, PartyId, Result};
 
 /// The network of a single party ($n = 1$, [`Comm::id`] $= 1$): every collective call is the
-/// identity (plan `docs/hachi-co-plan.md`, milestone M1: "with n = 1 on a loopback network, where
-/// every F_AH call is the identity").
+/// identity (plan `docs/hachi-co-plan.md`, §5: "with n = 1 on a loopback network, where every
+/// F_AH call is the identity").
 ///
 /// - [`Comm::fah`] returns its input reduced modulo $q$ (the sum over one party);
 /// - [`Comm::gather`] at party 1 returns `Some(vec![local])`;
 /// - [`Comm::any`] returns its input;
-/// - [`Comm::exchange`] returns its single outgoing vector unchanged.
+/// - [`Comm::exchange`] returns its single outgoing vector unchanged;
+/// - [`Comm::all_gather`] returns `vec![local]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Loopback {
     q: u64,
@@ -76,5 +77,10 @@ impl Comm for Loopback {
             });
         }
         Ok(outgoing)
+    }
+
+    /// `vec![local]`.
+    fn all_gather(&mut self, _label: &'static str, local: &[u64]) -> Result<Vec<Vec<u64>>> {
+        Ok(vec![local.to_vec()])
     }
 }

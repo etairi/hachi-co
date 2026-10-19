@@ -325,7 +325,7 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
     let coins = ch
         .sumcheck_coins(f, l.ell_pp, l.log_n, l.log_nu)
         .map_err(VerifyError::Challenger)?;
-    coins.validate(l).map_err(VerifyError::Challenger)?;
+    coins.validate(l, q).map_err(VerifyError::Challenger)?;
     let rho = f.reduce(&coins.rho);
     let alpha = f.reduce(&coins.alpha);
     let tau0: Vec<Ext<K>> = coins.tau0.iter().map(|t| f.reduce(t)).collect();

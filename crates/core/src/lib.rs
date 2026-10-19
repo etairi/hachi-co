@@ -12,7 +12,7 @@
 //! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:390; `field-to-ring-rok.tex`:111-122; `5_Building_Blocks.tex`:164-179, 209-214, 243-250 |
 //! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:110, 209-214 |
 //! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir | `5_Building_Blocks.tex`:122-126, 243-250, 312 |
-//! | [`short`], [`wire`] | exact short-polynomial products and norms; flat encodings for [`hachi_co_mpc::Comm`] | `5_Building_Blocks.tex`:127-133 |
+//! | [`short`], [`wire`] | exact short-polynomial products, norms and centered representatives; flat encodings for [`hachi_co_mpc::Comm`] | `4_preliminaries.tex`:86; `5_Building_Blocks.tex`:127-133 |
 //!
 //! The inter-block types are plain structs with public fields; each has a `validate` method that
 //! checks its shape (lengths, and $d$ coefficients per polynomial) against a [`Layout`], not its
@@ -20,9 +20,10 @@
 //! documentation of [`Challenger`].
 //!
 //! With the feature `fixtures` the crate also provides `fixture::Fixture` (the Sage oracle's
-//! fixtures `ref/fixtures/toy-n{1,2,3}.json` with typed decoders and `sha256_residues`) and
+//! fixtures `ref/fixtures/toy-n{1,2,3,4,8}.json` with typed decoders and `sha256_residues`) and
 //! `replay::{ReplayRandomness, ReplayChallenger}`, which serve the recorded randomness and coins
-//! so that the drivers reproduce the fixtures; the block crates enable it in their
+//! so that the drivers reproduce the fixtures, and the recorded inputs of the blocks
+//! (`Fixture::party_state`, `Fixture::public_vectors`, …); the block crates enable it in their
 //! dev-dependencies.
 //!
 //! **Conventions** (`docs/m1-spec.md`, "Conventions"; `ref/README.md`, "Conventions"): positions
@@ -56,6 +57,8 @@ pub mod wire;
 
 #[cfg(feature = "fixtures")]
 pub mod fixture;
+#[cfg(feature = "fixtures")]
+mod fixture_inputs;
 #[cfg(feature = "fixtures")]
 pub mod replay;
 

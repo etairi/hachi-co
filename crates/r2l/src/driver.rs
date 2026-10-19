@@ -113,7 +113,9 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
 ///
 /// **Choices** (the draft is silent): a failure of prover 1's check is not retried (it never
 /// happens for honest provers, line 193) but ends the step with [`Error::NormCheck`] at prover 1
-/// and [`Error::Prover1Abort`] elsewhere; attempts are capped (plan, finding F5).
+/// and [`Error::Prover1Abort`] elsewhere; attempts are capped (plan, finding F5). The verifier
+/// refuses an attempt index at or above [`MAX_ATTEMPTS`] ([`crate::verifier_challenges`]), so
+/// with a larger `max_attempts` an output accepted at such an index does not verify.
 ///
 /// **Secrets.** The mask is used only by [`sample_attempt`] (draw and images) and [`respond`]
 /// ($\mathsf{Rej}$), and is wiped right after $\mathsf{Rej}$, as are the fold and the response of

@@ -318,12 +318,26 @@ pub struct SumcheckCoins<const K: usize> {
 }
 
 impl<const K: usize> SumcheckCoins<K> {
-    /// Checks the lengths $\ell'' + \lceil \log n \rceil$ and $\lceil \log \nu \rceil$.
+    /// Checks the lengths $\ell'' + \lceil \log n \rceil$ and $\lceil \log \nu \rceil$, and
+    /// that every coordinate of every coin is a canonical residue below $q$ (a challenger could
+    /// otherwise hand the provers and the verifier different representatives of one coin).
     ///
     /// # Errors
-    /// [`Error::Shape`].
-    pub fn validate(&self, layout: &Layout) -> Result<()> {
+    /// [`Error::Shape`]; [`Error::NonCanonical`].
+    pub fn validate(&self, layout: &Layout, q: u64) -> Result<()> {
         check_len("tau_0", layout.ell_pp + layout.log_n, self.tau0.len())?;
-        check_len("tau_1", layout.log_nu, self.tau1.len())
+        check_len("tau_1", layout.log_nu, self.tau1.len())?;
+        let coins = [
+            ("alpha", core::slice::from_ref(&self.alpha)),
+            ("rho", core::slice::from_ref(&self.rho)),
+            ("tau_0", self.tau0.as_slice()),
+            ("tau_1", self.tau1.as_slice()),
+        ];
+        for (what, values) in coins {
+            if let Some(&value) = values.iter().flat_map(|e| e.0.iter()).find(|&&x| x >= q) {
+                return Err(Error::NonCanonical { what, value, q });
+            }
+        }
+        Ok(())
     }
 }

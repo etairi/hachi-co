@@ -3,8 +3,17 @@
 Representation: a ring element is an int64 array of shape (d,) with residues in [0, q); index j is the
 coefficient of X^j.  Vectors of ring elements have shape (len, d), matrices (rows, cols, d).
 
-Overflow guard: products are formed on residues < q and at most `d` of them (or `cols` after reduction)
-are summed before reducing, so d * (q-1)^2 < 2^62 suffices; this holds for every toy preset (q < 2^27).
+Overflow guard (exact int64 arithmetic): products are formed on residues in [0, q), and a sum of products
+is reduced after at most d of them, with at most one more residue added (matvec adds the reduced
+accumulator to a convolution).  Every intermediate is therefore at most d (q-1)^2 + (q-1), and `Ring`
+asserts d (q-1)^2 + (q-1) <= 2^63 - 1, the int64 limit (numpy's integer convolve, einsum and @ accumulate
+in int64; the partial sums of non-negative terms grow monotonically, so the final bound covers them).
+`polymul_full` and `g_apply` assert their own counts (min(len a, len b) resp. delta products).  The same
+bound covers the d-term sums outside this class, M(alpha) and y(alpha) in sumcheck.py and V's E cf(u) in
+oracle.py: Ctx builds a Ring for every instance.  Every toy preset satisfies it; toy-n8 (q = 536871029,
+just above 2^29) has d (q-1)^2 + (q-1) < 2^62.000001, and the bound allows q up to 759250125 (2^29.5) at
+d = 16.  The guard used to be the stricter d (q-1)^2 < 2^62, which toy-n8 misses by a factor 1 + 4e-7;
+the self-test `t_ring` checks the products at every toy modulus, all-(q-1) operands included.
 
 Gadgets (draft 4_P:94-102, m0-spec "Digit sets"):
   * digits are balanced, in [ceil(-b/2), ceil(b/2) - 1];
@@ -21,11 +30,18 @@ import numpy as np
 
 from .params import digit_bounds
 
+INT64_MAX = 2 ** 63 - 1
+
+
+def int64_sum_fits(terms, q, extra=0):
+    """Whether a sum of `terms` products of residues in [0, q), plus `extra` more residues, fits in int64."""
+    return terms * (q - 1) ** 2 + extra * (q - 1) <= INT64_MAX
+
 
 class Ring:
     def __init__(self, q, d):
         q, d = int(q), int(d)
-        assert d * (q - 1) ** 2 < 2 ** 62, "int64 headroom: d (q-1)^2 must be < 2^62"
+        assert int64_sum_fits(d, q, extra=1), "int64 headroom: d (q-1)^2 + (q-1) must be <= 2^63 - 1"
         self.q, self.d = q, d
 
     # ---- basic ----
@@ -58,6 +74,7 @@ class Ring:
         """Product in Z_q[X] of two polynomials (degree < len each); no reduction by X^d + 1."""
         a = np.asarray(a, dtype=np.int64)
         b = np.asarray(b, dtype=np.int64)
+        assert int64_sum_fits(min(a.shape[-1], b.shape[-1]), self.q), "int64 headroom"
         return np.convolve(a, b) % self.q
 
     def negacyclic(self, full):
@@ -142,6 +159,7 @@ class Ring:
     def g_apply(self, digits, b, delta):
         """G_{b,n} applied to (n*delta, d) residues -> (n, d) residues."""
         digits = np.asarray(digits, dtype=np.int64) % self.q
+        assert int64_sum_fits(delta, self.q), "int64 headroom"
         n = digits.shape[0] // delta
         pw = np.array([pow(b, e, self.q) for e in range(delta)], dtype=np.int64)
         x = digits.reshape(n, delta, self.d)

@@ -9,7 +9,7 @@ from .context import SageRing
 from .fqk import Fqk
 from .params import TOY_TABLE, check_toy_table, digit_bounds, toy_preset
 from .prg import Prg, l1ball_count, l1ball_sample
-from .ring import Ring
+from .ring import Ring, int64_sum_fits
 from .subfield import Subfield, self_test as subfield_self_test
 from .sumcheck import Blinder
 
@@ -19,18 +19,22 @@ def t_params():
     return [("params: toy table and q rule", True, "; ".join(lines))]
 
 
+def toy_moduli():
+    """The distinct moduli of the toy presets, ascending (toy-n3 and toy-n4 share one)."""
+    return sorted({row[1] for row in TOY_TABLE.values()})
+
+
 def t_subfield():
     out = []
-    for name, row in TOY_TABLE.items():
-        out.append(("subfield.self_test q=%d" % row[1], bool(subfield_self_test(row[1], 16, 4, trials=3)), ""))
+    for q in toy_moduli():
+        out.append(("subfield.self_test q=%d" % q, bool(subfield_self_test(q, 16, 4, trials=3)), ""))
     return out
 
 
 def t_fqk(seed=1):
     out = []
     rnd = random.Random(seed)
-    for name, row in TOY_TABLE.items():
-        q = row[1]
+    for q in toy_moduli():
         S = Subfield(q, 16, 4)
         F = Fqk(S)
         ok = F.self_check(trials=100, seed=seed)
@@ -52,8 +56,7 @@ def t_fqk(seed=1):
 def t_ring(seed=2):
     out = []
     rnd = random.Random(seed)
-    for name, row in TOY_TABLE.items():
-        q = row[1]
+    for q in toy_moduli():
         R = Ring(q, 16)
         SR = SageRing(q, 16)
         ok = True
@@ -76,6 +79,37 @@ def t_ring(seed=2):
         v = np.array([[rnd.randrange(q) for _ in range(16)] for _ in range(7)])
         ok &= R.matvec(M, v).tolist() == SR.matvec(M.tolist(), v.tolist())
         out.append(("ring mul/full/matvec vs Sage (q=%d)" % q, bool(ok), "60 products incl. q-1 and centered extremes"))
+        # The int64 worst case of every sum of products (ring.py, "Overflow guard"): all operands q - 1 in
+        # matvec and matvec_full (three columns), in the d-term einsum of sumcheck.py (M(alpha), y(alpha)) and
+        # the @ of oracle.py (E cf(u)), against Sage resp. exact Python integers.
+        Mw = np.full((2, 3, 16), q - 1, dtype=np.int64)
+        vw = np.full((3, 16), q - 1, dtype=np.int64)
+        ok = R.matvec(Mw, vw).tolist() == SR.matvec(Mw.tolist(), vw.tolist())
+        exact_full = [SR.coeffs(sum((SR.poly(Mw[i, j]) * SR.poly(vw[j]) for j in range(3)), SR.PR(0)), 32)
+                      for i in range(2)]
+        ok &= R.matvec_full(Mw, vw).tolist() == exact_full
+        A = np.full((5, 16), q - 1, dtype=np.int64)
+        B = np.full((16, 4), q - 1, dtype=np.int64)
+        exact = [[16 * (q - 1) ** 2 % q] * 4] * 5
+        ok &= (np.einsum('ij,jc->ic', A, B) % q).tolist() == exact and ((A @ B) % q).tolist() == exact
+        out.append(("ring int64 worst case (q=%d)" % q, bool(ok),
+                    "all operands q-1: matvec, matvec_full, einsum, @ over d = 16 terms"))
+    # The guard's boundary at d = 16: 759250125 is the largest q with 16 (q-1)^2 + (q-1) <= 2^63 - 1.  Beyond
+    # the bound int64 sums do overflow (at q = 2^30 + 3 the 16-term einsum differs from the exact value).
+    qmax = 759250125
+    ok = int64_sum_fits(16, qmax, extra=1) and not int64_sum_fits(16, qmax + 1, extra=1)
+    Ring(qmax, 16)
+    try:
+        Ring(qmax + 1, 16)
+        ok = False
+    except AssertionError:
+        pass
+    qbig = 2 ** 30 + 3
+    A = np.full((1, 16), qbig - 1, dtype=np.int64)
+    B = np.full((16, 1), qbig - 1, dtype=np.int64)
+    ok &= int(np.einsum('ij,jc->ic', A, B)[0, 0]) != 16 * (qbig - 1) ** 2
+    out.append(("ring int64 guard boundary", bool(ok),
+                "Ring accepts q = %d, rejects q = %d; at q = 2^30+3 a 16-term int64 sum overflows" % (qmax, qmax + 1)))
     return out
 
 

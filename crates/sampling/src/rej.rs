@@ -20,7 +20,9 @@
 use crate::draw::{Draw, FromRng};
 use crate::uniform::boxed_with;
 use crate::{Error, Result};
+use core::f64::consts::{FRAC_1_SQRT_2, SQRT_2};
 use num_bigint::BigUint;
+use num_traits::Zero;
 use rand::{CryptoRng, Rng};
 
 /// An exact rational number $\mathit{numerator} / \mathit{denominator}$ in lowest terms, with a
@@ -34,23 +36,153 @@ pub struct Ratio {
 }
 
 impl Ratio {
-    /// $\log_2(\mathit{numerator} / \mathit{denominator})$ in floating point (from the leading 64
-    /// bits of each integer); $-\infty$ for a zero numerator.
+    /// $\log_2(\mathit{numerator} / \mathit{denominator})$ in floating point, computed from the
+    /// exact integers: $-\infty$ for a zero numerator; outside the type's invariant, $+\infty$
+    /// for a zero denominator and NaN for $0/0$. The ratio need not be in lowest terms.
+    ///
+    /// **Accuracy.** The error is below $0.52$ ulp of the exact value for a normal result (so the
+    /// result is the correctly rounded value unless the exact one lies within $0.02$ ulp of a
+    /// rounding boundary) and below one ulp ($2^{-1074}$) for a subnormal one; exact powers of
+    /// two give their exponent exactly. Nothing cancels, however long the integers and however
+    /// close the ratio is to $1$ or to a power of two:
+    /// 1. $e$ is the integer nearest to the result, from the bit lengths and the leading 128 bits
+    ///    of both integers, so that $y = \mathit{numerator} / (2^e \mathit{denominator})$ lies in
+    ///    $[2^{-1/2}, 2^{1/2}]$ up to a relative $2^{-50}$;
+    /// 2. $t = (y - 1)/(y + 1)$, of absolute value below $0.1716$ ($3 - 2\sqrt 2$ up to that
+    ///    slack), is the quotient of the exact difference by the exact sum of
+    ///    $\mathit{numerator}$ and $2^e \mathit{denominator}$ (one of them shifted); it is taken
+    ///    to 64 bits from the leading 128 bits of the difference and the leading 64 bits of the
+    ///    sum, with a relative error below $2^{-61}$;
+    /// 3. $\log_2 y = \frac{2}{\ln 2} \operatorname{artanh} t = \frac{2}{\ln 2}\, t \sum_{j \ge 0}
+    ///    t^{2j} / (2j + 1)$ is summed in fixed point with 64 fractional bits (`u128` products,
+    ///    at most 13 terms as $t^2 \lt 0.03$), with $2/\ln 2$ rounded to 62 fractional bits; its
+    ///    relative error before the final rounding is below $2^{-59}$;
+    /// 4. the result is $e + \log_2 y$, rounded once to `f64`; for $e \ne 0$, where its absolute
+    ///    value is at least $1/2$ (up to the slack of step 1), from a fixed-point sum with 62
+    ///    fractional bits.
+    ///
+    /// The cost is linear in the length of the integers (two shifts, a comparison, a subtraction
+    /// and an addition); everything else takes constant time.
     pub fn log2(&self) -> f64 {
-        log2_big(&self.numerator) - log2_big(&self.denominator)
+        log2_ratio(&self.numerator, &self.denominator)
     }
 }
 
-/// $\log_2 x$ from the leading 64 bits of $x$.
-fn log2_big(x: &BigUint) -> f64 {
-    let bits = x.bits();
-    if bits == 0 {
-        return f64::NEG_INFINITY;
+/// $\mathrm{round}(2^{63} / \ln 2)$, that is $2/\ln 2$ with 62 fractional bits, rounded to
+/// nearest. SageMath 10.9: `round(RealField(4000)(2)^63 / log(RealField(4000)(2)))`; the unit
+/// tests check it against $\ln 2 = \sum_{j \ge 1} 1/(j 2^j)$.
+const TWO_OVER_LN2_Q62: u128 = 13_306_513_097_844_322_492;
+
+/// $2^{-62}$.
+const TWO_POW_MINUS_62: f64 = 1.0 / (1u64 << 62) as f64;
+
+/// [`Ratio::log2`] of $a/b$ (the algorithm and its error bound are documented there).
+fn log2_ratio(a: &BigUint, b: &BigUint) -> f64 {
+    match (a.is_zero(), b.is_zero()) {
+        (true, true) => return f64::NAN,
+        (true, false) => return f64::NEG_INFINITY,
+        (false, true) => return f64::INFINITY,
+        (false, false) => {}
     }
-    let shift = bits.saturating_sub(64);
-    let top: BigUint = x >> shift;
-    let top = top.iter_u64_digits().next().unwrap_or(0);
-    (top as f64).log2() + shift as f64
+    let e = nearest_exponent(a, b);
+    // a / b = 2^e a' / b', with y = a' / b' in [2^-1/2, 2^1/2] (up to a relative 2^-50).
+    let shifted;
+    let (a, b) = if e >= 0 {
+        shifted = b << e.unsigned_abs();
+        (a, &shifted)
+    } else {
+        shifted = a << e.unsigned_abs();
+        (&shifted, b)
+    };
+    let (negative, diff) = if a >= b {
+        (false, a - b)
+    } else {
+        (true, b - a)
+    };
+    if diff.is_zero() {
+        // a / b = 2^e exactly.
+        return e as f64;
+    }
+    let sum = a + b;
+    // |t| = diff / sum = T 2^-k with 2^63 <= T < 2^64, from the quotient in [2^63, 2^65) of the
+    // leading 128 bits of diff by the leading 64 bits of sum: three truncations, each by a
+    // relative 2^-63 at most. |t| < 1/4 makes bits(sum) - bits(diff) >= 2, so k >= 65.
+    let quotient = leading_u128(&diff) / (leading_u128(&sum) >> 64);
+    let base = sum.bits() - diff.bits();
+    let (t, k) = if quotient >> 64 == 0 {
+        (quotient, 64 + base)
+    } else {
+        (quotient >> 1, 63 + base)
+    };
+    // t^2 with 64 fractional bits (zero when t^2 < 2^-64), below 0.03 * 2^64 < 2^59.
+    let tau = (t * t)
+        .checked_shr(u32::try_from(2 * k - 64).unwrap_or(u32::MAX))
+        .unwrap_or(0);
+    // s = sum_{j >= 1} t^{2j} / (2j + 1), 64 fractional bits, below 0.0102 * 2^64.
+    let (mut s, mut power, mut j) = (0u128, tau, 1u128);
+    while power != 0 {
+        s += power / (2 * j + 1);
+        power = (power * tau) >> 64;
+        j += 1;
+    }
+    // (2 / ln 2) |t| (1 + s) = m 2^-(62 + k) = |log2 y| <= 1/2, with m < 2^128.
+    let m = TWO_OVER_LN2_Q62 * (t + ((t * s) >> 64));
+    if e == 0 {
+        let magnitude = scale_down(m as f64, 62 + k);
+        return if negative { -magnitude } else { magnitude };
+    }
+    // |log2 y| with 62 fractional bits, at most 2^61 (plus the slack of e).
+    let fraction = m
+        .checked_shr(u32::try_from(k).unwrap_or(u32::MAX))
+        .unwrap_or(0) as i128;
+    let fixed = (i128::from(e) << 62) + if negative { -fraction } else { fraction };
+    fixed as f64 * TWO_POW_MINUS_62
+}
+
+/// The integer $e$ nearest to $\log_2(a/b)$ for $a, b \gt 0$, up to a relative $2^{-50}$ in the
+/// ratio: $e_0$ is the difference of the bit lengths, so that $a/(2^{e_0} b) \in (1/2, 2)$, and
+/// $e = e_0 \pm 1$ if the ratio of the leading 128 bits is at least $\sqrt 2$ or below
+/// $1/\sqrt 2$.
+fn nearest_exponent(a: &BigUint, b: &BigUint) -> i64 {
+    let e0 = a.bits() as i64 - b.bits() as i64;
+    let ratio = leading_u128(a) as f64 / leading_u128(b) as f64;
+    if ratio >= SQRT_2 {
+        e0 + 1
+    } else if ratio < FRAC_1_SQRT_2 {
+        e0 - 1
+    } else {
+        e0
+    }
+}
+
+/// The leading 128 bits of $x \gt 0$, truncated, as an integer in $[2^{127}, 2^{128})$ (shifted
+/// left when $x$ is shorter); 0 for $x = 0$. Only the top digits of $x$ are read.
+fn leading_u128(x: &BigUint) -> u128 {
+    let bits = x.bits();
+    let top = if bits > 128 {
+        x >> (bits - 128)
+    } else {
+        x << (128 - bits)
+    };
+    let mut digits = top.iter_u64_digits();
+    let low = digits.next().unwrap_or(0);
+    let high = digits.next().unwrap_or(0);
+    (u128::from(high) << 64) | u128::from(low)
+}
+
+/// $x \cdot 2^{-n}$ for $2^{120} \le x \lt 2^{128}$, with a single rounding: the first factor
+/// keeps the value normal, and a product below $2^{-1075}$ is $0$.
+fn scale_down(x: f64, n: u64) -> f64 {
+    if n > 1400 {
+        return 0.0;
+    }
+    let half = n / 2;
+    x * pow2_neg(half) * pow2_neg(n - half)
+}
+
+/// $2^{-n}$ for $n \le 1022$, exactly.
+fn pow2_neg(n: u64) -> f64 {
+    f64::from_bits((1023 - n) << 52)
 }
 
 /// The largest bit length of the numerator or denominator that [`acceptance_probability`]
@@ -266,5 +398,7 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
     a
 }
 
+#[cfg(test)]
+mod log2_tests;
 #[cfg(test)]
 mod tests;

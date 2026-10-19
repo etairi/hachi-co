@@ -1,6 +1,6 @@
-//! Named parameter sets: the toy presets of `docs/m0-spec.md`, the development presets of
-//! `docs/m1-spec.md` (WP11) and the secure 64-bit presets that `parameters.sage` writes to
-//! `crates/params/presets/secure.json`.
+//! Named parameter sets: the toy presets of `docs/m0-spec.md` (with $n = 4, 8$ added), the
+//! development presets of `docs/m1-spec.md` (WP11) and the secure
+//! 64-bit presets that `parameters.sage` writes to `crates/params/presets/secure.json`.
 //!
 //! The JSON file is embedded at compile time ([`SECURE_JSON`]). Each secure entry stores the
 //! [`Choices`] (inside its [`Params`]), the parameters Sage derived from them, and the lattice
@@ -177,10 +177,21 @@ pub fn toy_choices(n: u64) -> Choices {
     }
 }
 
-/// The three toy presets `toy-n1`, `toy-n2`, `toy-n3` (`docs/m0-spec.md`).
+/// The numbers of provers $n$ of the toy presets: `toy-n1`, `toy-n2`, `toy-n3` of
+/// `docs/m0-spec.md` ("Toy presets"), and `toy-n4`, `toy-n8`, added with the $n$-party tests.
+///
+/// The Sage oracle has a fixture for each (`ref/fixtures/toy-n{1,2,3,4,8}.json`) and lists the
+/// same five rows in its table (`ref/hachico_ref/params.py`, `TOY_TABLE`), derived there by its
+/// own implementation of the cascade; `tests/toy_table.rs` requires exact agreement.
+pub const TOY_NS: [u64; 5] = [1, 2, 3, 4, 8];
+
+/// The five toy presets `toy-n1`, `toy-n2`, `toy-n3`, `toy-n4`, `toy-n8`: [`toy_choices`] at each
+/// $n$ of [`TOY_NS`], of kind [`PresetKind::Toy`] (`docs/m0-spec.md`, with $n = 4, 8$ added).
+/// **Not secure.**
 pub fn toy_presets() -> Vec<Preset> {
-    (1..=3)
-        .map(|n| Preset {
+    TOY_NS
+        .iter()
+        .map(|&n| Preset {
             name: format!("toy-n{n}"),
             kind: PresetKind::Toy,
             choices: toy_choices(n),

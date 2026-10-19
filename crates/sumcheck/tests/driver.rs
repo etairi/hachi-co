@@ -1,6 +1,6 @@
 //! The driver `prove`: with `Loopback`, `ReplayRandomness` and `ReplayChallenger` it reproduces
-//! toy-n1; on an in-memory network of n threads (a test double of the M2 network) it reproduces
-//! toy-n2 and toy-n3 at every party; honest Fiat-Shamir runs (`PrgRandomness`, `FsChallenger`)
+//! toy-n1; on the in-memory network of `hachi-co-mpc` (n threads, masked-sum F_AH) it reproduces
+//! the multi-party fixtures at every party; honest Fiat-Shamir runs (`PrgRandomness`, `FsChallenger`)
 //! are accepted by the verifier and leave the provers' and the verifier's transcripts in the same
 //! state; tampering under Fiat-Shamir is rejected.
 
@@ -10,130 +10,17 @@ use common::{Instance, K, fixture_transcript, honest_runs, ideal_pcs, instances}
 use hachi_co_core::{
     Challenger, FsChallenger, PartyRandomness, PrgRandomness, ReplayChallenger, ReplayRandomness,
 };
-use hachi_co_mpc::{Comm, Error as MpcError, Loopback, PartyId};
+use hachi_co_mpc::{Comm, Loopback, MemoryConfig, PartyId, run_in_memory};
 use hachi_co_sumcheck::{
     Error, PublicInput, SumcheckPrivate, SumcheckTranscript, VerifyError, prove, verify,
     verify_checks,
 };
-use std::sync::{Arc, Barrier, Mutex};
 use std::time::Instant;
 
 /// The Fiat-Shamir domain of the tests.
 const DOMAIN: &[u8] = b"hachi-co/test/sumcheck";
 
-/// An in-memory network of `n` parties on threads, supporting `fah` only (the sumcheck's only
-/// collective call): each party deposits its input, waits for all, adds all inputs modulo q, and
-/// waits again before the next call. Labels and lengths must agree.
-struct ThreadNet {
-    id: PartyId,
-    shared: Arc<Shared>,
-}
-
-/// Each party's deposited (label, input) of the current call.
-type Slots = Vec<Option<(&'static str, Vec<u64>)>>;
-
-struct Shared {
-    n: usize,
-    q: u64,
-    barrier: Barrier,
-    slots: Mutex<Slots>,
-}
-
-impl ThreadNet {
-    fn network(n: usize, q: u64) -> Vec<ThreadNet> {
-        let shared = Arc::new(Shared {
-            n,
-            q,
-            barrier: Barrier::new(n),
-            slots: Mutex::new(vec![None; n]),
-        });
-        (1..=n)
-            .map(|id| ThreadNet {
-                id,
-                shared: Arc::clone(&shared),
-            })
-            .collect()
-    }
-}
-
-impl Comm for ThreadNet {
-    fn n(&self) -> usize {
-        self.shared.n
-    }
-
-    fn id(&self) -> PartyId {
-        self.id
-    }
-
-    fn modulus(&self) -> u64 {
-        self.shared.q
-    }
-
-    fn fah(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<u64>, MpcError> {
-        let s = &self.shared;
-        s.slots.lock().unwrap()[self.id - 1] = Some((label, local.to_vec()));
-        s.barrier.wait();
-        let result = {
-            let slots = s.slots.lock().unwrap();
-            let mut sum = vec![0u64; local.len()];
-            let mut result = Ok(());
-            for slot in slots.iter() {
-                let (l, v) = slot.as_ref().expect("every party deposited");
-                if *l != label {
-                    result = Err(MpcError::Transport {
-                        label,
-                        message: format!("desynchronised: another party called {l}"),
-                    });
-                } else if v.len() != local.len() {
-                    result = Err(MpcError::LengthMismatch {
-                        label,
-                        expected: local.len(),
-                        actual: v.len(),
-                    });
-                } else {
-                    for (acc, x) in sum.iter_mut().zip(v) {
-                        *acc = ((u128::from(*acc) + u128::from(*x)) % u128::from(s.q)) as u64;
-                    }
-                }
-            }
-            result.map(|()| sum)
-        };
-        s.barrier.wait();
-        result
-    }
-
-    fn gather(
-        &mut self,
-        label: &'static str,
-        _: PartyId,
-        _: &[i64],
-    ) -> Result<Option<Vec<Vec<i64>>>, MpcError> {
-        Err(MpcError::Transport {
-            label,
-            message: "the test network supports fah only".into(),
-        })
-    }
-
-    fn any(&mut self, label: &'static str, _: bool) -> Result<bool, MpcError> {
-        Err(MpcError::Transport {
-            label,
-            message: "the test network supports fah only".into(),
-        })
-    }
-
-    fn exchange(
-        &mut self,
-        label: &'static str,
-        _: Vec<Vec<u64>>,
-    ) -> Result<Vec<Vec<u64>>, MpcError> {
-        Err(MpcError::Transport {
-            label,
-            message: "the test network supports fah only".into(),
-        })
-    }
-}
-
-/// Runs `prove` at every party of `inst` on threads, with the randomness and challenger made by
+/// Runs `prove` at every party of `inst` on threads over the in-memory network, with the randomness and challenger made by
 /// `rng` and `ch` for each party.
 fn run_network<R, H>(
     inst: &Instance,
@@ -144,31 +31,28 @@ where
     R: PartyRandomness<K>,
     H: Challenger<K> + Send,
 {
-    let nets = ThreadNet::network(inst.n(), inst.ctx.q());
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = nets
-            .into_iter()
-            .map(|mut net| {
-                let (rng, ch) = (&rng, &ch);
-                scope.spawn(move || {
-                    let p = net.id();
-                    let (mut r, mut c) = (rng(p), ch(p));
-                    let (t, private) = prove(
-                        &inst.ctx,
-                        &mut net,
-                        &mut r,
-                        &mut c,
-                        &inst.m,
-                        &inst.e,
-                        &inst.shares[p - 1],
-                    )
-                    .unwrap();
-                    (t, private, c)
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    let (n, q) = (inst.n(), inst.ctx.q());
+    let mut seed = [n as u8; 32];
+    seed[..8].copy_from_slice(&q.to_le_bytes());
+    run_in_memory(&MemoryConfig::new(n, q, seed), |net| {
+        let p = net.id();
+        let (mut r, mut c) = (rng(p), ch(p));
+        let (t, private) = prove(
+            &inst.ctx,
+            net,
+            &mut r,
+            &mut c,
+            &inst.m,
+            &inst.e,
+            &inst.shares[p - 1],
+        )
+        .unwrap();
+        (t, private, c)
     })
+    .expect("a valid network")
+    .into_iter()
+    .map(|run| run.expect("every party connects").output)
+    .collect()
 }
 
 fn public(inst: &Instance) -> PublicInput<'_> {

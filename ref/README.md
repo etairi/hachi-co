@@ -1,8 +1,8 @@
 # Hachi-Co Sage reference oracle (milestone 0)
 
 A SageMath/numpy reference implementation of the Hachi-Co protocol at the toy presets of `docs/m0-spec.md`, for
-n ∈ {1, 2, 3}. It is a test oracle and fixture generator for the Rust milestone-1 code. It is not secure and
-not optimized. Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `625ced1`).
+n ∈ {1, 2, 3}, extended to n ∈ {4, 8} (see "Party counts 4 and 8" below). It is a test oracle and fixture generator for the Rust code. It is not secure and not optimized.
+Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `625ced1`).
 Line references use the short names `4_P` (4_preliminaries.tex), `5_BB` (5_Building_Blocks.tex),
 `6_CH` (6_Collaborative_Hachi.tex) and `F2R` (field-to-ring-rok.tex).
 
@@ -14,24 +14,29 @@ polynomials directly.
 ## Running
 
 ```
-sage -python ref/run_oracle.py                 # self-tests, toy-n1..n3, negative tests, writes ref/fixtures/*.json
-sage -python ref/run_oracle.py --n 3           # one preset
+sage -python ref/run_oracle.py                 # self-tests, toy-n1, n2, n3, n4, n8, negative tests, writes ref/fixtures/*.json
+sage -python ref/run_oracle.py --n 3           # one preset (--n 4 8: several)
 sage -python ref/run_oracle.py --no-write      # do not touch the fixtures
+sage -python ref/run_oracle.py --out DIR       # write the fixtures to DIR instead
 sage -python ref/run_oracle.py --sweep 4       # plus 4 more honest runs per preset (other seeds)
 sage -python ref/run_oracle.py --seed-index 0  # use seed index 0 instead of the selection rule below
 ```
 
 The script works from any directory and exits with status 0 only if every check passes. Measured on the
-development machine with Sage 10.9, Python 3.14.3 and numpy 2.4.4:
+development machine with Sage 10.9, Python 3.14.3 and numpy 2.4.4 (one default run, 2026-10-19):
 
 | preset | one honest run (Commit to final verifier check) | negative tests | fixture |
 |---|---|---|---|
-| toy-n1 | 0.7 s | 2.7 s | 210 KB |
-| toy-n2 | 1.2 s | 8.2 s | 392 KB |
-| toy-n3 | 3.2 s | 21 s | 609 KB |
+| toy-n1 | 0.6 s | 2.4 s | 210 KB |
+| toy-n2 | 1.1 s | 7.1 s | 392 KB |
+| toy-n3 | 2.8 s | 18 s | 609 KB |
+| toy-n4 | 3.7 s | 24 s | 748 KB |
+| toy-n8 | 13 s | 90 s | 1676 KB |
 
-The full default run takes about 45 s, including the self-tests and the runs tried by the seed selection. Two
-runs produce byte-identical fixtures.
+The full default run takes about 200 s (197 s measured), including the self-tests and the runs tried by the
+seed selection (15 s for toy-n4, 27 s for toy-n8). Two runs produce byte-identical fixtures: toy-n1..n3 as
+regenerated after adding n = 4 and 8 are identical to the previous ones (`cmp`), and a second run of n = 4 and 8
+reproduces their fixtures.
 
 ## Files
 
@@ -39,7 +44,7 @@ runs produce byte-identical fixtures.
 |---|---|
 | `run_oracle.py` | driver: self-tests, instances, negative tests, fixtures |
 | `hachico_ref/subfield.py` | R_q^H, Tr_H, ψ, ψ⁻¹, E, monomials (main session; read-only here) |
-| `hachico_ref/params.py` | Setup cascade 6_CH:265-281, τ rule, q rule, toy table check |
+| `hachico_ref/params.py` | Setup cascade 6_CH:265-281, τ rule, q rule, toy table (n = 1, 2, 3, 4, 8) and its check |
 | `hachico_ref/prg.py` | SHAKE128 counter-mode PRG, uniform/box/S_β samplers, exact ℓ₁-ball sampler |
 | `hachico_ref/ring.py` | R_q on numpy int64 (with an overflow guard), G, G⁻¹, J, J⁻¹ |
 | `hachico_ref/fqk.py` | vectorized F_{q^k} in Hachi's basis (product table taken from `subfield.py`), eq, MLE, Lagrange |
@@ -52,7 +57,7 @@ runs produce byte-identical fixtures.
 | `hachico_ref/negative.py` | tampered transcripts and witnesses, Open negatives, Rej boundary, abort rate |
 | `hachico_ref/selftest.py` | arithmetic self-tests against Sage, brute force and `subfield.py` |
 | `hachico_ref/fixtures.py` | fixture writer (format below) |
-| `fixtures/toy-n{1,2,3}.json` | the fixtures |
+| `fixtures/toy-n{1,2,3,4,8}.json` | the fixtures |
 
 `fixtures/gen_math_fixtures.py` belongs to the math agent (fixtures for `crates/math`); the oracle does not use it.
 
@@ -71,7 +76,7 @@ runs produce byte-identical fixtures.
   integer itself and fails outside [⌈−b/2⌉S_τ, (⌈b/2⌉−1)S_τ].
 - **Blocks and owners.** f′ has 2^r blocks of 2^m ring elements; f′[i·2^m + j] is entry j of block i. Block i
   belongs to prover (i >> (r − ⌈log n⌉)) + 1 if that number is ≤ n. Otherwise the block is all-zero and belongs
-  to nobody: for n = 3, blocks 6 and 7.
+  to nobody: for n = 3, blocks 6 and 7. For n = 1, 2, 4, 8 (powers of two) every block has an owner.
 - **PConv.** f̂[nat(p)·2^ℓ + nat(q)] = ⟨f⟩_{nat(p)+1}[nat(q)] for nat(p) < n, else 0. Then
   f′[t] = ψ(f̂[t·d/k .. t·d/k + d/k − 1]).
 - **Πconv.** x′ = 1^{⌈log n⌉} ‖ x[0 : ℓ−α+κ], b = monomials(x′[0:r]), a = monomials(x′[r:ℓ′]),
@@ -144,13 +149,14 @@ runs produce byte-identical fixtures.
 19. **Fixture seed.** The fixture uses the smallest seed index whose run contains an aborted attempt, so that
     the fixtures cover the abort-and-retry path. This is test coverage, not selection of results: every run
     tried on the way is fully checked, printed and listed under `seeds.selection.tried`. All of them passed.
-    Fixture seeds: toy-n1 index 3 (four aborts), toy-n2 index 1 (four aborts), toy-n3 index 1 (one abort).
+    Fixture seeds: toy-n1 index 3 (four aborts), toy-n2 index 1 (four aborts), toy-n3 index 1 (one abort),
+    toy-n4 index 3 (one abort, by provers 1 and 4), toy-n8 index 1 (two aborts, by prover 7, then prover 2).
 
 ### Observations about the draft (no effect on correctness)
 
 - **d₀ is larger than needed (6_CH:281).** d₀ = 2b + n′ + 1, but the individual degree of F_{0,i} is 2b + 1: 1
   from eq, 1 from e_i and 2b − 1 from the range product. The sum Σ_{u} χ_{bit(u)} is still multilinear. This is
-  derived, and also measured: in every round of all three presets the unblinded round polynomials have degree
+  derived, and also measured: in every round of all five presets the unblinded round polynomials have degree
   ≤ 9 = 2b + 1 in the U rounds and 8 in the L rounds, while F₁ has degree 2 ≤ d₁ = 3 (fixture key
   `sumcheck.round_degrees_unblinded`). With g₀ of degree 2b + 1, each round message would be 2b + 2 field
   elements instead of 2b + n′ + 2.
@@ -159,7 +165,31 @@ runs produce byte-identical fixtures.
 - **5_BB:134** says "slices of v, u, y". The y vector holds v and the commitment u; the claimed evaluation y
   enters only through a (5_BB:264).
 
-## Fixture format (`fixtures/toy-n{1,2,3}.json`, format `hachi-co-ref-fixture/v1`)
+## Party counts 4 and 8
+
+- **Presets.** toy-n4 and toy-n8 keep every choice of the m0-spec toys and change only n. Their rows of
+  `TOY_TABLE` come from the oracle's own rules (`choose_q`, then `derive`), and `check_toy_table` re-derives
+  them:
+
+  | name | n | q | δ | r | m | β₁ | N | γ | β | τ | μ | ℓ″ | d₀ |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | toy-n4 | 4 | 134217757 | 14 | 3 | 3 | 16 | 1792 | 229376 | 917504 | 11 | 1577 | 16 | 14 |
+  | toy-n8 | 8 | 536871029 | 15 | 4 | 3 | 16 | 1920 | 491520 | 3932160 | 12 | 2177 | 17 | 14 |
+
+  toy-n4 has the modulus of toy-n3: both have τ = 11, so the binding guard 16ωb^τ = 2²⁷ is the largest bound
+  for both. Both n are powers of two, so every block has an owner and no position is unheld; each prover owns
+  2^{r−⌈log n⌉} = 2 blocks.
+- **Code.** The protocol code (Commit, Πconv, ring-to-linear, sumcheck, verifier) and the negative tests were
+  already written for any n; nothing in them assumes n ≤ 3. The witness tests that move shares between provers
+  use provers 1 and 2 (any n ≥ 2), and the transcript tests tamper each prover's final values (four tests per
+  prover). The only limit was arithmetic: toy-n8's q, just above 2²⁹, failed the former int64 guard
+  d(q−1)² < 2⁶² of `ring.py` by a factor 1 + 4·10⁻⁷, although every int64 intermediate stays below
+  2⁶²·(1 + 10⁻⁶) < 2⁶³. The guard is now the exact int64 condition d(q−1)² + (q−1) ≤ 2⁶³ − 1 (the docstring
+  of `ring.py` lists every sum of products it covers), with self-tests at the worst case. It changes no value:
+  toy-n1..n3 regenerate byte-identically.
+- **Fixture seeds** (choice 19): toy-n4 index 3, toy-n8 index 1.
+
+## Fixture format (`fixtures/toy-n{1,2,3,4,8}.json`, format `hachi-co-ref-fixture/v1`)
 
 **Encodings.**
 - A residue is an integer in [0, q).
@@ -207,7 +237,7 @@ runs produce byte-identical fixtures.
 
 ## Checks
 
-**Relations (oracle level), all passing for n = 1, 2, 3.**
+**Relations (oracle level), all passing for n = 1, 2, 3, 4, 8.**
 - Open(pp, st, u, f, c*) = 1 and each of its conditions, checked in Sage arithmetic.
 - E·cf(u) = cf(E(u)); E(u) ∈ R_q^H; y = E(u), with y = f(x) computed independently by `subfield.py`.
 - c ∈ C; ‖z‖∞ ≤ β at prover 1; J ẑ = z; z = Σ c_{i′}s_{i′} + Σ r_p over Z.
@@ -223,8 +253,8 @@ runs produce byte-identical fixtures.
 - V's a equals the provers' a.
 
 **Verifier.** The check y = E(u), both round checks in every round, 3n PCS openings, and both final checks:
-36, 39 and 44 checks for n = 1, 2, 3. All pass on honest runs, and on every run tried with other seeds
-(`--sweep`).
+36, 39, 44, 47 and 61 checks for n = 1, 2, 3, 4, 8. All pass on honest runs, and on every run tried with other
+seeds (`--sweep`).
 
 **Negative tests.** Each passes iff exactly the expected checks fail.
 - **Round messages.** H(1) += 1 at rounds 1, mid and last makes that round's check fail. Adding 5X(X−1)
@@ -248,11 +278,14 @@ runs produce byte-identical fixtures.
   the exact 1 − M^{−n} (≈ 0.3935) for each preset.
 
 **Self-tests.**
-- The toy table and q rule are re-derived.
-- `subfield.self_test` passes at the three moduli.
+- The toy table and q rule are re-derived (all five rows).
+- `subfield.self_test` passes at the four distinct toy moduli (toy-n3 and toy-n4 share q).
 - The vectorized field product agrees with `Subfield.fmul`; associativity, distributivity and the Frobenius
   order hold.
-- Ring products and mat-vec agree with Sage, including all-(q−1) operands.
+- Ring products and mat-vec agree with Sage, including all-(q−1) operands. Every kind of int64 sum of
+  products (matvec, matvec_full, the d-term einsum and @) is exact at its worst case, all operands q − 1, at
+  every toy modulus; the guard accepts q = 759250125 and rejects q = 759250126 (d = 16), and beyond the bound
+  an int64 sum does overflow.
 - G and J round trips pass at the window boundaries; one step beyond fails.
 - The ℓ₁-ball count agrees with brute force, and the sampler passes χ² over C(4,2).
 - The mask and S_b samplers pass χ².
@@ -263,8 +296,8 @@ runs produce byte-identical fixtures.
 
 - Hachi as the base PCS, hiding commitments (A′·r_i) and Fiat–Shamir are not modelled. F_AH is ideal: the
   shares are summed.
-- Only the toy presets were run. The numpy code asserts int64 headroom: d(q−1)² < 2⁶² for R_q, and q < 2³¹ for
-  F_{q^k}.
+- Only the toy presets were run. The numpy code asserts int64 headroom: d(q−1)² + (q−1) ≤ 2⁶³ − 1 for R_q
+  (q ≤ 759250125 at d = 16), and q < 2³¹ for F_{q^k}.
 - The oracle checks completeness and that the listed tampering is rejected. It proves neither soundness nor
   zero-knowledge.
 - The PRG is the oracle's own, so the Rust side must inject the recorded randomness to compare runs.

@@ -40,11 +40,12 @@
 //! - $\mathsf{Rej}$ ([`respond`], through `hachi_co_sampling::rej::rej`): the checks of the fold,
 //!   the mask and $\mathbf z\_p$ run over all coordinates without branches or early exit, with one
 //!   branch on the combined (public) decision;
-//! - this crate's own conversions of secrets: the range check and lift of the mask and of
-//!   $\boldsymbol\rho\_p$ to residues and the centering of the digits of $\mathbf s\_i$ use
-//!   arithmetic only; the exact products of the fold ([`hachi_co_core::short::negacyclic_mul`])
-//!   branch only on the public challenge and on overflow, which cannot occur within the bounds;
-//!   validity checks branch only on validity, whose outcome is fixed for valid inputs.
+//! - the conversions of secrets: the range check and lift of the mask and of
+//!   $\boldsymbol\rho\_p$ to residues (this crate's own) and the centering of the digits of
+//!   $\mathbf s\_i$ ([`hachi_co_core::short::center_poly`]) use arithmetic only; the exact
+//!   products of the fold ([`hachi_co_core::short::negacyclic_mul`]) branch only on the public
+//!   challenge and on overflow, which cannot occur within the bounds; validity checks branch only
+//!   on validity, whose outcome is fixed for valid inputs.
 //!
 //! What is **not** constant time: the images $\mathbf A \mathbf r\_p$ and $\mathbf a^T
 //! \mathbf G\_{2^m} \mathbf r\_p$ and their decompositions $\mathbf G^{-1}$, and $w\_i$,
@@ -66,7 +67,9 @@
 //!   norm check is not retried but ends the step with [`Error::NormCheck`] at prover 1 and
 //!   [`Error::Prover1Abort`] at the others (it never happens for honest provers,
 //!   `5_Building_Blocks.tex`:193);
-//! - the attempts are capped at [`MAX_ATTEMPTS`] (the oracle's default);
+//! - the attempts are capped at [`MAX_ATTEMPTS`] (the oracle's default), and
+//!   [`verifier_challenges`] refuses an attempt index at or above the cap
+//!   ([`Error::AttemptOutOfRange`]);
 //! - the labels [`LABEL_V`] and `COMM_*`;
 //! - every prover and the verifier check $\mathbf c \in \mathcal C^{2^r}$ with the draft's
 //!   $\ell\_1$ ball, and the shapes, canonical residues and ranges of everything they receive
@@ -121,5 +124,6 @@ pub const COMM_PROVER1: &str = "hachi-co/r2l/prover-1-check";
 /// The default cap on the attempts of [`run`] (the oracle's `max_attempts`). For honest provers
 /// an attempt aborts with probability $1 - M^{-n} \le 1 - 1/e$ (`6_Collaborative_Hachi.tex`:275:
 /// $M \le e^{1/n}$), so all of them abort with probability at most
-/// $(1 - 1/e)^{64} \lt 2^{-42}$.
+/// $(1 - 1/e)^{64} \lt 2^{-42}$. The accepted attempt's index is therefore below the cap, and
+/// [`verifier_challenges`] refuses any other ([`Error::AttemptOutOfRange`]).
 pub const MAX_ATTEMPTS: u64 = 64;

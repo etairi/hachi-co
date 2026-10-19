@@ -115,3 +115,10 @@ fn generic_party_code_runs_on_the_loopback() {
     let dynamic: &mut dyn Comm = &mut c;
     assert_eq!(party(dynamic, &[0, 1]).unwrap(), (vec![0, 1], true));
 }
+
+#[test]
+fn all_gather_returns_the_single_vector_unchanged() {
+    let mut c = Loopback::new(Q).unwrap();
+    let v = vec![0, Q, u64::MAX];
+    assert_eq!(c.all_gather("all", &v).unwrap(), vec![v]);
+}

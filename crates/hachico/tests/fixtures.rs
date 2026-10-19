@@ -2,20 +2,21 @@
 //! - toy-n1 replayed end to end (`ReplayRandomness`, `ReplayChallenger`, the fixture's input,
 //!   `Loopback`) through Commit, Eval and the composed verifier: every value of the proof equals
 //!   the fixture, Open = 1 after Commit, and the final claims are the provers' polynomials;
-//! - toy-n2 and toy-n3 replayed the same way on the threaded test network, at every party;
+//! - every fixture with n > 1 replayed the same way on the in-memory network, with both
+//!   zero-sharing modes of its F_AH, at every party;
 //! - the composed verifier accepts the proofs assembled from the three fixtures' recorded values
 //!   with replayed coins, and returns the recorded final openings as claims.
 
 mod common;
 
-use common::net::run_parties;
+use common::net::run_with;
 use common::{
     K, assert_claims_match, fixture_claims, fixture_proof, fixture_statement, load, recorded_state,
 };
 use hachi_co::{EvalOutput, EvalProof, commit, encoded_len, eval_with, verify_with};
 use hachi_co_commit::open;
 use hachi_co_core::{Fixture, ReplayChallenger, ReplayRandomness};
-use hachi_co_mpc::Loopback;
+use hachi_co_mpc::{Loopback, MemoryConfig, ZeroSharing};
 
 /// Every public value of the proof against the fixture, component by component (for readable
 /// failures), then as a whole.
@@ -125,40 +126,49 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     assert_eq!(EvalProof::from_bytes(&ctx, &bytes).unwrap(), out.proof);
 }
 
-/// toy-n2 and toy-n3 replayed through Commit and Eval on the threaded network: every party
-/// reproduces u, its state and the fixture's proof; Open = 1 on all states; the verifier accepts
-/// and its claims are the provers' polynomials.
+/// Every fixture with $n > 1$ replayed through Commit and Eval on the in-memory network, with
+/// each zero-sharing mode: every party reproduces u, its state and the fixture's proof; Open = 1
+/// on all states; the verifier accepts and its claims are the provers' polynomials.
 #[test]
-fn threaded_replay_reproduces_toy_n2_and_n3() {
-    for name in ["toy-n2", "toy-n3"] {
-        let (fx, ctx) = load(name);
-        let n = fx.n();
-        let (u_fx, x, y) = fixture_statement(&fx);
-        let outputs = run_parties(n, ctx.q(), |p, comm| {
-            let mut rng = ReplayRandomness::new(&fx, p).unwrap();
-            let f_init = fx
-                .exts::<K>(&format!("/input/f_init_shares/{}", p - 1))
-                .unwrap();
-            let (u, state) = commit(&ctx, comm, &mut rng, &f_init).unwrap();
-            let mut ch = ReplayChallenger::new(&fx).unwrap();
-            let out = eval_with(&ctx, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
-            (u, state, out)
-        });
-        for (p0, (u, state, out)) in outputs.iter().enumerate() {
-            let what = format!("{name}, party {}", p0 + 1);
-            assert_eq!(u, &u_fx, "{what}: u");
-            assert_eq!(state, &recorded_state(&fx, &ctx, p0 + 1), "{what}: st");
-            compare_proof(&fx, &out.proof, &what);
-            compare_attempts(&fx, out, p0 + 1, &what);
+fn threaded_replay_reproduces_every_multi_party_fixture() {
+    for name in Fixture::TOY {
+        for mode in [ZeroSharing::PairwiseSeeds, ZeroSharing::Fresh] {
+            let (fx, ctx) = load(name);
+            let n = fx.n();
+            if n == 1 {
+                continue;
+            }
+            let (u_fx, x, y) = fixture_statement(&fx);
+            let config = MemoryConfig::new(n, ctx.q(), [n as u8; 32]).zero_sharing(mode);
+            let outputs: Vec<_> = run_with(&config, |p, comm| {
+                let mut rng = ReplayRandomness::new(&fx, p).unwrap();
+                let f_init = fx
+                    .exts::<K>(&format!("/input/f_init_shares/{}", p - 1))
+                    .unwrap();
+                let (u, state) = commit(&ctx, comm, &mut rng, &f_init).unwrap();
+                let mut ch = ReplayChallenger::new(&fx).unwrap();
+                let out = eval_with(&ctx, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+                (u, state, out)
+            })
+            .into_iter()
+            .map(|run| run.expect("every party connects").output)
+            .collect();
+            for (p0, (u, state, out)) in outputs.iter().enumerate() {
+                let what = format!("{name}, {mode:?}, party {}", p0 + 1);
+                assert_eq!(u, &u_fx, "{what}: u");
+                assert_eq!(state, &recorded_state(&fx, &ctx, p0 + 1), "{what}: st");
+                compare_proof(&fx, &out.proof, &what);
+                compare_attempts(&fx, out, p0 + 1, &what);
+            }
+            let states: Vec<_> = outputs.iter().map(|(_, st, _)| st.clone()).collect();
+            let f = fx.exts::<K>("/input/f").unwrap();
+            assert!(open(&ctx, &states, &u_fx, &f, None).unwrap().bit, "{name}");
+            let mut vch = ReplayChallenger::new(&fx).unwrap();
+            let claims = verify_with(&ctx, &mut vch, &u_fx, &x, &y, &outputs[0].2.proof).unwrap();
+            assert_eq!(claims, fixture_claims(&fx), "{name}");
+            let privates: Vec<_> = outputs.iter().map(|(_, _, out)| &out.sumcheck).collect();
+            assert_claims_match(ctx.field(), &claims, &privates, name);
         }
-        let states: Vec<_> = outputs.iter().map(|(_, st, _)| st.clone()).collect();
-        let f = fx.exts::<K>("/input/f").unwrap();
-        assert!(open(&ctx, &states, &u_fx, &f, None).unwrap().bit, "{name}");
-        let mut vch = ReplayChallenger::new(&fx).unwrap();
-        let claims = verify_with(&ctx, &mut vch, &u_fx, &x, &y, &outputs[0].2.proof).unwrap();
-        assert_eq!(claims, fixture_claims(&fx), "{name}");
-        let privates: Vec<_> = outputs.iter().map(|(_, _, out)| &out.sumcheck).collect();
-        assert_claims_match(ctx.field(), &claims, &privates, name);
     }
 }
 

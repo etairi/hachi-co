@@ -513,6 +513,8 @@ dependencies = [
 name = "hachi-co-mpc"
 version = "0.1.0"
 dependencies = [
+ "hachi-co-sampling",
+ "rand 0.10.3",
  "thiserror",
 ]
 
