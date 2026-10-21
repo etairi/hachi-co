@@ -3,16 +3,9 @@
 all-features = true
 
 [advisories]
-# RUSTSEC-2024-0436: paste is unmaintained (no vulnerability reported, no maintained release to move to). It is a
-# compile-time proc macro that only the legacy crate reaches: hachi -> tfhe-ntt -> pulp -> paste. The legacy
-# dependencies stay as they are until Hachi itself changes (M3).
-ignore = [
-    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained proc macro, reached only via tfhe-ntt -> pulp in the legacy crate" },
-]
 
 [licenses]
-# tfhe-ntt is BSD-3-Clause-Clear and foldhash is Zlib; everything else is MIT/Apache-2.0 compatible.
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause-Clear", "Unicode-3.0", "Zlib"]
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
 confidence-threshold = 0.9
 
 [bans]

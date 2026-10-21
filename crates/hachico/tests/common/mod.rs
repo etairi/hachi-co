@@ -1,18 +1,24 @@
 //! Shared helpers of the integration tests: the fixtures (context, statement, the proof built
-//! from the recorded values), seeded inputs and an independent evaluation of $f(\mathbf x)$, an
-//! ideal PCS for the final claims (the oracle's `IdealPCS`, as in the sumcheck crate's tests), a
-//! challenger that records the calls made to it, and the parties run over the in-memory network.
+//! from the recorded values, with `ClearPcs` commitments and openings of the recorded
+//! polynomials), the reference base PCS and its sizes, seeded inputs and an independent
+//! evaluation of $f(\mathbf x)$, an ideal PCS for the final claims (the oracle's `IdealPCS`, as
+//! in the sumcheck crate's tests), a challenger that records the calls made to it, and the
+//! parties run over the in-memory network.
 #![allow(dead_code)]
 
 pub mod net;
 
-use hachi_co::{EvalProof, FinalClaims};
+use hachi_co::{BasePcsWords, EvalProof, FinalClaims, HachiBase, HachiChoices};
+use hachi_co_core::base_pcs::mobius;
 use hachi_co_core::{
-    Challenger, Context, Ext, Fixture, Fqk, PartyState, Poly, SumcheckCoins, build_m,
+    BasePcs, Blinder, BlinderKind, Challenger, ClearPcs, Context, Ext, Fixture, Fqk, Layout,
+    LinearShare, PartyRandomness, PartyState, Poly, ReplayChallenger, ReplayRandomness,
+    SumcheckCoins, build_m,
 };
 use hachi_co_params::{Params, derive, preset};
 use hachi_co_sumcheck::{
-    Claim, ClaimedPoly, FinalValues, RoundMessage, SumcheckPrivate, SumcheckTranscript, eq_table,
+    Claim, ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
+    blinder_coefficients, blinder_weights, eq_table, opening_label, quotient_share, w_table,
 };
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -20,6 +26,38 @@ use sha2::{Digest, Sha256};
 
 /// The extension degree of every toy and development preset.
 pub const K: usize = 4;
+
+/// The reference base PCS of the tests.
+pub type Pcs = ClearPcs<K>;
+
+/// `ClearPcs` over the field of `ctx`.
+pub fn clear_pcs(ctx: &Context<K>) -> Pcs {
+    ClearPcs::from_field(ctx.field())
+}
+
+/// The words of `ClearPcs`'s items at a layout, from its size formulas: 4-word commitments, a
+/// multilinear proof of $6 + 2^{\ell''}$ words and vector proofs of $6 + K(1 + \ell'' d\_b)$
+/// words.
+pub fn clear_words(l: &Layout) -> BasePcsWords {
+    let c = Pcs::COMMITMENT_WORDS as u128;
+    let vector = |degree: usize| Pcs::vector_proof_words(1 + l.ell_pp * degree).unwrap() as u128;
+    BasePcsWords {
+        commitment_w: c,
+        commitment_g0: c,
+        commitment_g1: c,
+        proof_w: Pcs::multilinear_proof_words(l.ell_pp).unwrap() as u128,
+        proof_g0: vector(l.d0),
+        proof_g1: vector(l.d1),
+    }
+}
+
+/// A proof without its base-PCS words: what the oracle records.
+pub fn without_pcs(proof: &EvalProof<K>) -> EvalProof<K> {
+    let mut p = proof.clone();
+    p.sumcheck.commitments = PcsWords::default();
+    p.sumcheck.openings = PcsWords::default();
+    p
+}
 
 /// The fixture `name` and its context (with the recorded matrices).
 pub fn load(name: &str) -> (Fixture, Context<K>) {
@@ -43,9 +81,30 @@ pub fn params_of(name: &str) -> Params {
     derive(&preset(name).unwrap().choices).unwrap().0
 }
 
+/// The setup seed of (`name`, `index`).
+pub fn setup_seed(name: &str, index: u64) -> [u8; 32] {
+    seed(&format!("setup/{name}"), &[index])
+}
+
 /// A fresh context of the preset `name` from `Setup` with the seed of (`name`, `index`).
 pub fn fresh_context(name: &str, index: u64) -> Context<K> {
-    hachi_co::setup(params_of(name), &seed(&format!("setup/{name}"), &[index])).unwrap()
+    hachi_co::setup(params_of(name), &setup_seed(name, index)).unwrap()
+}
+
+/// Hachi as the base PCS of the context of (`name`, `index`) ([`fresh_context`]), from the same
+/// setup seed, with its default choices and the given number of iterations (`None`: the
+/// automatic schedule, which runs none on the toy presets' polynomials: they are too small).
+pub fn hachi_base(
+    ctx: &Context<K>,
+    name: &str,
+    index: u64,
+    iterations: Option<usize>,
+) -> HachiBase<K> {
+    let choices = HachiChoices {
+        fixed_iterations: iterations,
+        ..HachiBase::default_choices(ctx, &setup_seed(name, index))
+    };
+    HachiBase::new(ctx.q(), choices).unwrap()
 }
 
 /// `len` uniform elements of $\mathbb F\_{q^K}$.
@@ -112,7 +171,8 @@ pub fn fixture_statement(fx: &Fixture) -> (Vec<Poly>, Vec<Ext<K>>, Ext<K>) {
     )
 }
 
-/// The sumcheck transcript recorded in a fixture (`sumcheck/G0`, `G1`, `rounds`, `final`).
+/// The sumcheck transcript recorded in a fixture (`sumcheck/G0`, `G1`, `rounds`, `final`),
+/// without base-PCS words (the oracle does not model them).
 pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
     let rounds = fx
         .get("/sumcheck/rounds")
@@ -123,6 +183,7 @@ pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
     SumcheckTranscript {
         g0_sums: fx.exts("/sumcheck/G0").unwrap(),
         g1_sums: fx.exts("/sumcheck/G1").unwrap(),
+        commitments: PcsWords::default(),
         rounds: (0..rounds)
             .map(|r| RoundMessage {
                 h0: fx.exts(&format!("/sumcheck/rounds/{r}/H0")).unwrap(),
@@ -134,12 +195,13 @@ pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
             g0: fx.exts("/sumcheck/final/g0").unwrap(),
             g1: fx.exts("/sumcheck/final/g1").unwrap(),
         },
+        openings: PcsWords::default(),
     }
 }
 
-/// The proof assembled from a fixture's recorded values: `conv/E_u`, the accepted attempt and
-/// its `v`, and the sumcheck transcript.
-pub fn fixture_proof(fx: &Fixture) -> EvalProof<K> {
+/// The proof assembled from a fixture's recorded values (`conv/E_u`, the accepted attempt and
+/// its `v`, and the sumcheck transcript), without base-PCS words: what the oracle records.
+pub fn fixture_proof_without_pcs(fx: &Fixture) -> EvalProof<K> {
     let accepted = fx.u64("/ring_to_linear/accepted_attempt").unwrap();
     EvalProof {
         e_u: fx.poly("/conv/E_u").unwrap(),
@@ -149,6 +211,95 @@ pub fn fixture_proof(fx: &Fixture) -> EvalProof<K> {
             .unwrap(),
         sumcheck: fixture_transcript(fx),
     }
+}
+
+/// The parties' committed polynomials as the oracle records them, rebuilt from the recorded
+/// inputs: the table of $\langle \widetilde w \rangle\_p$ from $\mathbf z'$ (`ring_to_linear/
+/// z_prime`), $\mathbf y$, the shares $\langle u \rangle\_p$ (`conv/u_shares`) and $\mathbf M$
+/// ([`LinearShare::slice`], [`quotient_share`], [`w_table`]), and the recorded blinders
+/// ([`ReplayRandomness`]), party by party.
+pub fn recorded_polynomials(
+    fx: &Fixture,
+    ctx: &Context<K>,
+) -> Vec<(Vec<u64>, Blinder<K>, Blinder<K>)> {
+    let l = &ctx.layout;
+    let m = fixture_m(fx, ctx);
+    let z_prime = fx.polys("/ring_to_linear/z_prime").unwrap();
+    let y = fx.polys("/ring_to_linear/y").unwrap();
+    let u_shares = fx.polys("/conv/u_shares").unwrap();
+    (1..=fx.n())
+        .map(|p| {
+            let share = LinearShare::slice(l, &z_prime, &y, &u_shares[p - 1], p).unwrap();
+            let quotient = quotient_share(ctx, &m, &share).unwrap();
+            let table = w_table(ctx, &share.z_prime, &quotient).unwrap();
+            let mut rng = ReplayRandomness::new(fx, p).unwrap();
+            let g0 = rng
+                .blinder(ctx.field(), BlinderKind::G0, l.ell_pp, l.d0)
+                .unwrap();
+            let g1 = rng
+                .blinder(ctx.field(), BlinderKind::G1, l.ell_pp, l.d1)
+                .unwrap();
+            (table, g0, g1)
+        })
+        .collect()
+}
+
+/// The `ClearPcs` commitments and openings of the parties' polynomials (the table of
+/// $\langle \widetilde w \rangle\_p$ through the Möbius transform, and the blinders' coefficient
+/// vectors) at `point`, under the contexts of `ch` ([`opening_label`]), done independently of
+/// the driver.
+pub fn clear_pcs_words<H: Challenger<K>>(
+    ctx: &Context<K>,
+    polynomials: &[(Vec<u64>, Blinder<K>, Blinder<K>)],
+    point: &[Ext<K>],
+    ch: &mut H,
+) -> (PcsWords, PcsWords) {
+    let (field, l) = (ctx.field(), &ctx.layout);
+    let pcs = clear_pcs(ctx);
+    let (mut commitments, mut openings) = (PcsWords::default(), PcsWords::default());
+    for (p0, (table, g0, g1)) in polynomials.iter().enumerate() {
+        let mut coeffs = table.clone();
+        mobius(field.zq(), &mut coeffs).unwrap();
+        let (cw, sw) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (c0, s0) = pcs.commit_vector(&blinder_coefficients(g0)).unwrap();
+        let (c1, s1) = pcs.commit_vector(&blinder_coefficients(g1)).unwrap();
+        for (poly, com) in [
+            (ClaimedPoly::W, cw),
+            (ClaimedPoly::G0, c0),
+            (ClaimedPoly::G1, c1),
+        ] {
+            commitments
+                .of_mut(poly)
+                .push(Pcs::commitment_to_words(&com));
+            let context = ch.context(&opening_label(p0 + 1, poly));
+            let (_, proof) = match poly {
+                ClaimedPoly::W => pcs.prove_multilinear(&sw, point, &context).unwrap(),
+                ClaimedPoly::G0 => pcs
+                    .prove_inner_product(&s0, &blinder_weights(field, point, l.d0), &context)
+                    .unwrap(),
+                ClaimedPoly::G1 => pcs
+                    .prove_inner_product(&s1, &blinder_weights(field, point, l.d1), &context)
+                    .unwrap(),
+            };
+            openings.of_mut(poly).push(Pcs::proof_to_words(&proof));
+        }
+    }
+    (commitments, openings)
+}
+
+/// The proof assembled from a fixture's recorded values ([`fixture_proof_without_pcs`]) with the
+/// `ClearPcs` commitments and openings of the recorded polynomials
+/// ([`recorded_polynomials`]) at the recorded point, under the replay challenger's contexts.
+pub fn fixture_proof(fx: &Fixture) -> EvalProof<K> {
+    let ctx = fx.context::<K>().unwrap();
+    let mut proof = fixture_proof_without_pcs(fx);
+    let point = fx.exts::<K>("/sumcheck/coins/a").unwrap();
+    let mut ch = ReplayChallenger::new(fx).unwrap();
+    let (commitments, openings) =
+        clear_pcs_words(&ctx, &recorded_polynomials(fx, &ctx), &point, &mut ch);
+    proof.sumcheck.commitments = commitments;
+    proof.sumcheck.openings = openings;
+    proof
 }
 
 /// The claims the verifier must return for the fixture: the point `sumcheck/coins/a` and, party
@@ -275,8 +426,12 @@ pub enum Call {
     Polys(&'static str, usize, u64),
     /// `absorb_exts(label, exts)`: label, number of elements, fingerprint.
     Exts(&'static str, usize, u64),
+    /// `absorb_words(label, words)`: label, number of word vectors, fingerprint.
+    Words(&'static str, usize, u64),
     /// `absorb_u64(label, value)`.
     U64(&'static str, u64),
+    /// `context(label)`: the label and the context.
+    Context(String, [u8; 32]),
     /// `begin_attempt(a)`.
     Begin(u64),
     /// `r2l_challenges(a, count, d, omega)`.
@@ -319,9 +474,21 @@ impl<H: Challenger<K>> Challenger<K> for Recorder<H> {
         self.inner.absorb_exts(label, exts);
     }
 
+    fn absorb_words(&mut self, label: &'static str, words: &[Vec<u64>]) {
+        let fp = fingerprint(words.iter().flatten().copied());
+        self.log.push(Call::Words(label, words.len(), fp));
+        Challenger::<K>::absorb_words(&mut self.inner, label, words);
+    }
+
     fn absorb_u64(&mut self, label: &'static str, value: u64) {
         self.log.push(Call::U64(label, value));
         Challenger::<K>::absorb_u64(&mut self.inner, label, value);
+    }
+
+    fn context(&mut self, label: &str) -> [u8; 32] {
+        let context = Challenger::<K>::context(&mut self.inner, label);
+        self.log.push(Call::Context(label.to_owned(), context));
+        context
     }
 
     fn begin_attempt(&mut self, attempt: u64) -> hachi_co_core::Result<()> {

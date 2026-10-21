@@ -304,3 +304,101 @@ fn field_coins_are_canonical() {
         assert!(x.0.iter().all(|c| *c < 13));
     }
 }
+
+/// `absorb_words`: sensitive to every word and to the split into vectors, and never encoded
+/// like a message of polynomials with the same residues.
+#[test]
+fn word_messages_are_framed_and_sensitive() {
+    let f = field();
+    let run = |words: &[Vec<u64>]| {
+        let mut ch = FsChallenger::new(DOMAIN);
+        Challenger::<K>::absorb_words(&mut ch, "commitments", words);
+        ch.round_coin(&f, 1).unwrap()
+    };
+    let base = vec![vec![1u64, 2, 3, 4], vec![u64::MAX, 0]];
+    let reference = run(&base);
+    assert_eq!(run(&base), reference);
+    for i in 0..base.len() {
+        for j in 0..base[i].len() {
+            for bit in [0, 17, 63] {
+                let mut w = base.clone();
+                w[i][j] ^= 1 << bit;
+                assert_ne!(run(&w), reference, "vector {i} word {j} bit {bit}");
+            }
+        }
+    }
+    assert_ne!(run(&[vec![1, 2], vec![3, 4, u64::MAX, 0]]), reference);
+    assert_ne!(run(&[vec![1, 2, 3, 4, u64::MAX, 0]]), reference);
+    assert_ne!(run(&[]), run(&[vec![]]));
+    let mut polys = FsChallenger::new(DOMAIN);
+    Challenger::<K>::absorb_polys(
+        &mut polys,
+        "commitments",
+        &[Poly(vec![1, 2, 3, 4]), Poly(vec![u64::MAX, 0])],
+    );
+    assert_ne!(polys.round_coin(&f, 1).unwrap(), reference);
+}
+
+/// `context`: a forked squeeze. It is the seed of the fork of the transcript under the label;
+/// deterministic; it depends on every byte of the label and on what was absorbed before; it
+/// leaves the transcript, and hence every later coin, unchanged, whichever contexts were derived
+/// and in which order.
+#[test]
+fn contexts_are_forked_squeezes() {
+    let f = field();
+    let s = Script::base();
+    let prefix = |ch: &mut FsChallenger| {
+        Challenger::<K>::absorb_polys(ch, s.labels[0], &s.polys);
+        ch.absorb_exts(s.labels[1], &s.exts);
+    };
+    let mut ch = FsChallenger::new(DOMAIN);
+    prefix(&mut ch);
+    let before = ch.transcript().clone();
+    let label = "hachi-co/sumcheck/open/w/p1";
+    let c = Challenger::<K>::context(&mut ch, label);
+    assert_eq!(ch.transcript(), &before, "the transcript is unchanged");
+    assert_eq!(
+        c,
+        before
+            .fork(label.as_bytes())
+            .challenge_seed(hachi_co_core::FS_LABEL_CONTEXT.as_bytes())
+    );
+    assert_eq!(Challenger::<K>::context(&mut ch, label), c);
+    for pos in 0..label.len() {
+        let mut bytes = label.as_bytes().to_vec();
+        bytes[pos] ^= 1;
+        let other = String::from_utf8(bytes).unwrap();
+        assert_ne!(Challenger::<K>::context(&mut ch, &other), c, "byte {pos}");
+    }
+    assert_ne!(Challenger::<K>::context(&mut ch, ""), c);
+    // What was absorbed before matters.
+    let mut other = FsChallenger::new(DOMAIN);
+    prefix(&mut other);
+    Challenger::<K>::absorb_u64(&mut other, "one more", 0);
+    assert_ne!(Challenger::<K>::context(&mut other, label), c);
+    // Later coins do not depend on the contexts derived before them, nor on their order.
+    let mut plain = FsChallenger::new(DOMAIN);
+    prefix(&mut plain);
+    let mut forward = plain.clone();
+    let mut backward = plain.clone();
+    let labels = ["a", "b", "c"];
+    let fwd: Vec<[u8; 32]> = labels
+        .iter()
+        .map(|l| Challenger::<K>::context(&mut forward, l))
+        .collect();
+    let bwd: Vec<[u8; 32]> = labels
+        .iter()
+        .rev()
+        .map(|l| Challenger::<K>::context(&mut backward, l))
+        .collect();
+    assert_eq!(fwd, bwd.into_iter().rev().collect::<Vec<_>>());
+    let coin = plain.round_coin(&f, 1).unwrap();
+    assert_eq!(forward.round_coin(&f, 1).unwrap(), coin);
+    assert_eq!(backward.round_coin(&f, 1).unwrap(), coin);
+    assert_eq!(forward.transcript(), plain.transcript());
+    // A context is not a coin of the main transcript under the same label.
+    let mut main = FsChallenger::new(DOMAIN);
+    prefix(&mut main);
+    let mut t = main.transcript().clone();
+    assert_ne!(t.challenge_seed(label.as_bytes()), c);
+}

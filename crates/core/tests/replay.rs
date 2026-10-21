@@ -266,3 +266,44 @@ fn replay_challenger_refuses_mismatched_requests() {
     ));
     assert!(replay_err(ch.round_coin(&other, 1)));
 }
+
+/// The replay challenger's contexts: SHA-256 of the framed tag and label, computed here by
+/// hand; independent of the absorbs and of the coins drawn; different labels differ.
+#[test]
+fn replay_contexts_are_fixed_hashes_of_the_label() {
+    use sha2::{Digest, Sha256};
+    let fx = Fixture::load("toy-n2").unwrap();
+    let ctx = fx.context::<K>().unwrap();
+    let f = ctx.field();
+    let l = &ctx.layout;
+    let by_hand = |label: &str| -> [u8; 32] {
+        let mut h = Sha256::new();
+        let tag = b"hachi-co/replay/context";
+        h.update((tag.len() as u64).to_le_bytes());
+        h.update(tag);
+        h.update((label.len() as u64).to_le_bytes());
+        h.update(label.as_bytes());
+        h.finalize().into()
+    };
+    assert_eq!(hachi_co_core::REPLAY_CONTEXT_TAG, "hachi-co/replay/context");
+    let mut ch = ReplayChallenger::new(&fx).unwrap();
+    let labels = [
+        "hachi-co/sumcheck/open/w/p1",
+        "hachi-co/sumcheck/open/w/p2",
+        "",
+    ];
+    let first: Vec<[u8; 32]> = labels
+        .iter()
+        .map(|label| Challenger::<K>::context(&mut ch, label))
+        .collect();
+    for (label, c) in labels.iter().zip(&first) {
+        assert_eq!(*c, by_hand(label), "{label:?}");
+    }
+    assert_ne!(first[0], first[1]);
+    Challenger::<K>::absorb_words(&mut ch, "commitments", &[vec![1, 2, 3]]);
+    ch.absorb_exts("finals", &[f.one()]);
+    ch.sumcheck_coins(f, l.ell_pp, l.log_n, l.log_nu).unwrap();
+    for (label, c) in labels.iter().zip(&first) {
+        assert_eq!(Challenger::<K>::context(&mut ch, label), *c, "{label:?}");
+    }
+}

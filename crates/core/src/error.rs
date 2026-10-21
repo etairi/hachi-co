@@ -82,6 +82,11 @@ pub enum Error {
     /// attempt 0); the message names the misuse.
     #[error("challenger: {0}")]
     Challenger(String),
+    /// A base polynomial commitment scheme ([`BasePcs`](crate::BasePcs)) refused an input: a
+    /// state of the other kind of commitment, an encoding in words that does not decode, …; the
+    /// message names it. Adapters of other schemes report their errors with it.
+    #[error("base PCS: {0}")]
+    BasePcs(String),
     /// A replay provider has no recorded value for the request, or the request does not match the
     /// recording (feature `fixtures`).
     #[error("replay: {0}")]

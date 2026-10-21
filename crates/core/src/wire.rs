@@ -50,6 +50,51 @@ pub fn unflatten_exts<const K: usize>(flat: &[u64], count: usize) -> Result<Vec<
         .collect())
 }
 
+/// Word vectors of any lengths as one flat vector, each preceded by its length:
+/// $\mathrm{len}(v\_1) \Vert v\_1 \Vert \mathrm{len}(v\_2) \Vert v\_2 \Vert \cdots$ (for example a
+/// party's three base-PCS commitments before [`hachi_co_mpc::Comm::all_gather`]).
+pub fn join_words(parts: &[Vec<u64>]) -> Vec<u64> {
+    let total: usize = parts.iter().map(Vec::len).sum();
+    let mut out = Vec::with_capacity(parts.len() + total);
+    for p in parts {
+        out.push(p.len() as u64);
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+/// `count` word vectors from `flat` (the inverse of [`join_words`]).
+///
+/// # Errors
+/// [`Error::Shape`] if a length runs past the end of `flat`, or if words remain after the
+/// `count` vectors.
+pub fn split_words(flat: &[u64], count: usize) -> Result<Vec<Vec<u64>>> {
+    let mut rest = flat;
+    let mut out = Vec::with_capacity(count.min(flat.len()));
+    for _ in 0..count {
+        let Some((len, tail)) = rest.split_first() else {
+            return Err(Error::Shape {
+                what: "joined word vectors (a length per vector)",
+                expected: count,
+                actual: out.len(),
+            });
+        };
+        let len = usize::try_from(*len)
+            .ok()
+            .filter(|len| *len <= tail.len())
+            .ok_or(Error::Shape {
+                what: "joined word vectors (a length within the words)",
+                expected: tail.len(),
+                actual: usize::try_from(*len).unwrap_or(usize::MAX),
+            })?;
+        let (part, tail) = tail.split_at(len);
+        out.push(part.to_vec());
+        rest = tail;
+    }
+    check_len("joined word vectors (no trailing words)", 0, rest.len())?;
+    Ok(out)
+}
+
 /// The entries of `rows`, one row after the other (for example the $\delta 2^m$ short ring
 /// elements of a response $\mathbf z\_i$ before [`hachi_co_mpc::Comm::gather`]).
 pub fn flatten_rows<T: Copy>(rows: &[Vec<T>]) -> Vec<T> {
@@ -98,6 +143,34 @@ mod tests {
             vec![Vec::<i64>::new(); 3]
         );
         assert_eq!(unflatten_exts::<4>(&[], 0).unwrap(), Vec::<Ext<4>>::new());
+        // Joined word vectors, including empty ones.
+        let parts = vec![vec![7u64, 8, 9], vec![], vec![u64::MAX]];
+        let flat = join_words(&parts);
+        assert_eq!(flat, vec![3, 7, 8, 9, 0, 1, u64::MAX]);
+        assert_eq!(split_words(&flat, 3).unwrap(), parts);
+        assert_eq!(split_words(&[], 0).unwrap(), Vec::<Vec<u64>>::new());
+        assert_eq!(join_words(&[]), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn malformed_joined_words_are_errors() {
+        let flat = join_words(&[vec![1, 2], vec![3]]);
+        // Too few vectors, too many, a length past the end, trailing words, a huge length.
+        assert!(matches!(split_words(&flat, 1), Err(Error::Shape { .. })));
+        assert!(matches!(split_words(&flat, 3), Err(Error::Shape { .. })));
+        assert!(matches!(
+            split_words(&[5, 1, 2], 1),
+            Err(Error::Shape { .. })
+        ));
+        assert!(matches!(
+            split_words(&[1, 1, 2], 1),
+            Err(Error::Shape { .. })
+        ));
+        assert!(matches!(
+            split_words(&[u64::MAX, 1], 1),
+            Err(Error::Shape { .. })
+        ));
+        assert!(matches!(split_words(&[], 1), Err(Error::Shape { .. })));
     }
 
     #[test]

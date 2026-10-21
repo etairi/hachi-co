@@ -15,6 +15,7 @@
 //! | `r2l_challenges(a, ..)` | `/ring_to_linear/attempts/<a>/c` | $2^r \times d$ |
 //! | `sumcheck_coins` | `/sumcheck/coins/alpha`, `rho`, `tau0`, `tau1` | $k$; $k$; $(\ell'' + \lceil \log n \rceil) \times k$; $\lceil \log \nu \rceil \times k$ |
 //! | `round_coin(r)` | `/sumcheck/coins/a/<r-1>` | $k$ |
+//! | `context(label)` | none (the oracle does not model the base PCS): a fixed hash of the label, see [`ReplayChallenger`] | 32 bytes |
 //!
 //! (`/ring_to_linear/attempts/<a>/provers/<p-1>/prover` is checked to be $p$.) The oracle's
 //! resharing of party $p$ is `commit/reshare[p-1]` $= (\langle \mathbf f\_p \rangle\_1, \dots,
@@ -26,6 +27,7 @@ use crate::fixture::Fixture;
 use crate::{Challenger, Error, PartyRandomness, Result};
 use hachi_co_math::{Ext, Fqk, Poly};
 use hachi_co_mpc::PartyId;
+use sha2::{Digest, Sha256};
 
 /// Coordinates as an [`Ext`], checking that there are $K$ of them.
 fn to_ext<const K: usize>(coords: &[u64]) -> Result<Ext<K>> {
@@ -263,12 +265,21 @@ impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
     }
 }
 
+/// The tag of the contexts of [`ReplayChallenger`].
+pub const REPLAY_CONTEXT_TAG: &str = "hachi-co/replay/context";
+
 /// The verifier's coins replayed from a fixture (key mapping in the
 /// [module documentation](self)). The absorbs and
 /// [`begin_attempt`](Challenger::begin_attempt) are ignored: the oracle's coins are public coins
 /// that do not depend on the messages (`ref/README.md`, choice 14). A request that does not match
 /// the recording (shape, $\omega$, the modulus, an attempt or round the oracle did not run) is an
 /// [`Error::Replay`].
+///
+/// The oracle does not model the base PCS (its `IdealPCS`, `ref/README.md`, choice 13), so it
+/// records no contexts: [`context`](Challenger::context)`(label)` is the SHA-256 hash of
+/// $\mathrm{LE64}(|T|) \Vert T \Vert \mathrm{LE64}(|\mathit{label}|) \Vert \mathit{label}$ with
+/// the tag $T$ = [`REPLAY_CONTEXT_TAG`], a fixed value per label that does not depend on the
+/// messages either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplayChallenger {
     q: u64,
@@ -322,7 +333,18 @@ impl<const K: usize> Challenger<K> for ReplayChallenger {
 
     fn absorb_exts(&mut self, _label: &'static str, _exts: &[Ext<K>]) {}
 
+    fn absorb_words(&mut self, _label: &'static str, _words: &[Vec<u64>]) {}
+
     fn absorb_u64(&mut self, _label: &'static str, _value: u64) {}
+
+    fn context(&mut self, label: &str) -> [u8; 32] {
+        let mut h = Sha256::new();
+        for field in [REPLAY_CONTEXT_TAG.as_bytes(), label.as_bytes()] {
+            h.update((field.len() as u64).to_le_bytes());
+            h.update(field);
+        }
+        h.finalize().into()
+    }
 
     fn begin_attempt(&mut self, _attempt: u64) -> Result<()> {
         Ok(())

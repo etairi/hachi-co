@@ -14,13 +14,13 @@
 
 mod common;
 
-use common::{K, ideal_pcs};
+use common::{K, clear_pcs, ideal_pcs};
 use hachi_co_core::{Context, FsChallenger, LinearShare, Matrix, Poly, PrgRandomness, build_m};
 use hachi_co_math::Ext;
 use hachi_co_mpc::Loopback;
 use hachi_co_params::{derive, presets::toy_choices};
 use hachi_co_sumcheck::{
-    PublicInput, eq_table, mstar_table, prove, quotient_share, verify, w_table,
+    PublicInput, eq_table, mstar_table, prove, quotient_share, verify_claims, w_table,
 };
 use std::time::Instant;
 
@@ -124,23 +124,28 @@ fn honest_run(ell: u32, seed: u64) {
     let mstar = mstar_table(&s.ctx, &s.m, &s.e, &eq1, &Ext([3, 1, 4, 1])).unwrap();
     let tables = t.elapsed();
     drop((table, eq1, mstar));
-    // The whole prover and the verifier, with Fiat-Shamir.
+    // The whole prover and the verifier, with Fiat-Shamir and ClearPcs (whose openings are as
+    // large as the polynomials, and cost the verifier linear time).
     let domain = b"hachi-co/test/sumcheck/scaling";
+    let pcs = clear_pcs(f);
     let t = Instant::now();
     let mut comm = Loopback::new(s.ctx.q()).unwrap();
     let mut rng = PrgRandomness::new([seed as u8 ^ 0x5a; 32]);
     let mut ch = FsChallenger::new(domain);
-    let (transcript, private) =
-        prove(&s.ctx, &mut comm, &mut rng, &mut ch, &s.m, &s.e, &s.share).unwrap();
+    let (transcript, private) = prove(
+        &s.ctx, &pcs, &mut comm, &mut rng, &mut ch, &s.m, &s.e, &s.share,
+    )
+    .unwrap();
     let proved = t.elapsed();
     let t = Instant::now();
     let public = PublicInput::new(&s.ctx, &s.m, &s.y, &s.e, &s.y_ring);
     let mut vch = FsChallenger::new(domain);
-    let claims = verify(&s.ctx, &public, &transcript, &mut vch).unwrap();
+    let claims = verify_claims(&s.ctx, &pcs, &public, &transcript, &mut vch).unwrap();
     let verified = t.elapsed();
     eprintln!(
-        "l = {ell}: quotient {quotient:?}, w and M* tables {tables:?}, prove (all steps) \
-         {proved:?}, verify {verified:?}"
+        "l = {ell}: quotient {quotient:?}, w and M* tables {tables:?}, prove (all steps, \
+         ClearPcs) {proved:?}, verify {verified:?}, base-PCS words {}",
+        transcript.commitments.total_words() + transcript.openings.total_words()
     );
     assert_eq!(ch.transcript().digest(), vch.transcript().digest());
     let pcs = ideal_pcs(f, &claims, &[private]);

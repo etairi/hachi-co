@@ -1,8 +1,10 @@
 //! The verifier of the collaborative sumcheck (`5_Building_Blocks.tex`:276-334; oracle
-//! `sumcheck.verify` and `sumcheck.mstar_eval_factorized`).
+//! `sumcheck.verify` and `sumcheck.mstar_eval_factorized`), with the openings of the base PCS.
 
+use crate::blinder::blinder_weights;
 use crate::driver::{
-    LABEL_FINAL_G0, LABEL_FINAL_G1, LABEL_FINAL_W, LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1,
+    LABEL_COMMIT_G0, LABEL_COMMIT_G1, LABEL_COMMIT_W, LABEL_FINAL_G0, LABEL_FINAL_G1,
+    LABEL_FINAL_W, LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1, opening_label,
 };
 use crate::eq::{eq_eval, eq_point, eq_table, msb_bits};
 use crate::error::{Error, Result, VerifyError, check_len, pow2};
@@ -11,7 +13,7 @@ use crate::quotient::check_matrix;
 use crate::tables::{RangeProduct, claimed_sum, column_weights, ind_rows, powers};
 use crate::transcript::{Claim, ClaimedPoly, FinalClaims, SumcheckTranscript};
 use core::ops::Range;
-use hachi_co_core::{Challenger, Context, Layout, Poly};
+use hachi_co_core::{BasePcs, Challenger, Context, Layout, Poly};
 use hachi_co_math::{Ext, Fqk};
 
 /// The public inputs of the verifier, all computed from public data
@@ -115,15 +117,38 @@ pub struct Check {
     pub passed: bool,
 }
 
-/// Everything the verifier computed: every named check, the final claims, and the two public
-/// values the fixtures record.
+/// One base-PCS opening as the verifier checked it (`5_Building_Blocks.tex`:321-326; the
+/// oracle's check `pcs_open_<poly>_p<party>`, [`Claim::check_name`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpeningCheck<const K: usize> {
+    /// The claim: the party, the polynomial and the final value the opening must prove.
+    pub claim: Claim<K>,
+    /// `None` if the base PCS accepted the opening, otherwise the reason of the rejection (a
+    /// commitment or proof that does not decode, or a proof that does not verify).
+    pub error: Option<String>,
+}
+
+impl<const K: usize> OpeningCheck<K> {
+    /// The named check: [`Claim::check_name`] and whether the opening was accepted.
+    pub fn check(&self) -> Check {
+        Check {
+            name: self.claim.check_name(),
+            passed: self.error.is_none(),
+        }
+    }
+}
+
+/// Everything the verifier computed: every named check, the openings of the base PCS, the
+/// checked claims, and the two public values the fixtures record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifierReport<const K: usize> {
-    /// The round checks `round_01_H0`, `round_01_H1`, …, `round_<l''>_H1` and the final checks
-    /// `final_H0`, `final_H1`, in the oracle's order. The PCS openings (`pcs_open_*`) are not
-    /// here: they are the base PCS's job ([`FinalClaims`]).
+    /// The checks of the sumcheck itself: the round checks `round_01_H0`, `round_01_H1`, …,
+    /// `round_<l''>_H1` and the final checks `final_H0`, `final_H1`, in the oracle's order.
     pub checks: Vec<Check>,
-    /// The point $\mathbf a$ and the $3n$ evaluation claims for the base PCS.
+    /// The $3n$ openings of the base PCS (`pcs_open_*`), party by party in the order
+    /// [`ClaimedPoly::ORDER`].
+    pub openings: Vec<OpeningCheck<K>>,
+    /// The point $\mathbf a$ and the $3n$ evaluation claims that the openings check.
     pub claims: FinalClaims<K>,
     /// The claimed sum $a$ (`5_Building_Blocks.tex`:263-264; fixture key `sumcheck/a_claim`).
     pub claimed_sum: Ext<K>,
@@ -132,18 +157,61 @@ pub struct VerifierReport<const K: usize> {
 }
 
 impl<const K: usize> VerifierReport<K> {
-    /// The names of the failing checks, in order.
-    pub fn failing(&self) -> Vec<String> {
-        self.checks
+    /// Every named check with its outcome, in the oracle's order ([`check_names`]): the round
+    /// checks, the $3n$ openings, the final checks.
+    pub fn named_checks(&self) -> Vec<Check> {
+        let split = self.checks.len().saturating_sub(2);
+        let (rounds, finals) = self.checks.split_at(split);
+        rounds
             .iter()
-            .filter(|c| !c.passed)
-            .map(|c| c.name.clone())
+            .cloned()
+            .chain(self.openings.iter().map(OpeningCheck::check))
+            .chain(finals.iter().cloned())
             .collect()
     }
 
-    /// Whether every check holds.
+    /// The names of the failing checks, openings included, in the oracle's order.
+    pub fn failing(&self) -> Vec<String> {
+        self.named_checks()
+            .into_iter()
+            .filter(|c| !c.passed)
+            .map(|c| c.name)
+            .collect()
+    }
+
+    /// Whether every check holds, openings included.
     pub fn accepted(&self) -> bool {
-        self.checks.iter().all(|c| c.passed)
+        self.checks.iter().all(|c| c.passed) && self.openings.iter().all(|o| o.error.is_none())
+    }
+
+    /// The verdict of [`verify_claims`]: [`VerifyError::Rejected`] with the failing round and
+    /// final checks, if any; otherwise [`VerifyError::Opening`] for the first failing opening,
+    /// if any; otherwise the checked claims.
+    ///
+    /// # Errors
+    /// As described.
+    pub fn verdict(&self) -> core::result::Result<FinalClaims<K>, VerifyError> {
+        let failing: Vec<String> = self
+            .checks
+            .iter()
+            .filter(|c| !c.passed)
+            .map(|c| c.name.clone())
+            .collect();
+        if !failing.is_empty() {
+            return Err(VerifyError::Rejected { failing });
+        }
+        if let Some((claim, reason)) = self
+            .openings
+            .iter()
+            .find_map(|o| o.error.as_ref().map(|e| (&o.claim, e)))
+        {
+            return Err(VerifyError::Opening {
+                party: claim.party,
+                poly: claim.poly,
+                reason: reason.clone(),
+            });
+        }
+        Ok(self.claims.clone())
     }
 }
 
@@ -162,8 +230,8 @@ pub const FINAL_H1: &str = "final_H1";
 /// (`ref/hachico_ref/sumcheck.py`, `verify`; fixture key `verifier/checks` without the
 /// $\Pi\_{\mathsf{conv}}$ check `conv_y_eq_E(u)`): the $2\ell''$ round checks, the $3n$ PCS openings
 /// `pcs_open_g0_p<p>`, `pcs_open_g1_p<p>`, `pcs_open_w_p<p>` ([`Claim::check_name`]), and
-/// `final_H0`, `final_H1`. [`verify_checks`] evaluates the round and final checks; the PCS
-/// openings are the base PCS's (milestone 3) and are checked here by the tests with an ideal PCS.
+/// `final_H0`, `final_H1`. [`verify_checks`] evaluates all of them, the openings with the base
+/// PCS ([`VerifierReport::named_checks`]); the oracle checks the openings with its ideal PCS.
 pub fn check_names(layout: &Layout) -> Vec<String> {
     let mut names = Vec::with_capacity(2 * layout.ell_pp + 3 * layout.n + 2);
     for r in 1..=layout.ell_pp {
@@ -171,7 +239,7 @@ pub fn check_names(layout: &Layout) -> Vec<String> {
         names.push(round_check_name(r, 1));
     }
     for p in 1..=layout.n {
-        for poly in [ClaimedPoly::G0, ClaimedPoly::G1, ClaimedPoly::W] {
+        for poly in ClaimedPoly::ORDER {
             let claim = Claim::<1> {
                 party: p,
                 poly,
@@ -278,16 +346,51 @@ fn sum<const K: usize>(f: &Fqk<K>, values: &[Ext<K>]) -> Ext<K> {
     values.iter().fold(f.zero(), |acc, v| f.add(&acc, v))
 }
 
-/// The verifier of `5_Building_Blocks.tex`:276-334, returning every named check.
+/// One opening checked with the base PCS: decode the commitment and the proof, then verify the
+/// multilinear evaluation ($\widetilde w$) or the inner product with `weights` (the blinders).
+#[allow(clippy::too_many_arguments)] // one opening's instance
+fn check_opening<const K: usize, P: BasePcs<K>>(
+    pcs: &P,
+    poly: ClaimedPoly,
+    com_words: &[u64],
+    proof_words: &[u64],
+    point: &[Ext<K>],
+    weights: &[Ext<K>],
+    value: &Ext<K>,
+    context: &[u8; 32],
+) -> core::result::Result<(), String> {
+    let com = P::commitment_from_words(com_words)
+        .map_err(|e| format!("the commitment does not decode: {e}"))?;
+    let proof =
+        P::proof_from_words(proof_words).map_err(|e| format!("the proof does not decode: {e}"))?;
+    match poly {
+        ClaimedPoly::W => pcs.verify_multilinear(&com, point.len(), point, value, &proof, context),
+        ClaimedPoly::G0 | ClaimedPoly::G1 => {
+            pcs.verify_inner_product(&com, weights.len(), weights, value, &proof, context)
+        }
+    }
+}
+
+/// The verifier of `5_Building_Blocks.tex`:276-334 with the base PCS `pcs`, returning every
+/// named check.
 ///
-/// It makes the same challenger calls as [`prove`](crate::prove) (absorb $G\_{0,\cdot}$ and
-/// $G\_{1,\cdot}$, draw the coins; per round absorb $H\_{0,r}, H\_{1,r}$ and draw $a\_r$; absorb the
-/// final values) and computes:
+/// It makes the same challenger calls as [`prove`](crate::prove): absorb $G\_{0,\cdot}$,
+/// $G\_{1,\cdot}$ and the commitments ([`LABEL_COMMIT_W`], [`LABEL_COMMIT_G0`],
+/// [`LABEL_COMMIT_G1`]), draw the coins; per round absorb $H\_{0,r}, H\_{1,r}$ and draw $a\_r$;
+/// absorb the final values; derive the context of every opening ([`Challenger::context`] with
+/// [`opening_label`]). It computes:
 /// - $H\_{0,0} = \rho \sum\_p G\_{0,p}$ and $H\_{1,0} = a + \rho \sum\_p G\_{1,p}$, with the claimed sum
 ///   $a$ of [`claimed_sum`] (lines 276-280);
 /// - for every round, `round_<r>_H0`: $H\_{0,r-1}(a\_{r-1}) = H\_{0,r}(0) + H\_{0,r}(1)$, and
 ///   `round_<r>_H1` likewise, with $H\_{i,r}(0)$ and $H\_{i,r}(a\_r)$ interpolated from the values at
 ///   $1, \dots, d\_i + 1$ ([`Nodes`]; lines 301-311);
+/// - the $3n$ openings `pcs_open_<poly>_p<p>` (lines 321-326), party by party in the order
+///   [`ClaimedPoly::ORDER`]: the words of the commitment and of the proof are decoded with
+///   `pcs` ([`BasePcs::commitment_from_words`], [`BasePcs::proof_from_words`]), and the proof
+///   must open the commitment to the final value: $\langle \widetilde w \rangle\_p(\mathbf a)$ by
+///   [`BasePcs::verify_multilinear`] in $\ell''$ variables at $\mathbf a$, $g\_{b,p}(\mathbf a)$ by
+///   [`BasePcs::verify_inner_product`] with the weights $(1, (a\_j^k)\_{j,k})$ of
+///   [`blinder_weights`] ($1 + \ell'' d\_b$ entries);
 /// - `final_H0`: $H\_{0,\ell''}(a\_{\ell''}) = \sum\_p \bigl(F\_{0,p}(\mathbf a) + \rho\,
 ///   g\_{0,p}(\mathbf a)\bigr)$ with $F\_{0,p}(\mathbf a) = \widetilde{eq}(\tau\_0, (\mathbf a,
 ///   \mathsf{bit}(p))) \bigl(e\_p \prod\_c (w\_p - c) + (1 - e\_p - \mathrm{ind}) w\_p\bigr)$, where
@@ -298,16 +401,18 @@ fn sum<const K: usize>(f: &Fqk<K>, values: &[Ext<K>]) -> Ext<K> {
 ///   [`mstar_eval_factorized`] (lines 327-333).
 ///
 /// Every check is evaluated, also after a failure, so that the set of failing checks can be
-/// compared with the oracle's. The PCS openings of lines 321-326 are not checked: they are
-/// returned as the $3n$ claims of [`FinalClaims`].
+/// compared with the oracle's (whose ideal PCS accepts an opening exactly when the value is the
+/// committed polynomial's).
 ///
 /// # Errors
 /// [`VerifyError::Shape`] or [`VerifyError::NonCanonical`] for a malformed transcript
 /// ([`SumcheckTranscript::validate`]) or public input ([`PublicInput::validate`]);
 /// [`VerifyError::Parameter`] if $q \le d\_0$ (the messages cannot be interpolated);
-/// [`VerifyError::Challenger`] if the challenger fails. A failing check is not an error here.
-pub fn verify_checks<const K: usize, H: Challenger<K>>(
+/// [`VerifyError::Challenger`] if the challenger fails. A failing check, opening included, is
+/// not an error here.
+pub fn verify_checks<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     ctx: &Context<K>,
+    pcs: &P,
     public: &PublicInput<'_>,
     transcript: &SumcheckTranscript<K>,
     ch: &mut H,
@@ -322,6 +427,9 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
     let nodes1 = Nodes::new(f.zq(), l.d1 + 1).map_err(param)?;
     ch.absorb_exts(LABEL_G0, &transcript.g0_sums);
     ch.absorb_exts(LABEL_G1, &transcript.g1_sums);
+    ch.absorb_words(LABEL_COMMIT_W, &transcript.commitments.w);
+    ch.absorb_words(LABEL_COMMIT_G0, &transcript.commitments.g0);
+    ch.absorb_words(LABEL_COMMIT_G1, &transcript.commitments.g1);
     let coins = ch
         .sumcheck_coins(f, l.ell_pp, l.log_n, l.log_nu)
         .map_err(VerifyError::Challenger)?;
@@ -360,6 +468,37 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
     ch.absorb_exts(LABEL_FINAL_W, &finals.w);
     ch.absorb_exts(LABEL_FINAL_G0, &finals.g0);
     ch.absorb_exts(LABEL_FINAL_G1, &finals.g1);
+    // The openings of the base PCS.
+    let weights0 = blinder_weights(f, &point, l.d0);
+    let weights1 = blinder_weights(f, &point, l.d1);
+    let mut openings = Vec::with_capacity(3 * l.n);
+    for p0 in 0..l.n {
+        let party = p0 + 1;
+        for poly in ClaimedPoly::ORDER {
+            let value = finals.of(poly)[p0];
+            let context = ch.context(&opening_label(party, poly));
+            let weights = if poly == ClaimedPoly::G1 {
+                &weights1
+            } else {
+                &weights0
+            };
+            let error = check_opening(
+                pcs,
+                poly,
+                &transcript.commitments.of(poly)[p0],
+                &transcript.openings.of(poly)[p0],
+                &point,
+                weights,
+                &value,
+                &context,
+            )
+            .err();
+            openings.push(OpeningCheck {
+                claim: Claim { party, poly, value },
+                error,
+            });
+        }
+    }
     // V's own F_{0,p}(a) and F_{1,p}(a).
     let eq_u = eq_table(f, &point[..l.ell_u])?;
     let range_sum = |rows: &Range<usize>| sum(f, &eq_u[rows.clone()]);
@@ -369,7 +508,6 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
     let range = RangeProduct::new(f.zq(), ctx.b());
     let one = f.one();
     let (mut total0, mut total1) = (f.zero(), f.zero());
-    let mut claims = Vec::with_capacity(3 * l.n);
     for (p0, rows) in public.partition.iter().enumerate() {
         let (w, g0, g1) = (finals.w[p0], finals.g0[p0], finals.g1[p0]);
         let e_p = rows
@@ -383,14 +521,6 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
         let term = f.add(&f.mul(&e_p, &range.eval(f, &w)), &f.mul(&bracket, &w));
         total0 = f.add(&total0, &f.add(&f.mul(&eq_f, &term), &f.mul(&rho, &g0)));
         total1 = f.add(&total1, &f.add(&f.mul(&w, &mstar), &f.mul(&rho, &g1)));
-        let party = p0 + 1;
-        for (poly, value) in [
-            (ClaimedPoly::G0, g0),
-            (ClaimedPoly::G1, g1),
-            (ClaimedPoly::W, w),
-        ] {
-            claims.push(Claim { party, poly, value });
-        }
     }
     checks.push(Check {
         name: FINAL_H0.to_owned(),
@@ -400,33 +530,47 @@ pub fn verify_checks<const K: usize, H: Challenger<K>>(
         name: FINAL_H1.to_owned(),
         passed: prev1 == total1,
     });
+    let claims = openings.iter().map(|o| o.claim).collect();
     Ok(VerifierReport {
         checks,
+        openings,
         claims: FinalClaims { point, claims },
         claimed_sum: a_claim,
         mstar_at_a: mstar,
     })
 }
 
-/// The verifier of the collaborative sumcheck: runs [`verify_checks`] and returns the point
-/// $\mathbf a$ with the $3n$ claims $g\_{0,p}(\mathbf a)$, $g\_{1,p}(\mathbf a)$,
-/// $\langle \widetilde w \rangle\_p(\mathbf a)$ (`5_Building_Blocks.tex`:316-326) if every round
-/// check and both final checks hold. The claims must still be proven by the base PCS
-/// (milestone 3); until then the tests check them against the provers' polynomials.
+/// The verifier of the collaborative sumcheck with the base PCS `pcs`
+/// (`5_Building_Blocks.tex`:276-334): [`verify_claims`] without the claims. It accepts if every
+/// round check, every opening of the base PCS and both final checks hold.
 ///
 /// # Errors
-/// The errors of [`verify_checks`], and [`VerifyError::Rejected`] with the names of the failing
-/// checks.
-pub fn verify<const K: usize, H: Challenger<K>>(
+/// As [`verify_claims`].
+pub fn verify<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     ctx: &Context<K>,
+    pcs: &P,
+    public: &PublicInput<'_>,
+    transcript: &SumcheckTranscript<K>,
+    ch: &mut H,
+) -> core::result::Result<(), VerifyError> {
+    verify_claims(ctx, pcs, public, transcript, ch).map(|_| ())
+}
+
+/// The verifier of [`verify`], returning the point $\mathbf a$ and the $3n$ claims
+/// $g\_{0,p}(\mathbf a)$, $g\_{1,p}(\mathbf a)$, $\langle \widetilde w \rangle\_p(\mathbf a)$
+/// (`5_Building_Blocks.tex`:316-326) that the base PCS checked ([`verify_checks`], then
+/// [`VerifierReport::verdict`]): for tests and diagnostics.
+///
+/// # Errors
+/// The errors of [`verify_checks`]; [`VerifyError::Rejected`] with the names of the failing
+/// round and final checks; otherwise [`VerifyError::Opening`] for the first opening the base
+/// PCS rejects.
+pub fn verify_claims<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
+    ctx: &Context<K>,
+    pcs: &P,
     public: &PublicInput<'_>,
     transcript: &SumcheckTranscript<K>,
     ch: &mut H,
 ) -> core::result::Result<FinalClaims<K>, VerifyError> {
-    let report = verify_checks(ctx, public, transcript, ch)?;
-    let failing = report.failing();
-    if !failing.is_empty() {
-        return Err(VerifyError::Rejected { failing });
-    }
-    Ok(report.claims)
+    verify_checks(ctx, pcs, public, transcript, ch)?.verdict()
 }

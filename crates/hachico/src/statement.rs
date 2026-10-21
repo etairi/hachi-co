@@ -4,8 +4,11 @@
 //!
 //! The statement is the public input of $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:408): the
 //! public parameters $\mathsf{pp}$ (the parameters and $\mathbf A, \mathbf B, \mathbf D$,
-//! lines 293-297; the base PCS's parameters are not modelled in milestone 1), the commitment
-//! $\mathbf u$, the point $\mathbf x$ and the claimed evaluation $y$.
+//! lines 293-297), the commitment $\mathbf u$, the point $\mathbf x$ and the claimed evaluation
+//! $y$. The base PCS's own parameters (lines 289-292) enter through their digest
+//! ([`BasePcs::params_digest`](hachi_co_core::BasePcs::params_digest)). Its commitments are
+//! absorbed before the sumcheck's coins, and every opening is made under a context derived from
+//! the transcript.
 
 use crate::error::StatementError;
 use hachi_co_core::{Challenger, Context, Ext, Matrix, Poly};
@@ -41,6 +44,8 @@ pub const LABEL_PP_A: &str = "hachi-co/eval/pp/A";
 pub const LABEL_PP_B: &str = "hachi-co/eval/pp/B";
 /// The label of $\mathbf D$ (row-major, $n\_D \cdot w\_D$ ring elements).
 pub const LABEL_PP_D: &str = "hachi-co/eval/pp/D";
+/// The absorb label of the digest of the base PCS's parameters.
+pub const LABEL_PP_BASE: &str = "hachi-co/eval/pp/base-pcs";
 /// The label of the evaluation point $\mathbf x \in \mathbb F\_{q^k}^\ell$.
 pub const LABEL_X: &str = "hachi-co/eval/x";
 /// The label of the claimed evaluation $y \in \mathbb F\_{q^k}$.
@@ -101,8 +106,10 @@ fn rows(m: &Matrix) -> Vec<Poly> {
 /// 2. $\mathbf A$, $\mathbf B$, $\mathbf D$ (`6_Collaborative_Hachi.tex`:283-288), each as one
 ///    message of ring elements, row-major ([`Challenger::absorb_polys`] under [`LABEL_PP_A`],
 ///    [`LABEL_PP_B`], [`LABEL_PP_D`]);
-/// 3. the commitment $\mathbf u$ under [`hachi_co_commit::LABEL_U`];
-/// 4. $\mathbf x$ under [`LABEL_X`] and $y$ under [`LABEL_Y`]
+/// 3. the digest of the base PCS's parameters under [`LABEL_PP_BASE`]
+///    ([`Challenger::absorb_words`], one vector of four words);
+/// 4. the commitment $\mathbf u$ under [`hachi_co_commit::LABEL_U`];
+/// 5. $\mathbf x$ under [`LABEL_X`] and $y$ under [`LABEL_Y`]
 ///    ([`Challenger::absorb_exts`]).
 ///
 /// The provers and the verifier call it with the same arguments on a fresh challenger; check the
@@ -110,6 +117,7 @@ fn rows(m: &Matrix) -> Vec<Poly> {
 pub fn absorb_statement<const K: usize, H: Challenger<K>>(
     ch: &mut H,
     ctx: &Context<K>,
+    base_digest: &[u8; 32],
     u: &[Poly],
     x: &[Ext<K>],
     y: &Ext<K>,
@@ -120,6 +128,13 @@ pub fn absorb_statement<const K: usize, H: Challenger<K>>(
     ch.absorb_polys(LABEL_PP_A, &rows(&ctx.pp.a));
     ch.absorb_polys(LABEL_PP_B, &rows(&ctx.pp.b));
     ch.absorb_polys(LABEL_PP_D, &rows(&ctx.pp.d));
+    let digest: Vec<u64> = base_digest
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|b| u64::from_le_bytes(*b))
+        .collect();
+    ch.absorb_words(LABEL_PP_BASE, &[digest]);
     ch.absorb_polys(hachi_co_commit::LABEL_U, u);
     ch.absorb_exts(LABEL_X, x);
     ch.absorb_exts(LABEL_Y, core::slice::from_ref(y));

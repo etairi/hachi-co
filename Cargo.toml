@@ -1,6 +1,6 @@
 # Hachi-Co workspace.
 #
-# crates/hachi        legacy single-prover Hachi prototype (moved here unchanged; reference and future base PCS)
+# crates/hachi        Hachi (NOZ26) on the workspace arithmetic, recursive and over F_{q^k}: the base PCS of Hachi-Co
 # crates/math         modulus-generic arithmetic: Z_q for a runtime prime q, exact R_q products,
 #                     gadget decompositions, F_{q^k} in Hachi's subfield basis, R_q^H, Tr_H, psi, E
 # crates/sampling     PRG, uniform and short samplers, l1-ball challenges, seeded matrices, rejection sampling
@@ -34,7 +34,7 @@ serde_json = "1"
 sha2 = "0.10"
 shake = "0.1"
 thiserror = "2"
-tfhe-ntt = "0.7.1"
+hachi = { path = "crates/hachi" }
 hachi-co = { path = "crates/hachico" }
 hachi-co-commit = { path = "crates/commit" }
 hachi-co-conv = { path = "crates/conv" }

@@ -15,6 +15,9 @@ const LABEL_R2L_C: &[u8] = b"hachi-co/r2l/c";
 const LABEL_SC_COINS: &[u8] = b"hachi-co/sumcheck/coins";
 /// The transcript label of the seed of a round coin $a\_r$.
 const LABEL_SC_ROUND: &[u8] = b"hachi-co/sumcheck/a";
+/// The transcript label of a base-PCS context, squeezed from the fork of the context's label
+/// ([`FsChallenger`], [`Challenger::context`]).
+pub const FS_LABEL_CONTEXT: &str = "hachi-co/context";
 /// The PRG domain that expands the seed of the ring-to-linear challenges (index = attempt).
 pub const FS_DOMAIN_R2L_C: &str = "hachi-co/fs/r2l/c";
 /// The PRG domain that expands the seed of the sumcheck coins (index 0).
@@ -39,10 +42,15 @@ pub const FS_DOMAIN_SC_ROUND: &str = "hachi-co/fs/sumcheck/a";
 /// the accepted attempt $a^\ast$ calls `begin_attempt(a*)` once, before absorbing $\mathbf v$ and
 /// drawing the challenges.
 ///
+/// The base-PCS openings at the end of the sumcheck (`5_Building_Blocks.tex`:314-326) draw no
+/// coins of their own here: each one takes a 32-byte [`context`](Self::context) derived from
+/// everything absorbed before it, under a label that names the opening.
+///
 /// [`FsChallenger`] and `ReplayChallenger` implement the trait for every `K`. Generic code with a
 /// bound `H: Challenger<K>` calls the methods directly; on a concrete value, a method whose
-/// signature does not mention `K` (`absorb_polys`, `absorb_u64`, `begin_attempt`,
-/// `r2l_challenges`) needs it spelled out: `Challenger::<4>::begin_attempt(&mut ch, 0)`.
+/// signature does not mention `K` (`absorb_polys`, `absorb_words`, `absorb_u64`,
+/// `begin_attempt`, `r2l_challenges`, `context`) needs it spelled out:
+/// `Challenger::<4>::begin_attempt(&mut ch, 0)`.
 pub trait Challenger<const K: usize> {
     /// Absorbs a public message made of ring elements (or of polynomials of another length),
     /// under `label`.
@@ -51,8 +59,24 @@ pub trait Challenger<const K: usize> {
     /// Absorbs a public message made of elements of $\mathbb F\_{q^K}$, under `label`.
     fn absorb_exts(&mut self, label: &'static str, exts: &[Ext<K>]);
 
+    /// Absorbs a public message made of vectors of 64-bit words, under `label`: for example the
+    /// base-PCS commitments of every party, encoded by
+    /// [`BasePcs::commitment_to_words`](crate::BasePcs::commitment_to_words), one vector per
+    /// party (`5_Building_Blocks.tex`:220-221, 230, 241).
+    fn absorb_words(&mut self, label: &'static str, words: &[Vec<u64>]);
+
     /// Absorbs a public integer, under `label`.
     fn absorb_u64(&mut self, label: &'static str, value: u64);
+
+    /// The 32-byte context of the base-PCS instance named `label`
+    /// ([`BasePcs`](crate::BasePcs), "Contexts"), derived from everything absorbed so far.
+    /// Prover and verifier call it at the same point of the protocol with the same label and
+    /// obtain the same context; different labels give independent contexts. It draws no coin:
+    /// the coins that follow, and the contexts of other labels, do not depend on whether or in
+    /// which order contexts were derived (so that each prover can derive the contexts of its own
+    /// openings and the verifier all of them). [`FsChallenger`] squeezes it from a fork of its
+    /// transcript; `ReplayChallenger` returns a fixed hash of the label.
+    fn context(&mut self, label: &str) -> [u8; 32];
 
     /// Starts attempt `attempt` of the ring-to-linear step (Fiat-Shamir with aborts; the attempt
     /// counter of `5_Building_Blocks.tex`:129, `6_Collaborative_Hachi.tex`:417 and
@@ -122,6 +146,22 @@ fn encode_polys(polys: &[Poly]) -> Vec<u8> {
     out
 }
 
+/// The message bytes of [`Challenger::absorb_words`]: `b"W"`, the number of vectors as
+/// $\mathrm{LE64}$, then for each vector its length and its words as $\mathrm{LE64}$.
+fn encode_words(words: &[Vec<u64>]) -> Vec<u8> {
+    let total: usize = words.iter().map(Vec::len).sum();
+    let mut out = Vec::with_capacity(9 + 8 * (words.len() + total));
+    out.push(b'W');
+    out.extend_from_slice(&(words.len() as u64).to_le_bytes());
+    for v in words {
+        out.extend_from_slice(&(v.len() as u64).to_le_bytes());
+        for w in v {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+    out
+}
+
 /// The message bytes of [`Challenger::absorb_exts`]: `b"E"`, $K$ and the number of elements as
 /// $\mathrm{LE64}$, then the coordinates of each element as $\mathrm{LE64}$.
 fn encode_exts<const K: usize>(exts: &[Ext<K>]) -> Vec<u8> {
@@ -139,14 +179,22 @@ fn encode_exts<const K: usize>(exts: &[Ext<K>]) -> Vec<u8> {
 
 /// [`Challenger`] by Fiat-Shamir on a [`Transcript`] (`docs/m1-spec.md`, `hachi-co-core`).
 ///
-/// **Absorbing.** [`absorb_polys`](Challenger::absorb_polys) and
-/// [`absorb_exts`](Challenger::absorb_exts) call [`Transcript::append_message`] with the label and
-/// a self-describing encoding: `b"P"` ‖ LE64(#polynomials) ‖ (LE64(length) ‖ residues as LE64)
-/// per polynomial, resp. `b"E"` ‖ LE64($K$) ‖ LE64(#elements) ‖ coordinates as LE64. A message
-/// of polynomials, a message of field elements and an integer (8 bytes,
-/// [`absorb_u64`](Challenger::absorb_u64) = [`Transcript::append_u64`]) therefore never encode
-/// alike. Residues are absorbed as given: callers pass canonical residues, as every
-/// `hachi-co-math` operation returns.
+/// **Absorbing.** [`absorb_polys`](Challenger::absorb_polys),
+/// [`absorb_exts`](Challenger::absorb_exts) and [`absorb_words`](Challenger::absorb_words) call
+/// [`Transcript::append_message`] with the label and a self-describing encoding: `b"P"` ‖
+/// LE64(#polynomials) ‖ (LE64(length) ‖ residues as LE64) per polynomial, resp. `b"E"` ‖
+/// LE64($K$) ‖ LE64(#elements) ‖ coordinates as LE64, resp. `b"W"` ‖ LE64(#vectors) ‖
+/// (LE64(length) ‖ words as LE64) per vector. A message of polynomials, of field elements, of
+/// word vectors and an integer (8 bytes, [`absorb_u64`](Challenger::absorb_u64) =
+/// [`Transcript::append_u64`]) therefore never encode alike. Residues are absorbed as given:
+/// callers pass canonical residues, as every `hachi-co-math` operation returns.
+///
+/// **Contexts.** [`context`](Challenger::context)`(label)` is the 32-byte challenge seed, under
+/// the label [`FS_LABEL_CONTEXT`], of the fork ([`Transcript::fork`]) of the current transcript
+/// under `label`: a forked squeeze. It depends on everything absorbed so far and on the label,
+/// and leaves the transcript itself unchanged, so the coins that follow do not depend on it and
+/// prover and verifier stay in the same state whichever contexts each of them derives. The fork
+/// has its own operation name, so no absorb or coin of the main transcript can imitate it.
 ///
 /// **Coins.** Each draw takes a 32-byte seed from the transcript
 /// ([`Transcript::challenge_seed`], which ratchets the state) and expands it with a [`ShakePrg`]:
@@ -202,8 +250,19 @@ impl<const K: usize> Challenger<K> for FsChallenger {
             .append_message(label.as_bytes(), &encode_exts(exts));
     }
 
+    fn absorb_words(&mut self, label: &'static str, words: &[Vec<u64>]) {
+        self.transcript
+            .append_message(label.as_bytes(), &encode_words(words));
+    }
+
     fn absorb_u64(&mut self, label: &'static str, value: u64) {
         self.transcript.append_u64(label.as_bytes(), value);
+    }
+
+    fn context(&mut self, label: &str) -> [u8; 32] {
+        self.transcript
+            .fork(label.as_bytes())
+            .challenge_seed(FS_LABEL_CONTEXT.as_bytes())
     }
 
     fn begin_attempt(&mut self, attempt: u64) -> Result<()> {
@@ -287,5 +346,15 @@ mod tests {
         let split = encode_polys(&[Poly(vec![1, 2]), Poly(vec![3, 4])]);
         assert_ne!(polys, split);
         assert_eq!(encode_polys(&[]), b"P\0\0\0\0\0\0\0\0");
+        // Word vectors: the same words as the polynomial above, another tag; the split matters.
+        let words = encode_words(&[vec![1, 2, 3, 4]]);
+        assert_eq!(&words[1..], &polys[1..]);
+        assert_eq!(words[0], b'W');
+        assert_ne!(words, encode_words(&[vec![1, 2], vec![3, 4]]));
+        assert_ne!(
+            encode_words(&[vec![], vec![1]]),
+            encode_words(&[vec![1], vec![]])
+        );
+        assert_eq!(encode_words(&[]), b"W\0\0\0\0\0\0\0\0");
     }
 }

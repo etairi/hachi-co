@@ -256,8 +256,10 @@ fn rounds_final_values_and_mstar_at_a_match() {
             "{}: final values",
             inst.name
         );
+        // The whole transcript, except the base-PCS words, which the oracle does not model.
         assert_eq!(
-            run.transcript, recorded,
+            common::without_pcs(&run.transcript),
+            recorded,
             "{}: the whole transcript",
             inst.name
         );

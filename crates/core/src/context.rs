@@ -21,7 +21,9 @@ pub const SETUP_DOMAIN_D: &[u8] = b"hachi-co/setup/D";
 /// $\mathbf A \in \mathcal R\_q^{n\_A \times \delta 2^m}$,
 /// $\mathbf B \in \mathcal R\_q^{n\_B \times n\_A \delta 2^r}$ and
 /// $\mathbf D \in \mathcal R\_q^{n\_D \times (\delta(2^r + n + n n\_A) + n m\_\rho)}$.
-/// The parameters of the base PCS (line 289-292) are not modelled in milestone 1.
+/// The parameters of the base PCS (lines 289-292) are not part of them: the base PCS is a value
+/// of its own ([`BasePcs`](crate::BasePcs)), set up over the same $q$ and $k$ and passed to Eval
+/// and Verify.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicParams {
     /// $\mathbf A$, the inner commitment key: $\mathbf t\_i = \mathbf A \mathbf s\_i$.

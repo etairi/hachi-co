@@ -4,7 +4,7 @@
 //! against real encodings.
 
 use hachi_co_params::sizes::{HEADER_BYTES, WORD_BYTES};
-use hachi_co_params::{presets, sizes};
+use hachi_co_params::{BasePcsWords, presets, sizes, sizes_with_base};
 
 #[test]
 fn components_follow_the_formula_for_every_preset() {
@@ -71,6 +71,54 @@ fn toy_and_dev_sizes_by_hand() {
             s.packed_total,
             24 + (residues * u128::from(bits)).div_ceil(8),
             "{name}"
+        );
+    }
+}
+
+/// With the base PCS: the Hachi-Co components are those of `sizes`, and the base PCS adds
+/// 6n length words, n commitments and n proofs of each polynomial, for arbitrary word counts at
+/// every preset; the Hachi-Co part alone has no base-PCS bytes.
+#[test]
+fn the_base_pcs_adds_its_lengths_commitments_and_proofs() {
+    let base = BasePcsWords {
+        commitment_w: 4,
+        commitment_g0: 5,
+        commitment_g1: 6,
+        proof_w: 1000,
+        proof_g0: 70,
+        proof_g1: 9,
+    };
+    for p in presets().unwrap() {
+        let (x, _) = p.derive().unwrap();
+        let (plain, with) = (sizes(&x).unwrap(), sizes_with_base(&x, &base).unwrap());
+        let n = u128::from(x.choices.n);
+        assert_eq!(
+            (plain.pcs_lengths, plain.pcs_commitments, plain.pcs_openings),
+            (0, 0, 0),
+            "{}",
+            p.name
+        );
+        assert_eq!(with.pcs_lengths, 8 * 6 * n, "{}", p.name);
+        assert_eq!(with.pcs_commitments, 8 * n * 15, "{}", p.name);
+        assert_eq!(with.pcs_openings, 8 * n * 1079, "{}", p.name);
+        assert_eq!(
+            with.total,
+            plain.total + 8 * n * (6 + 15 + 1079),
+            "{}",
+            p.name
+        );
+        let sum: u128 = with.components().iter().map(|(_, b)| b).sum();
+        assert_eq!(with.total, sum, "{}", p.name);
+        for ((name, a), (_, b)) in plain.components().iter().zip(with.components()) {
+            if !name.starts_with("PCS") {
+                assert_eq!(*a, b, "{}: {name}", p.name);
+            }
+        }
+        assert_eq!(
+            with.packed_total,
+            plain.packed_total + 8 * n * 1100,
+            "{}",
+            p.name
         );
     }
 }

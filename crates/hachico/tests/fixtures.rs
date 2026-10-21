@@ -1,31 +1,40 @@
-//! The composed PCS against the Sage oracle's fixtures:
+//! The composed PCS against the Sage oracle's fixtures, with the reference base PCS `ClearPcs`
+//! (the oracle does not model the base PCS, `ref/README.md`, choice 13: every other value is
+//! compared with the fixture, and the commitments and openings with those computed here, apart
+//! from the driver, from the recorded polynomials):
 //! - toy-n1 replayed end to end (`ReplayRandomness`, `ReplayChallenger`, the fixture's input,
 //!   `Loopback`) through Commit, Eval and the composed verifier: every value of the proof equals
-//!   the fixture, Open = 1 after Commit, and the final claims are the provers' polynomials;
+//!   the fixture, Open = 1 after Commit, and the checked claims are the provers' polynomials;
 //! - every fixture with n > 1 replayed the same way on the in-memory network, with both
 //!   zero-sharing modes of its F_AH, at every party;
-//! - the composed verifier accepts the proofs assembled from the three fixtures' recorded values
-//!   with replayed coins, and returns the recorded final openings as claims.
+//! - the composed verifier accepts the proofs assembled from the fixtures' recorded values (with
+//!   the `ClearPcs` words of the recorded polynomials) with replayed coins, and returns the
+//!   recorded final openings as checked claims.
 
 mod common;
 
 use common::net::run_with;
 use common::{
-    K, assert_claims_match, fixture_claims, fixture_proof, fixture_statement, load, recorded_state,
+    K, assert_claims_match, clear_pcs, clear_words, fixture_claims, fixture_proof,
+    fixture_proof_without_pcs, fixture_statement, load, recorded_state, without_pcs,
 };
-use hachi_co::{EvalOutput, EvalProof, commit, encoded_len, eval_with, verify_with};
+use hachi_co::{
+    EvalOutput, EvalProof, ProofError, VerifyError, commit, encoded_len, eval_with,
+    verify_claims_with,
+};
 use hachi_co_commit::open;
 use hachi_co_core::{Fixture, ReplayChallenger, ReplayRandomness};
 use hachi_co_mpc::{Loopback, MemoryConfig, ZeroSharing};
 
 /// Every public value of the proof against the fixture, component by component (for readable
-/// failures), then as a whole.
-fn compare_proof(fx: &Fixture, proof: &EvalProof<K>, what: &str) {
-    let want = fixture_proof(fx);
-    assert_eq!(proof.e_u, want.e_u, "{what}: E(u)");
-    assert_eq!(proof.attempt, want.attempt, "{what}: a*");
-    assert_eq!(proof.v, want.v, "{what}: v");
-    let (got, want_t) = (&proof.sumcheck, &want.sumcheck);
+/// failures), then as a whole: the oracle's values, and the base-PCS words of `want`
+/// ([`fixture_proof`], computed from the recorded polynomials).
+fn compare_proof(fx: &Fixture, want: &EvalProof<K>, proof: &EvalProof<K>, what: &str) {
+    let recorded = fixture_proof_without_pcs(fx);
+    assert_eq!(proof.e_u, recorded.e_u, "{what}: E(u)");
+    assert_eq!(proof.attempt, recorded.attempt, "{what}: a*");
+    assert_eq!(proof.v, recorded.v, "{what}: v");
+    let (got, want_t) = (&proof.sumcheck, &recorded.sumcheck);
     assert_eq!(got.g0_sums, want_t.g0_sums, "{what}: G0");
     assert_eq!(got.g1_sums, want_t.g1_sums, "{what}: G1");
     assert_eq!(got.rounds.len(), want_t.rounds.len(), "{what}: rounds");
@@ -34,7 +43,13 @@ fn compare_proof(fx: &Fixture, proof: &EvalProof<K>, what: &str) {
         assert_eq!(a.h1, b.h1, "{what}: H1 of round {}", r + 1);
     }
     assert_eq!(got.finals, want_t.finals, "{what}: final values");
-    assert_eq!(proof, &want, "{what}");
+    assert_eq!(without_pcs(proof), recorded, "{what}");
+    assert_eq!(
+        got.commitments, want.sumcheck.commitments,
+        "{what}: commitments"
+    );
+    assert_eq!(got.openings, want.sumcheck.openings, "{what}: openings");
+    assert_eq!(proof, want, "{what}");
 }
 
 /// The attempts of the ring-to-linear step as the fixture records them (v, c, this party's
@@ -84,6 +99,8 @@ fn compare_attempts(fx: &Fixture, out: &EvalOutput<K>, p: usize, what: &str) {
 #[test]
 fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     let (fx, ctx) = load("toy-n1");
+    let pcs = clear_pcs(&ctx);
+    let want = fixture_proof(&fx);
     let q = ctx.q();
     let mut comm = Loopback::new(q).unwrap();
     let mut rng = ReplayRandomness::new(&fx, 1).unwrap();
@@ -103,8 +120,8 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     let (u_fx, x, y) = fixture_statement(&fx);
     assert_eq!(u, u_fx);
     let mut ch = ReplayChallenger::new(&fx).unwrap();
-    let out = eval_with(&ctx, &mut comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
-    compare_proof(&fx, &out.proof, "toy-n1");
+    let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+    compare_proof(&fx, &want, &out.proof, "toy-n1");
     compare_attempts(&fx, &out, 1, "toy-n1");
     assert_eq!(
         out.r2l.attempts.iter().filter(|a| a.aborted).count(),
@@ -117,12 +134,15 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     );
     // The composed verifier, with the replayed coins.
     let mut vch = ReplayChallenger::new(&fx).unwrap();
-    let claims = verify_with(&ctx, &mut vch, &u, &x, &y, &out.proof).unwrap();
+    let claims = verify_claims_with(&ctx, &pcs, &mut vch, &u, &x, &y, &out.proof).unwrap();
     assert_eq!(claims, fixture_claims(&fx));
     assert_claims_match(ctx.field(), &claims, &[&out.sumcheck], "toy-n1");
     // The encoding of the replayed proof.
     let bytes = out.proof.to_bytes();
-    assert_eq!(bytes.len(), encoded_len(&ctx.layout).unwrap());
+    assert_eq!(
+        bytes.len(),
+        encoded_len(&ctx.layout, &clear_words(&ctx.layout)).unwrap()
+    );
     assert_eq!(EvalProof::from_bytes(&ctx, &bytes).unwrap(), out.proof);
 }
 
@@ -139,6 +159,8 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
                 continue;
             }
             let (u_fx, x, y) = fixture_statement(&fx);
+            let pcs = clear_pcs(&ctx);
+            let want = fixture_proof(&fx);
             let config = MemoryConfig::new(n, ctx.q(), [n as u8; 32]).zero_sharing(mode);
             let outputs: Vec<_> = run_with(&config, |p, comm| {
                 let mut rng = ReplayRandomness::new(&fx, p).unwrap();
@@ -147,7 +169,8 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
                     .unwrap();
                 let (u, state) = commit(&ctx, comm, &mut rng, &f_init).unwrap();
                 let mut ch = ReplayChallenger::new(&fx).unwrap();
-                let out = eval_with(&ctx, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+                let out =
+                    eval_with(&ctx, &pcs, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
                 (u, state, out)
             })
             .into_iter()
@@ -157,14 +180,16 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
                 let what = format!("{name}, {mode:?}, party {}", p0 + 1);
                 assert_eq!(u, &u_fx, "{what}: u");
                 assert_eq!(state, &recorded_state(&fx, &ctx, p0 + 1), "{what}: st");
-                compare_proof(&fx, &out.proof, &what);
+                compare_proof(&fx, &want, &out.proof, &what);
                 compare_attempts(&fx, out, p0 + 1, &what);
             }
             let states: Vec<_> = outputs.iter().map(|(_, st, _)| st.clone()).collect();
             let f = fx.exts::<K>("/input/f").unwrap();
             assert!(open(&ctx, &states, &u_fx, &f, None).unwrap().bit, "{name}");
             let mut vch = ReplayChallenger::new(&fx).unwrap();
-            let claims = verify_with(&ctx, &mut vch, &u_fx, &x, &y, &outputs[0].2.proof).unwrap();
+            let claims =
+                verify_claims_with(&ctx, &pcs, &mut vch, &u_fx, &x, &y, &outputs[0].2.proof)
+                    .unwrap();
             assert_eq!(claims, fixture_claims(&fx), "{name}");
             let privates: Vec<_> = outputs.iter().map(|(_, _, out)| &out.sumcheck).collect();
             assert_claims_match(ctx.field(), &claims, &privates, name);
@@ -172,18 +197,20 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
     }
 }
 
-/// The proofs assembled from the recorded values of every fixture are accepted by the composed
-/// verifier with replayed coins, and the claims are the recorded final openings, at the
-/// recorded point.
+/// The proofs assembled from the recorded values of every fixture, with the `ClearPcs`
+/// commitments and openings of the recorded polynomials, are accepted by the composed verifier
+/// with replayed coins, and the checked claims are the recorded final openings, at the recorded
+/// point; the recorded proofs alone (no base-PCS words) are malformed.
 #[test]
-fn composed_verifier_accepts_the_three_fixture_transcripts() {
+fn composed_verifier_accepts_the_fixture_transcripts() {
     for name in Fixture::TOY {
         let (fx, ctx) = load(name);
+        let pcs = clear_pcs(&ctx);
         let proof = fixture_proof(&fx);
         proof.validate(&ctx).unwrap();
         let (u, x, y) = fixture_statement(&fx);
         let mut ch = ReplayChallenger::new(&fx).unwrap();
-        let claims = verify_with(&ctx, &mut ch, &u, &x, &y, &proof).unwrap();
+        let claims = verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &y, &proof).unwrap();
         assert_eq!(claims, fixture_claims(&fx), "{name}");
         assert_eq!(claims.claims.len(), 3 * fx.n(), "{name}");
         assert!(fx.bool("/verifier/accept").unwrap());
@@ -191,8 +218,22 @@ fn composed_verifier_accepts_the_three_fixture_transcripts() {
         let decoded = EvalProof::from_bytes(&ctx, &proof.to_bytes()).unwrap();
         let mut ch = ReplayChallenger::new(&fx).unwrap();
         assert_eq!(
-            verify_with(&ctx, &mut ch, &u, &x, &y, &decoded).unwrap(),
+            verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &y, &decoded).unwrap(),
             claims
         );
+        // Without the base PCS's words the proof does not fit the context.
+        let mut ch = ReplayChallenger::new(&fx).unwrap();
+        assert!(matches!(
+            verify_claims_with(
+                &ctx,
+                &pcs,
+                &mut ch,
+                &u,
+                &x,
+                &y,
+                &fixture_proof_without_pcs(&fx)
+            ),
+            Err(VerifyError::Proof(ProofError::Shape { .. }))
+        ));
     }
 }

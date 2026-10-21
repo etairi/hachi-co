@@ -1,6 +1,7 @@
 //! The error types of the crate: [`Error`] on the provers' side and in the table builders, and
 //! [`VerifyError`] for the verifier.
 
+use crate::transcript::ClaimedPoly;
 use hachi_co_mpc::PartyId;
 
 /// What can go wrong on the provers' side and in the public table builders: inputs of the wrong
@@ -47,15 +48,30 @@ pub enum Error {
         /// The number of parties.
         n: usize,
     },
+    /// The value that the base PCS opened differs from the party's final value of the sumcheck
+    /// (`5_Building_Blocks.tex`:314-318): a fault of the base PCS or of the conversion of the
+    /// polynomial before committing. An honest run never gives it; the provers stop rather
+    /// than send an opening the verifier would reject.
+    #[error(
+        "the base PCS opened {} of party {party} to another value than the sumcheck's",
+        poly.name()
+    )]
+    OpeningMismatch {
+        /// The party.
+        party: PartyId,
+        /// The polynomial.
+        poly: ClaimedPoly,
+    },
 }
 
 /// The result type of the provers' side.
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Why [`verify`](crate::verify) did not return the final claims: a malformed transcript or
-/// public input (wrong lengths, non-canonical residues), parameters it cannot verify with, a
-/// failing challenger, or failing checks. The verifier never panics on proof data
-/// (`docs/m1-spec.md`, rule 5): every malformed message is one of these values.
+/// Why [`verify`](crate::verify) rejected: a malformed transcript or public input (wrong
+/// lengths, non-canonical residues), parameters it cannot verify with, a failing challenger,
+/// failing checks of the sumcheck, or a base-PCS opening that does not verify. The verifier
+/// never panics on proof data (`docs/m1-spec.md`, rule 5): every malformed message is one of
+/// these values.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum VerifyError {
@@ -86,12 +102,31 @@ pub enum VerifyError {
     /// The challenger failed to produce the coins.
     #[error("challenger: {0}")]
     Challenger(hachi_co_core::Error),
-    /// The transcript is well formed but some checks failed; their names are those of the oracle
-    /// (`round_01_H0`, …, `final_H1`; see [`check_names`](crate::check_names)).
+    /// The transcript is well formed but some round or final checks of the sumcheck failed
+    /// (`5_Building_Blocks.tex`:301-311, 327-333); their names are those of the oracle
+    /// (`round_01_H0`, …, `final_H1`; see [`check_names`](crate::check_names)). The verifier
+    /// reports these before the openings ([`VerifyError::Opening`]).
     #[error("rejected: the checks {failing:?} failed")]
     Rejected {
-        /// The names of the failing checks, in the order of the oracle.
+        /// The names of the failing round and final checks, in the order of the oracle.
         failing: Vec<String>,
+    },
+    /// The round and final checks hold, but the base PCS rejected the opening of the polynomial
+    /// `poly` of party `party` (`5_Building_Blocks.tex`:321-326; the oracle's check
+    /// `pcs_open_<poly>_p<party>`): its commitment or its proof does not decode, or the proof
+    /// does not open the commitment to the final value at the point $\mathbf a$. The first
+    /// failing opening is reported, in the order of [`check_names`](crate::check_names).
+    #[error(
+        "the base-PCS opening of {} of party {party} was rejected: {reason}",
+        poly.name()
+    )]
+    Opening {
+        /// The party $p \in \lbrace 1, \dots, n \rbrace$ whose opening failed.
+        party: PartyId,
+        /// The polynomial.
+        poly: ClaimedPoly,
+        /// The reason the base PCS gave.
+        reason: String,
     },
 }
 

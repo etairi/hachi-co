@@ -37,8 +37,10 @@ pub enum StatementError {
 }
 
 /// An [`EvalProof`](crate::EvalProof) that does not fit the context: a component of the wrong
-/// length, a residue that is not below $q$, or an attempt index at or beyond the cap
-/// [`hachi_co_r2l::MAX_ATTEMPTS`] ([`EvalProof::validate`](crate::EvalProof::validate)).
+/// length (including a missing or extra base-PCS commitment or proof), a residue that is not
+/// below $q$, or an attempt index at or beyond the cap [`hachi_co_r2l::MAX_ATTEMPTS`]
+/// ([`EvalProof::validate`](crate::EvalProof::validate)). The words of the base PCS are judged
+/// by the sumcheck verifier, with the base PCS.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ProofError {
@@ -74,8 +76,9 @@ pub enum ProofError {
 }
 
 /// Why [`EvalProof::from_bytes`](crate::EvalProof::from_bytes) refused an encoding. The length
-/// of a valid encoding is fixed by the context ([`crate::encoded_len`]), so every length
-/// mismatch is caught before the body is read.
+/// of a valid encoding is fixed by the context and the lengths of the base-PCS items, which come
+/// first ([`crate::encoded_len`]), so every length mismatch is caught before the rest of the
+/// body is read.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -105,8 +108,8 @@ pub enum DecodeError {
     /// an attempt index at or beyond the cap).
     #[error(transparent)]
     Invalid(#[from] ProofError),
-    /// The length of the encoding for the context does not fit in `usize` (only for layouts far
-    /// beyond any parameter set).
+    /// The length of the encoding does not fit in `usize`: for layouts far beyond any parameter
+    /// set, or for lengths of base-PCS items in the encoding that add up to more than that.
     #[error("the length of the encoding overflows usize")]
     Overflow,
 }
@@ -133,6 +136,9 @@ pub enum Error {
     /// An error of the sumcheck provers (`hachi-co-sumcheck`).
     #[error(transparent)]
     Sumcheck(#[from] hachi_co_sumcheck::Error),
+    /// Hachi refused its parameters ([`HachiBase::new`](crate::HachiBase::new)).
+    #[error("Hachi: {0}")]
+    Hachi(#[from] hachi::Error),
     /// The statement does not fit the context.
     #[error("statement: {0}")]
     Statement(#[from] StatementError),
@@ -168,7 +174,9 @@ pub enum VerifyError {
     #[error("ring-to-linear: {0}")]
     RingToLinear(hachi_co_r2l::Error),
     /// The sumcheck verifier rejected (`5_Building_Blocks.tex`:276-334): a failing round or final
-    /// check ([`Rejected`](hachi_co_sumcheck::VerifyError::Rejected)) or a failing challenger.
+    /// check ([`Rejected`](hachi_co_sumcheck::VerifyError::Rejected)), a base-PCS opening that
+    /// the base PCS rejects ([`Opening`](hachi_co_sumcheck::VerifyError::Opening), with the
+    /// party and the polynomial), or a failing challenger.
     #[error("sumcheck: {0}")]
     Sumcheck(hachi_co_sumcheck::VerifyError),
 }

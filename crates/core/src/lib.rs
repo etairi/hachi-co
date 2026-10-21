@@ -11,7 +11,8 @@
 //! | [`build_m`], [`build_y`] | the linear relation $\mathbf M \mathbf z' = \mathbf y$ | `5_Building_Blocks.tex`:154-182 |
 //! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:390; `field-to-ring-rok.tex`:111-122; `5_Building_Blocks.tex`:164-179, 209-214, 243-250 |
 //! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:110, 209-214 |
-//! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir | `5_Building_Blocks.tex`:122-126, 243-250, 312 |
+//! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir, and the contexts of the base-PCS openings | `5_Building_Blocks.tex`:122-126, 243-250, 312, 314-326 |
+//! | [`BasePcs`], [`base_pcs`] | the base PCS of the sumcheck (commitments and openings of $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$), the Möbius transform, evaluations | `5_Building_Blocks.tex`:209-241, 314-333 |
 //! | [`short`], [`wire`] | exact short-polynomial products, norms and centered representatives; flat encodings for [`hachi_co_mpc::Comm`] | `4_preliminaries.tex`:86; `5_Building_Blocks.tex`:127-133 |
 //!
 //! The inter-block types are plain structs with public fields; each has a `validate` method that
@@ -24,7 +25,10 @@
 //! `replay::{ReplayRandomness, ReplayChallenger}`, which serve the recorded randomness and coins
 //! so that the drivers reproduce the fixtures, and the recorded inputs of the blocks
 //! (`Fixture::party_state`, `Fixture::public_vectors`, …); the block crates enable it in their
-//! dev-dependencies.
+//! dev-dependencies. It also provides `clear_pcs::ClearPcs`, a reference base PCS that commits
+//! to the SHA-256 hash of a vector and opens by revealing it (binding and sound, neither
+//! succinct nor hiding), for the fixture tests: the oracle does not model the base PCS, which
+//! is Hachi otherwise (`hachi-co`'s `HachiBase`).
 //!
 //! **Conventions** (`docs/m1-spec.md`, "Conventions"; `ref/README.md`, "Conventions"): positions
 //! are 0-indexed and provers are numbered $1, \dots, n$ ([`PartyId`]); a ring element is a
@@ -36,15 +40,18 @@
 //! item): the extra arguments `field` of [`PartyRandomness::reshare`],
 //! [`PartyRandomness::blinder`], [`Challenger::sumcheck_coins`] and [`Challenger::round_coin`];
 //! [`BlinderKind`] for the brief's `which: 0 | 1`; [`Challenger::begin_attempt`] for Fiat-Shamir
-//! with aborts; the PRG domains and the reuse check of [`PrgRandomness`]; the absorb encodings and
-//! coin derivation of [`FsChallenger`]; the extra dimensions and position ranges of [`Layout`];
-//! the canonical-residue check of [`PublicParams::validate`].
+//! with aborts; the PRG domains and the reuse check of [`PrgRandomness`]; the absorb encodings,
+//! coin and context derivation of [`FsChallenger`] ([`Challenger::absorb_words`] and the forked
+//! squeeze of [`Challenger::context`]); the extra dimensions and position ranges of [`Layout`];
+//! the canonical-residue check of [`PublicParams::validate`]; the hash, word formats and context
+//! check of `ClearPcs`.
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit `625ced1`),
 //! cited by file and line; "the oracle" is the Sage reference in `ref/`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod base_pcs;
 mod challenger;
 mod context;
 mod data;
@@ -56,14 +63,18 @@ pub mod short;
 pub mod wire;
 
 #[cfg(feature = "fixtures")]
+pub mod clear_pcs;
+#[cfg(feature = "fixtures")]
 pub mod fixture;
 #[cfg(feature = "fixtures")]
 mod fixture_inputs;
 #[cfg(feature = "fixtures")]
 pub mod replay;
 
+pub use base_pcs::BasePcs;
 pub use challenger::{
-    Challenger, FS_DOMAIN_R2L_C, FS_DOMAIN_SC_COINS, FS_DOMAIN_SC_ROUND, FsChallenger,
+    Challenger, FS_DOMAIN_R2L_C, FS_DOMAIN_SC_COINS, FS_DOMAIN_SC_ROUND, FS_LABEL_CONTEXT,
+    FsChallenger,
 };
 pub use context::{Context, PublicParams, SETUP_DOMAIN_A, SETUP_DOMAIN_B, SETUP_DOMAIN_D};
 pub use data::{
@@ -78,9 +89,11 @@ pub use randomness::{
 };
 
 #[cfg(feature = "fixtures")]
+pub use clear_pcs::{ClearCommitment, ClearOpening, ClearPcs, ClearPolynomial};
+#[cfg(feature = "fixtures")]
 pub use fixture::{Fixture, escape_key, sha256_residues};
 #[cfg(feature = "fixtures")]
-pub use replay::{ReplayChallenger, ReplayRandomness};
+pub use replay::{REPLAY_CONTEXT_TAG, ReplayChallenger, ReplayRandomness};
 
 pub use hachi_co_math::{Ext, Fqk, Poly, Ring, Subfield};
 pub use hachi_co_mpc::PartyId;

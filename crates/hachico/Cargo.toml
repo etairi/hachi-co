@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Hachi-Co WP11: the collaborative PCS composed with Fiat-Shamir, proof format, sizes and end-to-end tests"
+description = "Hachi-Co: the collaborative PCS composed with Fiat-Shamir and Hachi as the base PCS, proof format, sizes and end-to-end tests"
 publish = false
 
 [dependencies]
+hachi.workspace = true
 hachi-co-commit.workspace = true
 hachi-co-conv.workspace = true
 hachi-co-core.workspace = true

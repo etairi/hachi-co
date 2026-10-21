@@ -11,9 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
-  # The Hachi-Co crates. The legacy crate `hachi` is kept byte-identical to the original prototype, so it is
-  # tested (including its golden test) but not held to the formatting and lint gates below.
-  NEW_CRATES: -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params -p hachi-co-mpc -p hachi-co-core -p hachi-co-commit -p hachi-co-conv -p hachi-co-r2l -p hachi-co-sumcheck -p hachi-co
+  # Every crate of the workspace, held to the formatting, lint and documentation gates below.
+  NEW_CRATES: -p hachi -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params -p hachi-co-mpc -p hachi-co-core -p hachi-co-commit -p hachi-co-conv -p hachi-co-r2l -p hachi-co-sumcheck -p hachi-co
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -39,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked --workspace --release
-      - run: cargo build --locked --release -p hachi --features gen_file
+      - run: cargo run --locked --release -p hachi -- 14 16 1
   msrv:
     # The minimum supported Rust version declared in the workspace manifest (rust-version).
     runs-on: ubuntu-latest

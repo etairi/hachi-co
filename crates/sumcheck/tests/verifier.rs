@@ -1,42 +1,56 @@
-//! The verifier against the fixtures: it accepts every recorded transcript with replayed
-//! coins, its named checks are the oracle's, the final claims match the provers' polynomials
-//! (ideal PCS), and every case of `negative_tests.transcript` and `negative_tests.witness` fails
-//! exactly as recorded (the same set of failing checks, with the PCS openings checked by the
-//! ideal PCS and the Pi_conv check by its stand-in).
+//! The verifier against the fixtures, with the reference base PCS `ClearPcs`: it accepts every
+//! recorded transcript (with `ClearPcs` commitments and openings of the provers' polynomials
+//! attached, since the oracle does not model them) with replayed coins, its named checks are
+//! the oracle's, the checked claims match the provers' polynomials, `ClearPcs` decides every
+//! opening as the oracle's ideal PCS does, and every case of `negative_tests.transcript` and
+//! `negative_tests.witness` fails exactly as recorded (the same set of failing checks, the PCS
+//! openings included, with the Pi_conv check by its stand-in).
 
 mod common;
 
 use common::{
-    Instance, K, Run, conv_check, fixture_transcript, honest_runs, ideal_pcs, instances,
-    run_parties,
+    Instance, K, Run, clear_pcs, conv_check, fixture_transcript, honest_runs, ideal_pcs, instances,
+    run_parties, with_replay_openings, without_pcs,
 };
 use hachi_co_core::{Fixture, LinearShare, Poly, ReplayChallenger, escape_key};
 use hachi_co_math::Ext;
 use hachi_co_sumcheck::{
-    PublicInput, SumcheckPrivate, SumcheckTranscript, VerifyError, check_names, quotient_share,
-    verify, verify_checks,
+    ClaimedPoly, PublicInput, SumcheckPrivate, SumcheckTranscript, VerifyError, check_names,
+    quotient_share, verify, verify_checks, verify_claims,
 };
 use std::collections::BTreeSet;
 
-/// The failing checks of the verifier and of the ideal PCS (sorted), for a transcript, public
-/// input and the provers' private data.
+/// The failing checks of the verifier (sorted), openings included, for a transcript, public
+/// input and the provers' private data; `ClearPcs` must decide every opening as the ideal PCS
+/// does on the provers' polynomials.
 fn failing(
     inst: &Instance,
     transcript: &SumcheckTranscript<K>,
     public: &PublicInput<'_>,
     privates: &[SumcheckPrivate<K>],
 ) -> Vec<String> {
+    let pcs = clear_pcs(inst.field());
     let mut ch = ReplayChallenger::new(&inst.fx).unwrap();
-    let report = verify_checks(&inst.ctx, public, transcript, &mut ch).unwrap();
-    let mut out: Vec<String> = report.failing();
-    out.extend(
-        ideal_pcs(inst.field(), &report.claims, privates)
-            .into_iter()
-            .filter(|(_, ok)| !ok)
-            .map(|(name, _)| name),
+    let report = verify_checks(&inst.ctx, &pcs, public, transcript, &mut ch).unwrap();
+    let clear: Vec<(String, bool)> = report
+        .openings
+        .iter()
+        .map(|o| (o.claim.check_name(), o.error.is_none()))
+        .collect();
+    assert_eq!(
+        clear,
+        ideal_pcs(inst.field(), &report.claims, privates),
+        "{}: ClearPcs against the ideal PCS",
+        inst.name
     );
+    let mut out: Vec<String> = report.failing();
     out.sort();
     out
+}
+
+/// The fixture's transcript of `inst` with the `ClearPcs` openings of its honest run.
+fn honest_transcript(inst: &Instance, run: &Run) -> SumcheckTranscript<K> {
+    with_replay_openings(inst, &fixture_transcript(&inst.fx), &run.privates)
 }
 
 fn public(inst: &Instance) -> PublicInput<'_> {
@@ -81,20 +95,24 @@ fn recorded_cases(fx: &Fixture, section: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The recorded transcripts are accepted with replayed coins; the named checks, together with
-/// the ideal PCS openings and the Pi_conv check, are exactly the fixture's `verifier/checks`,
-/// all passing, and there are 1 + 2 l'' + 3n + 2 of them (the conv check, two per round, three
-/// openings per prover and the two final checks, as `ref/run_oracle.py` counts them: 36, 39, 44,
-/// 47 and 61 for toy-n1, n2, n3, n4, n8); a and M~*(a) are the recorded ones; the claims are the
-/// provers' polynomials at the point.
+/// The recorded transcripts are accepted with replayed coins; the named checks, the openings of
+/// `ClearPcs` included, together with the Pi_conv check, are exactly the fixture's
+/// `verifier/checks`, all passing, and there are 1 + 2 l'' + 3n + 2 of them (the conv check, two
+/// per round, three openings per prover and the two final checks, as `ref/run_oracle.py` counts
+/// them: 36, 39, 44, 47 and 61 for toy-n1, n2, n3, n4, n8); a and M~*(a) are the recorded ones;
+/// the claims are the provers' polynomials at the point.
 #[test]
 fn fixture_transcripts_are_accepted() {
     for (inst, run) in instances().iter().zip(honest_runs()) {
         let (ctx, fx) = (&inst.ctx, &inst.fx);
-        let transcript = fixture_transcript(fx);
+        // The lockstep run reproduces the fixture; its openings are those attached here.
+        assert_eq!(without_pcs(&run.transcript), fixture_transcript(fx));
+        let transcript = honest_transcript(inst, run);
+        assert_eq!(transcript, run.transcript);
         let pubin = public(inst);
+        let pcs = clear_pcs(inst.field());
         let mut ch = ReplayChallenger::new(fx).unwrap();
-        let report = verify_checks(ctx, &pubin, &transcript, &mut ch).unwrap();
+        let report = verify_checks(ctx, &pcs, &pubin, &transcript, &mut ch).unwrap();
         assert!(report.accepted(), "{}: {:?}", inst.name, report.failing());
         assert_eq!(
             report.claimed_sum,
@@ -109,8 +127,8 @@ fn fixture_transcripts_are_accepted() {
             fx.exts::<K>("/sumcheck/coins/a").unwrap()
         );
         assert_eq!(report.claims.claims.len(), 3 * inst.n());
-        let pcs = ideal_pcs(inst.field(), &report.claims, &run.privates);
-        assert!(pcs.iter().all(|(_, ok)| *ok), "{}: {pcs:?}", inst.name);
+        let ideal = ideal_pcs(inst.field(), &report.claims, &run.privates);
+        assert!(ideal.iter().all(|(_, ok)| *ok), "{}: {ideal:?}", inst.name);
         let conv = conv_check(
             ctx,
             &fx.ext::<K>("/input/y").unwrap(),
@@ -119,17 +137,11 @@ fn fixture_transcripts_are_accepted() {
         assert!(conv);
         // The set of names: conv_y_eq_E(u), the round checks, the PCS openings, the final checks.
         let mut names: Vec<(String, bool)> = vec![("conv_y_eq_E(u)".to_owned(), conv)];
-        let checks = &report.checks;
         names.extend(
-            checks[..checks.len() - 2]
-                .iter()
-                .map(|c| (c.name.clone(), c.passed)),
-        );
-        names.extend(pcs);
-        names.extend(
-            checks[checks.len() - 2..]
-                .iter()
-                .map(|c| (c.name.clone(), c.passed)),
+            report
+                .named_checks()
+                .into_iter()
+                .map(|c| (c.name, c.passed)),
         );
         // serde_json without `preserve_order` lists the keys sorted, so compare sorted lists;
         // the oracle's order (sumcheck.py, `verify`) is that of `check_names`.
@@ -156,12 +168,20 @@ fn fixture_transcripts_are_accepted() {
             "{}: the oracle's order",
             inst.name
         );
-        // verify returns the same claims.
+        // verify_claims returns the same claims, and verify accepts.
         let mut ch = ReplayChallenger::new(fx).unwrap();
         assert_eq!(
-            verify(ctx, &pubin, &transcript, &mut ch).unwrap(),
+            verify_claims(ctx, &pcs, &pubin, &transcript, &mut ch).unwrap(),
             report.claims
         );
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        verify(ctx, &pcs, &pubin, &transcript, &mut ch).unwrap();
+        // Without the base-PCS words (the oracle's transcript), the transcript is malformed.
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        assert!(matches!(
+            verify(ctx, &pcs, &pubin, &fixture_transcript(fx), &mut ch),
+            Err(VerifyError::Shape { .. })
+        ));
     }
 }
 
@@ -173,7 +193,7 @@ fn transcript_tampering_fails_as_recorded() {
         let (ctx, fx) = (&inst.ctx, &inst.fx);
         let f = inst.field();
         let l = &ctx.layout;
-        let honest = fixture_transcript(fx);
+        let honest = honest_transcript(inst, run);
         let pubin = public(inst);
         assert!(failing(inst, &honest, &pubin, &run.privates).is_empty());
         let mut seen = BTreeSet::new();
@@ -452,16 +472,50 @@ fn malformed_transcripts_are_errors() {
     let inst = &instances()[1];
     let (ctx, fx) = (&inst.ctx, &inst.fx);
     let q = ctx.q();
-    let honest = fixture_transcript(fx);
+    let honest = honest_transcript(inst, &honest_runs()[1]);
     let pubin = public(inst);
+    let pcs = clear_pcs(inst.field());
     let run = |t: &SumcheckTranscript<K>, p: &PublicInput<'_>| {
         let mut ch = ReplayChallenger::new(fx).unwrap();
-        verify(ctx, p, t, &mut ch)
+        verify(ctx, &pcs, p, t, &mut ch)
     };
     assert!(run(&honest, &pubin).is_ok());
     let shape = |r: Result<_, VerifyError>| matches!(r, Err(VerifyError::Shape { .. }));
     let noncanonical =
         |r: Result<_, VerifyError>| matches!(r, Err(VerifyError::NonCanonical { .. }));
+    // The base-PCS words: one vector per party and polynomial, or a Shape error; words that do
+    // not decode are a rejected opening of that party and polynomial.
+    for poly in ClaimedPoly::ORDER {
+        let mut t = honest.clone();
+        t.commitments.of_mut(poly).pop();
+        assert!(shape(run(&t, &pubin)));
+        let mut t = honest.clone();
+        t.openings.of_mut(poly).push(Vec::new());
+        assert!(shape(run(&t, &pubin)));
+        for bad in [vec![], vec![1, 2, 3], vec![u64::MAX; 5]] {
+            let mut t = honest.clone();
+            t.commitments.of_mut(poly)[1] = bad.clone();
+            assert!(matches!(
+                run(&t, &pubin),
+                Err(VerifyError::Opening { party: 2, poly: got, reason })
+                    if got == poly && reason.contains("commitment does not decode")
+            ));
+            let mut t = honest.clone();
+            t.openings.of_mut(poly)[0] = bad;
+            assert!(matches!(
+                run(&t, &pubin),
+                Err(VerifyError::Opening { party: 1, poly: got, reason })
+                    if got == poly && reason.contains("proof does not decode")
+            ));
+        }
+        // A huge count in a proof: refused without allocating.
+        let mut t = honest.clone();
+        t.openings.of_mut(poly)[0][5] = u64::MAX;
+        assert!(matches!(
+            run(&t, &pubin),
+            Err(VerifyError::Opening { party: 1, .. })
+        ));
+    }
     let mut t = honest.clone();
     t.rounds.pop();
     assert!(shape(run(&t, &pubin)));

@@ -8,7 +8,7 @@
 //! | [`Report`] | each condition, whether it holds, and its [`Severity`] | 6_Collaborative_Hachi.tex:269-275, 4_preliminaries.tex:73, 100 |
 //! | [`presets`](mod@presets) | the toy presets, the development presets and the secure presets of `presets/secure.json` | `docs/m0-spec.md`; `docs/m1-spec.md`, WP11 |
 //! | [`rules`] | integer logarithms, the $\tau$ rules, primality, $\lvert C \rvert$, $M \le e^{1/n}$ | — |
-//! | [`sizes`](fn@crate::sizes) | the byte size of the Eval proof's encoding, per component ([`ProofSizes`]) | `docs/m1-spec.md`, WP11 |
+//! | [`sizes`](fn@crate::sizes), [`sizes_with_base`] | the byte size of the Eval proof's encoding, per component ([`ProofSizes`]), with the base PCS's items ([`BasePcsWords`]) | `docs/m1-spec.md`, WP11 |
 //!
 //! **Example.**
 //!
@@ -47,4 +47,4 @@ pub use choices::{ChallengeSet, Choices, Omega, QChoice, TauRule};
 pub use error::{Error, Result};
 pub use presets::{Preset, PresetKind, preset, presets};
 pub use report::{Constraint, ConstraintId, Report, Severity};
-pub use sizes::{ProofSizes, sizes};
+pub use sizes::{BasePcsWords, ProofSizes, sizes, sizes_with_base};

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Legacy single-prover Hachi prototype (NOZ26), kept unchanged as the reference implementation and future base PCS of Hachi-Co"
+description = "Hachi (NOZ26), the lattice-based multilinear polynomial commitment scheme, on the modulus-agnostic arithmetic of Hachi-Co: commitments, recursive evaluation proofs over extension fields, and the base PCS of Hachi-Co"
 readme = "../../README.md"
 publish = false
 
@@ -12,20 +12,11 @@ publish = false
 rustdoc-args = ["--html-in-header", "../../katex-header.html"]
 
 [dependencies]
-ark-ff = "0.6.0"
-ark-poly = "0.6.0"
-ark-std = "0.6.0"
-base64 = "0.23.1"
-memmap2 = "0.9.11"
+hachi-co-math.workspace = true
+hachi-co-sampling.workspace = true
+hachi-co-transcript.workspace = true
 rand.workspace = true
-rand_chacha.workspace = true
-sha256 = "1.6.0"
-tfhe-ntt.workspace = true
-time-graph = "0.3.3"
+thiserror.workspace = true
 
-[features]
-default = ["verbose"]
-verbose = []
-gen_file = []
-stats = []
-nightly = ["tfhe-ntt/avx512"]
+[dev-dependencies]
+sha2.workspace = true

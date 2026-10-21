@@ -23,8 +23,10 @@
 mod common;
 
 use common::net::run_with;
-use common::{K, additive_shares, assert_claims_match, random_instance, seed};
-use hachi_co::{EVAL_DOMAIN, EvalOutput, EvalProof, commit, eval_with, verify_with};
+use common::{
+    K, additive_shares, assert_claims_match, clear_pcs, clear_words, random_instance, seed,
+};
+use hachi_co::{EVAL_DOMAIN, EvalOutput, EvalProof, commit, eval_with, verify_claims_with};
 use hachi_co_commit::{LABEL_FAH_B, LABEL_RESHARE, open};
 use hachi_co_conv::LABEL_FAH_E;
 use hachi_co_core::{Context, Ext, FsChallenger, PartyState, Poly, PrgRandomness};
@@ -32,7 +34,9 @@ use hachi_co_mpc::{Comm, Fault, LABEL_SETUP, Loopback, MemoryConfig, Stats, Zero
 use hachi_co_params::presets::toy_choices;
 use hachi_co_params::{Choices, QChoice, derive};
 use hachi_co_r2l::{COMM_ABORT, COMM_FAH_D, COMM_GATHER_Z, COMM_PROVER1, response_len};
-use hachi_co_sumcheck::{ALL_GATHER_FINAL, ALL_GATHER_SUMS, FAH_ROUND};
+use hachi_co_sumcheck::{
+    ALL_GATHER_COMMITMENTS, ALL_GATHER_FINAL, ALL_GATHER_OPENINGS, ALL_GATHER_SUMS, FAH_ROUND,
+};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::time::{Duration, Instant};
@@ -86,8 +90,8 @@ struct PartyOutput {
     digest: [u8; 32],
 }
 
-/// Commit, then Eval with Fiat-Shamir, for the party `comm.id()` with its initial share `f_p`
-/// and the party seed of ($n$, `i`, $p$).
+/// Commit, then Eval with Fiat-Shamir and `ClearPcs`, for the party `comm.id()` with its initial
+/// share `f_p` and the party seed of ($n$, `i`, $p$).
 fn prove(
     ctx: &Context<K>,
     comm: &mut impl Comm,
@@ -100,7 +104,17 @@ fn prove(
     let mut rng = PrgRandomness::new(seed("party/collaborative", &[n, i, p]));
     let (u, state) = commit(ctx, comm, &mut rng, f_p)?;
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
-    let out = eval_with(ctx, comm, &mut rng, &mut ch, &state, &u, x, y)?;
+    let out = eval_with(
+        ctx,
+        &clear_pcs(ctx),
+        comm,
+        &mut rng,
+        &mut ch,
+        &state,
+        &u,
+        x,
+        y,
+    )?;
     Ok(PartyOutput {
         u,
         state,
@@ -138,8 +152,9 @@ fn check_honest(inst: &Instance, outs: &[PartyOutput], what: &str) {
     let report = open(&inst.ctx, &states, &first.u, &inst.f, None).unwrap();
     assert!(report.bit, "{what}: Open: {:?}", report.checks.failing());
     let mut vch = FsChallenger::new(EVAL_DOMAIN);
-    let claims = verify_with(
+    let claims = verify_claims_with(
         &inst.ctx,
+        &clear_pcs(&inst.ctx),
         &mut vch,
         &first.u,
         &inst.x,
@@ -217,8 +232,9 @@ fn n_parties_and_one_party_prove_the_same_statements() {
         let mut comm = Loopback::new(q).unwrap();
         let single = prove(&ctx1, &mut comm, 0, &inst.f, &inst.x, &inst.y).unwrap();
         let mut vch = FsChallenger::new(EVAL_DOMAIN);
-        verify_with(
+        verify_claims_with(
             &ctx1,
+            &clear_pcs(&ctx1),
             &mut vch,
             &single.u,
             &inst.x,
@@ -296,7 +312,8 @@ fn a_party_that_leaves_ends_the_run_at_once() {
 /// $2^\ell$ field elements to every other party; F_AH(B), F_AH(E), F_AH(D) and the round calls
 /// broadcast $n\_B d$, $d$, $n\_D d$ and $(d\_0 + d\_1 + 2) K$ words (twice with fresh zero
 /// sharings); the abort and prover-1 flags are one word; the responses go to prover 1; the
-/// all-gathers broadcast $2K$ and $3K$ words.
+/// all-gathers broadcast $2K$ and $3K$ words, and the three base-PCS commitments and the three
+/// opening proofs of `ClearPcs`, each with its length word.
 fn expected_bytes_sent(
     ctx: &Context<K>,
     n: usize,
@@ -305,6 +322,9 @@ fn expected_bytes_sent(
     mode: ZeroSharing,
 ) -> Vec<(&'static str, u64)> {
     let l = &ctx.layout;
+    let base = clear_words(l);
+    let commitments = 3 + (base.commitment_w + base.commitment_g0 + base.commitment_g1) as u64;
+    let openings = 3 + (base.proof_w + base.proof_g0 + base.proof_g1) as u64;
     let peers = (n - 1) as u64;
     let fah = if mode == ZeroSharing::Fresh { 2 } else { 1 };
     let (k, d) = (K as u64, l.d as u64);
@@ -330,11 +350,13 @@ fn expected_bytes_sent(
         ),
         (COMM_PROVER1, 8 * peers),
         (ALL_GATHER_SUMS, 8 * peers * 2 * k),
+        (ALL_GATHER_COMMITMENTS, 8 * peers * commitments),
         (
             FAH_ROUND,
             8 * peers * fah * (l.d0 + l.d1 + 2) as u64 * k * l.ell_pp as u64,
         ),
         (ALL_GATHER_FINAL, 8 * peers * 3 * k),
+        (ALL_GATHER_OPENINGS, 8 * peers * openings),
     ]
 }
 

@@ -71,6 +71,42 @@ pub fn evaluate<const K: usize>(
         }))
 }
 
+/// The coefficient vector of a blinder as the base PCS commits it (the authors' answer 1 of
+/// 2026-10-21, plan `docs/hachi-co-plan.md`, §0; `5_Building_Blocks.tex`:220-221):
+/// $(s\_0, s\_{1,1}, \dots, s\_{1,D}, s\_{2,1}, \dots, s\_{\ell'',D})$, in the order of
+/// [`Blinder`] ($s\_0$, then row $j$ by row, degree $k$ within a row): $1 + \ell'' D$ entries.
+pub fn blinder_coefficients<const K: usize>(g: &Blinder<K>) -> Vec<Ext<K>> {
+    let mut out = Vec::with_capacity(1 + g.s.iter().map(Vec::len).sum::<usize>());
+    out.push(g.s0);
+    for row in &g.s {
+        out.extend_from_slice(row);
+    }
+    out
+}
+
+/// The public weights of the opening of a blinder at $\mathbf a$: $(1, a\_1, a\_1^2, \dots,
+/// a\_1^D, a\_2, \dots, a\_{\ell''}^D)$, $1 + \ell'' D$ entries in the order of
+/// [`blinder_coefficients`], so that $g(\mathbf a) = \langle \mathtt{blinder\\_coefficients}(g),
+/// \mathtt{blinder\\_weights}(\mathbf a, D) \rangle$ for a blinder $g$ of individual degree $D$
+/// in $\ell''$ = `point.len()` variables (`5_Building_Blocks.tex`:209-214, 316-318).
+pub fn blinder_weights<const K: usize>(
+    field: &Fqk<K>,
+    point: &[Ext<K>],
+    degree: usize,
+) -> Vec<Ext<K>> {
+    let mut out = Vec::with_capacity(point.len().saturating_mul(degree).saturating_add(1));
+    out.push(field.one());
+    for a in point {
+        let a = field.reduce(a);
+        let mut power = a;
+        for _ in 0..degree {
+            out.push(power);
+            power = field.mul(&power, &a);
+        }
+    }
+    out
+}
+
 /// The round polynomial of round $r \in \lbrace 1, \dots, \ell'' \rbrace$ at $x$:
 /// $$\sum\_{v\_{r+1}, \dots, v\_{\ell''} \in \lbrace 0, 1 \rbrace} g(a\_1, \dots, a\_{r-1}, x,
 /// v\_{r+1}, \dots) = 2^{\ell'' - r} \Bigl(s\_0 + \sum\_{j \lt r} \sum\_k s\_{j,k} a\_j^k + \sum\_k
@@ -250,6 +286,43 @@ mod tests {
             }
             // After the last round the prefix is g(a).
             assert_eq!(rounds.prefix, evaluate(&f, &g, &coins).unwrap());
+        }
+    }
+
+    /// The opening of a blinder as an inner product: $\langle$ coefficients, weights $\rangle$
+    /// is $g(\mathbf a)$, at several shapes; the coefficient vector has $1 + \ell'' D$ entries
+    /// in the order of `Blinder` and the weights are the powers, computed here by square and
+    /// multiply.
+    #[test]
+    fn blinders_open_as_inner_products() {
+        let f = Fqk::<4>::new(Q).unwrap();
+        for (ell, degree) in [(4usize, 14usize), (15, 3), (1, 1), (0, 5), (3, 0)] {
+            let g = blinder(ell, degree, 7 + ell as u64);
+            let coeffs = blinder_coefficients(&g);
+            assert_eq!(coeffs.len(), 1 + ell * degree);
+            assert_eq!(coeffs[0], g.s0);
+            for j in 1..=ell {
+                for k in 1..=degree {
+                    assert_eq!(coeffs[1 + (j - 1) * degree + (k - 1)], g.s[j - 1][k - 1]);
+                }
+            }
+            let point: Vec<Ext<4>> = (0..ell as u64).map(|j| Ext([j + 5, 3, j, 1])).collect();
+            let weights = blinder_weights(&f, &point, degree);
+            assert_eq!(weights.len(), coeffs.len());
+            assert_eq!(weights[0], f.one());
+            for j in 1..=ell {
+                for k in 1..=degree {
+                    assert_eq!(
+                        weights[1 + (j - 1) * degree + (k - 1)],
+                        f.pow(&point[j - 1], &[k as u64])
+                    );
+                }
+            }
+            let inner = coeffs
+                .iter()
+                .zip(&weights)
+                .fold(f.zero(), |acc, (c, w)| f.add(&acc, &f.mul(c, w)));
+            assert_eq!(inner, evaluate(&f, &g, &point).unwrap(), "{ell} x {degree}");
         }
     }
 

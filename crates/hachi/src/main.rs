@@ -1,78 +1,72 @@
-//! Command-line driver of the legacy single-prover Hachi prototype: commit, prove and verify a
-//! witness of $2^\ell$ coefficients streamed from a file (see the library documentation).
-//!
-//! ```text
-//! hachi <witness-file> <l>
-//! ```
-#[cfg(feature = "gen_file")]
-use hachi::utils::gen_file::write_random_data;
+//! `hachi <l> [d] [iterations]`: commits to a random multilinear polynomial in `l` variables over
+//! $\mathbb Z_q$, $q = 2^{32} - 99$, proves and verifies its evaluation at a random point of
+//! $\mathbb F_{q^4}$, and prints the timings and the proof size. `d` is the ring degree (default
+//! 64); `iterations` fixes the number of iterations (default: the automatic rule). The parameters
+//! are the insecure test choices of `HachiChoices::toy`.
 
-use hachi::stream::Stream;
-use hachi::stream::file_stream::U64FileStream;
+use hachi::{HachiChoices, HachiPcs};
+use hachi_co_math::Ext;
+use hachi_co_sampling::ShakePrg;
+use hachi_co_sampling::uniform::uniform_mod_q;
+use std::time::Instant;
 
-use hachi::arithmetic::utils::multi_lin_coeff_int;
-
-use hachi::hachi::Hachi;
-use hachi::hachi::setup::Setup;
-use hachi::hachi::commit::Commit;
-use hachi::hachi::prove::Prove;
-use hachi::hachi::verify::Verify;
+const Q: u64 = 4294967197;
+const K: usize = 4;
 
 fn main() {
-    time_graph::enable_data_collection(true);
-
-    // get witness file and length
     let args: Vec<String> = std::env::args().collect();
-    let witness_file = &args[1];
-    let l = *&args[2].parse::<usize>().unwrap();
-
-    // public parameters
-    let params = Hachi::setup(l, true);
-
-    #[cfg(feature = "gen_file")]
-    // Produce a dummy witness file containing random coefficients.
-    write_random_data(witness_file, params.l, params.q);
-
-    // commit to the witness
-    let mut witness = U64FileStream::init(witness_file, 0);
-    let com = Hachi::commit(&mut witness, &params);
-
-    // create an evaluation point with distinct coordinates (an all-equal point would hide
-    // any variable-order mismatch between prover, verifier and this reference evaluation)
-    let x: Vec<u64> = (0..params.l).map(|i| (1234 + 7 * i as u64) % params.q).collect();
-    let proof = Hachi::prove(&mut witness, &params, &x, &com);
-
-    // compute claimed evaluation
-    println!("\nCalculating evaluation...");
-    let mut y = 0;
-
-    witness.reset();
-
-    let r = 20;
-    let m = params.l - r;
-    let mut buf = vec![0u64; 1 << r];
-
-    // The scheme pairs the variables with a coefficient's position p = (chunk, element, ring index)
-    // as chunk <-> x[0..params.r], element <-> x[params.r..params.r + params.m], ring index <-> the
-    // last log d variables, while p has the ring index in its low bits; permute x accordingly.
-    let (pr, pm) = (params.r, params.m);
-    let mut x_perm: Vec<u64> = Vec::with_capacity(params.l);
-    x_perm.extend_from_slice(&x[pr + pm..params.l]);
-    x_perm.extend_from_slice(&x[pr..pr + pm]);
-    x_perm.extend_from_slice(&x[0..pr]);
-
-    for i in 0..1 << m {
-        witness.read(&mut buf);
-
-        for j in 0..1 << r {
-            let a = multi_lin_coeff_int(&x_perm, i << r | j, params.l, params.q);
-            y = (y + a * buf[j]) % params.q;
+    let parse = |i: usize, default: usize| {
+        args.get(i)
+            .map_or(Ok(default), |a| a.parse::<usize>())
+            .unwrap_or_else(|_| {
+                eprintln!("usage: hachi <l> [d] [iterations]");
+                std::process::exit(2)
+            })
+    };
+    let vars = parse(1, 16);
+    let d = parse(2, 64);
+    let choices = HachiChoices {
+        fixed_iterations: args.get(3).map(|_| parse(3, 0)),
+        ..HachiChoices::toy(d)
+    };
+    let pcs = match HachiPcs::<K>::new(Q, choices) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("parameters: {e}");
+            std::process::exit(1)
         }
+    };
+    let mut prg = ShakePrg::new(&[1u8; 32], b"hachi/cli", 0);
+    let coeffs = uniform_mod_q(&mut prg, Q, 1 << vars).expect("q > 0");
+    let point: Vec<Ext<K>> = uniform_mod_q(&mut prg, Q, vars * K)
+        .expect("q > 0")
+        .as_chunks::<K>()
+        .0
+        .iter()
+        .map(|c| Ext(*c))
+        .collect();
+    let run = || -> Result<(), String> {
+        let t = Instant::now();
+        let (com, state) = pcs.commit_multilinear(&coeffs).map_err(|e| e.to_string())?;
+        println!("commit  {:>10.2?}", t.elapsed());
+        let t = Instant::now();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &[0u8; 32])
+            .map_err(|e| e.to_string())?;
+        println!(
+            "prove   {:>10.2?}  ({} iterations)",
+            t.elapsed(),
+            proof.iterations.len()
+        );
+        let t = Instant::now();
+        pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
+            .map_err(|e| e.to_string())?;
+        println!("verify  {:>10.2?}", t.elapsed());
+        println!("proof   {} words", proof.to_words().len());
+        Ok(())
+    };
+    if let Err(e) = run() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
-
-    // verification
-    Hachi::verify(&params, &x, y, &com.u, &proof);
-
-    let graph = time_graph::get_full_graph();
-    println!("{}", graph.as_dot());    
 }

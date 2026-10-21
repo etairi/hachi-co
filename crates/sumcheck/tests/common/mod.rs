@@ -1,21 +1,110 @@
 //! Shared helpers of the integration tests: the fixture instances (inputs built as
 //! `docs/m1-spec.md` prescribes), the fixture transcripts, the parties run in lockstep with
-//! $\mathcal F\_{\mathsf{AH}}$ emulated by summing their inputs, the ideal PCS (the oracle's
-//! `IdealPCS`) and a stand-in for $\Pi\_{\mathsf{conv}}$'s check $y = E(u)$.
+//! $\mathcal F\_{\mathsf{AH}}$ emulated by summing their inputs, the base-PCS commitments and
+//! openings of `ClearPcs` attached to a transcript, the ideal PCS (the oracle's `IdealPCS`) and
+//! a stand-in for $\Pi\_{\mathsf{conv}}$'s check $y = E(u)$.
 #![allow(dead_code)]
 
+use hachi_co_core::base_pcs::mobius;
 use hachi_co_core::{
-    BlinderKind, Challenger, Context, Fixture, LinearShare, Matrix, PartyRandomness, Poly,
-    ReplayChallenger, ReplayRandomness, build_m, build_y, sha256_residues,
+    BasePcs, BlinderKind, Challenger, ClearPcs, Context, Fixture, LinearShare, Matrix,
+    PartyRandomness, Poly, ReplayChallenger, ReplayRandomness, build_m, build_y, sha256_residues,
 };
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sumcheck::{
-    Claim, ClaimedPoly, FinalClaims, FinalValues, PartyProver, RoundMessage, RoundValues,
-    SumcheckPrivate, SumcheckTranscript, eq_table, mstar_table, quotient_share, w_table,
+    Claim, ClaimedPoly, FinalClaims, FinalValues, PartyProver, PcsWords, RoundMessage, RoundValues,
+    SumcheckPrivate, SumcheckTranscript, blinder_coefficients, blinder_weights, eq_table,
+    mstar_table, opening_label, quotient_share, w_table,
 };
 use std::sync::OnceLock;
 
 pub const K: usize = 4;
+
+/// The reference base PCS of the tests.
+pub type Pcs = ClearPcs<K>;
+
+/// `ClearPcs` over the instance's field.
+pub fn clear_pcs(field: &Fqk<K>) -> Pcs {
+    ClearPcs::from_field(field)
+}
+
+/// The transcript without the base-PCS words: what the oracle records (`ref/README.md`,
+/// choice 13: no commitments and no openings).
+pub fn without_pcs(t: &SumcheckTranscript<K>) -> SumcheckTranscript<K> {
+    SumcheckTranscript {
+        commitments: PcsWords::default(),
+        openings: PcsWords::default(),
+        ..t.clone()
+    }
+}
+
+/// The `ClearPcs` commitments and openings of the parties' polynomials (from their private
+/// data: the table of $\langle \widetilde w \rangle\_p$, through the Möbius transform, and the
+/// blinders' coefficient vectors), opened at `point` under the contexts of `ch`
+/// (`opening_label`), set into `transcript`. This is the driver's step 3 and step 8 done
+/// independently, for transcripts built without the driver (the fixtures' and the lockstep
+/// runs'); the contexts of `ReplayChallenger` do not depend on the transcript.
+pub fn attach_openings<H: Challenger<K>>(
+    ctx: &Context<K>,
+    transcript: &mut SumcheckTranscript<K>,
+    privates: &[SumcheckPrivate<K>],
+    point: &[Ext<K>],
+    ch: &mut H,
+) {
+    let field = ctx.field();
+    let l = &ctx.layout;
+    let pcs = clear_pcs(field);
+    let mut commitments = PcsWords::default();
+    let mut openings = PcsWords::default();
+    for private in privates {
+        let mut coeffs = private.w_table.clone();
+        mobius(field.zq(), &mut coeffs).unwrap();
+        let (com_w, st_w) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (com_g0, st_g0) = pcs
+            .commit_vector(&blinder_coefficients(&private.g0))
+            .unwrap();
+        let (com_g1, st_g1) = pcs
+            .commit_vector(&blinder_coefficients(&private.g1))
+            .unwrap();
+        for (poly, com) in [
+            (ClaimedPoly::W, com_w),
+            (ClaimedPoly::G0, com_g0),
+            (ClaimedPoly::G1, com_g1),
+        ] {
+            commitments
+                .of_mut(poly)
+                .push(Pcs::commitment_to_words(&com));
+        }
+        for poly in [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1] {
+            let context = ch.context(&opening_label(private.party, poly));
+            let (_, proof) = match poly {
+                ClaimedPoly::W => pcs.prove_multilinear(&st_w, point, &context).unwrap(),
+                ClaimedPoly::G0 => pcs
+                    .prove_inner_product(&st_g0, &blinder_weights(field, point, l.d0), &context)
+                    .unwrap(),
+                ClaimedPoly::G1 => pcs
+                    .prove_inner_product(&st_g1, &blinder_weights(field, point, l.d1), &context)
+                    .unwrap(),
+            };
+            openings.of_mut(poly).push(Pcs::proof_to_words(&proof));
+        }
+    }
+    transcript.commitments = commitments;
+    transcript.openings = openings;
+}
+
+/// [`attach_openings`] with the replay challenger of the instance's fixture.
+pub fn with_replay_openings(
+    inst: &Instance,
+    transcript: &SumcheckTranscript<K>,
+    privates: &[SumcheckPrivate<K>],
+) -> SumcheckTranscript<K> {
+    let mut t = transcript.clone();
+    let point = inst.fx.exts::<K>("/sumcheck/coins/a").unwrap();
+    let mut ch = ReplayChallenger::new(&inst.fx).unwrap();
+    attach_openings(&inst.ctx, &mut t, privates, &point, &mut ch);
+    t
+}
 
 /// One fixture with the inputs of the sumcheck built from it.
 pub struct Instance {
@@ -103,7 +192,8 @@ pub fn instances() -> &'static [Instance] {
     CELL.get_or_init(|| Fixture::TOY.iter().map(|name| build(name)).collect())
 }
 
-/// The transcript recorded in a fixture (`sumcheck/G0`, `G1`, `rounds`, `final`).
+/// The transcript recorded in a fixture (`sumcheck/G0`, `G1`, `rounds`, `final`), without
+/// base-PCS words (the oracle does not model them).
 pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
     let rounds = fx
         .get("/sumcheck/rounds")
@@ -114,6 +204,7 @@ pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
     SumcheckTranscript {
         g0_sums: fx.exts("/sumcheck/G0").unwrap(),
         g1_sums: fx.exts("/sumcheck/G1").unwrap(),
+        commitments: PcsWords::default(),
         rounds: (0..rounds)
             .map(|r| RoundMessage {
                 h0: fx.exts(&format!("/sumcheck/rounds/{r}/H0")).unwrap(),
@@ -125,11 +216,13 @@ pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
             g0: fx.exts("/sumcheck/final/g0").unwrap(),
             g1: fx.exts("/sumcheck/final/g1").unwrap(),
         },
+        openings: PcsWords::default(),
     }
 }
 
 /// The result of the parties run in lockstep.
 pub struct Run {
+    /// The transcript, with the `ClearPcs` commitments and openings ([`attach_openings`]).
     pub transcript: SumcheckTranscript<K>,
     pub privates: Vec<SumcheckPrivate<K>>,
 }
@@ -137,7 +230,8 @@ pub struct Run {
 /// Runs the $n$ parties' [`PartyProver`]s in lockstep on `shares` (and, if given, the quotient
 /// shares `quotients` instead of the honest ones), with the fixture's recorded blinders
 /// (`ReplayRandomness`) and coins (`ReplayChallenger`), emulating $\mathcal F\_{\mathsf{AH}}$ by
-/// summing the parties' inputs.
+/// summing the parties' inputs; the parties' polynomials are committed and opened with
+/// `ClearPcs` under the replay challenger's contexts ([`attach_openings`]).
 pub fn run_parties(
     inst: &Instance,
     shares: &[LinearShare],
@@ -200,17 +294,19 @@ pub fn run_parties(
     }
     let finals: Vec<(Ext<K>, Ext<K>, Ext<K>)> =
         provers.iter().map(|p| p.final_values().unwrap()).collect();
-    let transcript = SumcheckTranscript {
+    let mut transcript = SumcheckTranscript {
         g0_sums,
         g1_sums,
+        commitments: PcsWords::default(),
         rounds,
         finals: FinalValues {
             w: finals.iter().map(|v| v.0).collect(),
             g0: finals.iter().map(|v| v.1).collect(),
             g1: finals.iter().map(|v| v.2).collect(),
         },
+        openings: PcsWords::default(),
     };
-    let privates = provers
+    let privates: Vec<SumcheckPrivate<K>> = provers
         .into_iter()
         .zip(quotient_list)
         .zip(values)
@@ -229,6 +325,9 @@ pub fn run_parties(
             }
         })
         .collect();
+    let point = privates[0].point.clone();
+    let mut ch = ReplayChallenger::new(&inst.fx).unwrap();
+    attach_openings(ctx, &mut transcript, &privates, &point, &mut ch);
     Run {
         transcript,
         privates,

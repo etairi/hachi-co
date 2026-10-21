@@ -544,8 +544,14 @@ impl Challenger<K> for BadChallenger {
     fn absorb_exts(&mut self, label: &'static str, exts: &[Ext<K>]) {
         self.inner.absorb_exts(label, exts);
     }
+    fn absorb_words(&mut self, label: &'static str, words: &[Vec<u64>]) {
+        Challenger::<K>::absorb_words(&mut self.inner, label, words);
+    }
     fn absorb_u64(&mut self, label: &'static str, value: u64) {
         Challenger::<K>::absorb_u64(&mut self.inner, label, value);
+    }
+    fn context(&mut self, label: &str) -> [u8; 32] {
+        Challenger::<K>::context(&mut self.inner, label)
     }
     fn begin_attempt(&mut self, attempt: u64) -> hachi_co_core::Result<()> {
         Challenger::<K>::begin_attempt(&mut self.inner, attempt)
