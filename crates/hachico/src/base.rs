@@ -12,25 +12,22 @@
 //! its own (the authors' answer 3 of 2026-10-21): only $q$ and $k$ are Hachi-Co's.
 //!
 //! **Parameters.** [`HachiBase::setup`] uses [`HachiChoices::toy`] at Hachi-Co's ring degree,
-//! which is **insecure** (test parameters, like the toy presets of Hachi-Co). An iteration of
-//! Hachi shrinks the witness only if the polynomial is large enough: at these choices and the
-//! moduli of the toy and development presets, from $2^{19}$ to $2^{21}$ coefficients (the
-//! threshold grows with $d$ and with the number of digits of $q$ in base $b$). The share
-//! polynomials of the toy presets and of `dev-l12` ($2^{15}$ to $2^{18}$ coefficients) are
-//! below it, and the blinders far below, so there the automatic schedule runs no iteration and
-//! an opening sends the committed polynomial in the clear; at `dev-l16` and `dev-l20` it runs
-//! four. [`HachiBase::new`] takes any choices, for example [`HachiChoices::fixed_iterations`] to
-//! run the iterations anyway.
+//! which is **insecure** (test parameters, like the toy presets of Hachi-Co). Each opening runs
+//! the number of iterations whose proof is smallest (`hachi::pcs`, "Schedule"): at the toy
+//! presets, two or three for the share polynomial and none for the blinders, whose proofs are
+//! smallest in the clear. [`HachiBase::new`] takes any choices, for example
+//! [`HachiChoices::fixed_iterations`] to fix the number of iterations.
 //!
 //! **Not hiding.** Hachi as implemented is not hiding: the last witness of every opening is
 //! sent in the clear, and with no iteration that is the committed polynomial itself.
 //!
-//! **Encodings.** Commitments and proofs travel as the words of [`Commitment::to_words`] and
-//! [`Proof::to_words`]. Their lengths depend only on the length of the committed polynomial or
-//! vector (through Hachi's layout and schedule), as [`BasePcs`] requires for the provers'
-//! all-gathers. The decoders accept malformed shapes (a wrong ring degree, a wrong number of
-//! iterations, …) and leave them to Hachi's verifier, which checks the shape of every component
-//! against the parameters before using it.
+//! **Encodings.** Commitments and proofs travel as the words of
+//! [`HachiPcs::commitment_to_words`] and [`HachiPcs::proof_to_words`]: packed, with
+//! $\lceil \log\_2 q \rceil$ bits per residue and $\lceil \log\_2 b \rceil$ bits per digit of a
+//! final witness. Their lengths depend only on the length of the committed polynomial or vector
+//! (through Hachi's layout and schedule), as [`BasePcs`] requires for the provers' all-gathers.
+//! The decoders check every length and value against the parameters and the header; Hachi's
+//! verifier checks the counts of the header (iterations, rounds) against the schedule.
 
 use crate::error::Error;
 use hachi::{Commitment, HachiChoices, HachiPcs, Proof, State};
@@ -46,7 +43,9 @@ use rand::Rng;
 pub const SETUP_DOMAIN_BASE_PCS: &[u8] = b"hachi-co/setup/base-pcs";
 
 /// The transcript domain of [`HachiBase`]'s parameter digest ([`BasePcs::params_digest`]).
-pub const HACHI_BASE_DIGEST_DOMAIN: &[u8] = b"hachi-co/base-pcs/hachi/v1";
+/// Version 2: Hachi's schedule minimises the proof's size and its encodings are packed
+/// ([`hachi::VERSION`]).
+pub const HACHI_BASE_DIGEST_DOMAIN: &[u8] = b"hachi-co/base-pcs/hachi/v2";
 
 /// The seed of Hachi's public matrices for Hachi-Co's setup seed `seed`: the first 32 bytes of
 /// the PRG stream of (`seed`, [`SETUP_DOMAIN_BASE_PCS`], 0).
@@ -141,8 +140,8 @@ impl<const K: usize> HachiBase<K> {
 }
 
 /// The parameter digest: the challenge seed of a transcript with the domain
-/// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice and the seed of the
-/// matrices.
+/// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice, Hachi's version
+/// ([`hachi::VERSION`]) and the seed of the matrices.
 fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
     let mut t = Transcript::new(HACHI_BASE_DIGEST_DOMAIN);
     let words: [(&[u8], u64); 11] = [
@@ -154,7 +153,7 @@ fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
         (b"n_A", c.n_a as u64),
         (b"n_B", c.n_b as u64),
         (b"n_D", c.n_d as u64),
-        (b"final_words", c.final_words as u64),
+        (b"version", hachi::VERSION),
         (b"max_iterations", c.max_iterations as u64),
         (
             b"fixed_iterations",
@@ -248,23 +247,23 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
         self.digest
     }
 
-    /// [`Commitment::to_words`].
-    fn commitment_to_words(com: &Commitment) -> Vec<u64> {
-        com.to_words()
+    /// [`HachiPcs::commitment_to_words`].
+    fn commitment_to_words(&self, com: &Commitment) -> Vec<u64> {
+        self.pcs.commitment_to_words(com)
     }
 
-    /// [`Commitment::from_words`].
-    fn commitment_from_words(words: &[u64]) -> hachi_co_core::Result<Commitment> {
-        Commitment::from_words(words).map_err(base_error)
+    /// [`HachiPcs::commitment_from_words`].
+    fn commitment_from_words(&self, words: &[u64]) -> hachi_co_core::Result<Commitment> {
+        self.pcs.commitment_from_words(words).map_err(base_error)
     }
 
-    /// [`Proof::to_words`].
-    fn proof_to_words(p: &Proof<K>) -> Vec<u64> {
-        p.to_words()
+    /// [`HachiPcs::proof_to_words`].
+    fn proof_to_words(&self, p: &Proof<K>) -> Vec<u64> {
+        self.pcs.proof_to_words(p)
     }
 
-    /// [`Proof::from_words`].
-    fn proof_from_words(words: &[u64]) -> hachi_co_core::Result<Proof<K>> {
-        Proof::from_words(words).map_err(base_error)
+    /// [`HachiPcs::proof_from_words`].
+    fn proof_from_words(&self, words: &[u64]) -> hachi_co_core::Result<Proof<K>> {
+        self.pcs.proof_from_words(words).map_err(base_error)
     }
 }

@@ -20,6 +20,30 @@
 //! sends the last witness in the clear (paper, Section 4.4): the verifier recomputes its
 //! commitment and checks the claim directly. No step hides anything: this is the non-hiding
 //! scheme (hiding comes with the Hwang-Seo-Song changes).
+//!
+//! **Schedule.** Unless [`HachiChoices::fixed_iterations`] fixes it, an opening runs the number
+//! of iterations, from 0 to [`HachiChoices::max_iterations`], whose proof has the fewest words
+//! (the fewer iterations on a tie; [`crate::params`], "How many iterations"). The prover and the
+//! verifier derive it from the size of the object and the parameters.
+//!
+//! **Encodings** ([`HachiPcs::commitment_to_words`], [`HachiPcs::proof_to_words`]). A header of
+//! plain 64-bit words, then fields packed least significant bit first into 64-bit words, the
+//! last word padded with zero bits. A residue takes $\lceil \log_2 q \rceil$ bits. After at
+//! least one iteration the final witness is a table of digits of base $b$ (its range was proved
+//! by the last iteration's sumcheck), sent as $\psi^{-1}$ of its ring elements, each digit as its
+//! index in the digit set: $\lceil \log_2 b \rceil$ bits. Without iterations the final witness
+//! is the input, sent as residues. The decoders know the parameters, so a header holds only
+//! what they do not fix:
+//! - commitment: `[VERSION]`, then the $n_B d$ coefficients of $\mathbf u$;
+//! - proof: `[VERSION, #partials, k, L_1, …, L_k, N]` for $k$ iterations of $L_i$ sumcheck
+//!   rounds and a final message of $N$ ring elements, then the partial evaluations, $Y$, per
+//!   iteration $\mathbf v$, $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$,
+//!   the $K$ partial evaluations and $p'$, and the final message.
+//!
+//! Every value has a single encoding: the decoders reject residues not below $q$, digit indices
+//! outside the digit set, non-zero padding, and any length other than the one the header and
+//! the parameters imply. The counts in a header are checked against the schedule by the
+//! verifier.
 
 use crate::commit::{Committed, Ctx, commit};
 use crate::error::VerifyError;
@@ -31,8 +55,11 @@ use crate::{Error, Result};
 use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
 
-/// The format version of [`Proof::to_words`] and [`Commitment::to_words`].
-pub const VERSION: u64 = 1;
+/// The version of the encodings ([`HachiPcs::commitment_to_words`],
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 2 since values are packed
+/// and the schedule minimises the proof's size (version 1 had a 64-bit word per value and
+/// stopped at the first iteration that did not shrink the witness).
+pub const VERSION: u64 = 2;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,57 +164,104 @@ impl<const K: usize> HachiPcs<K> {
         })
     }
 
-    /// The schedule of an opening of an object of layout `first`.
+    /// The schedule of an opening of a multilinear polynomial in `vars` variables (module
+    /// documentation, "Schedule").
     ///
     /// # Errors
-    /// [`Error::Parameter`] if an iteration cannot be parametrised.
-    pub fn schedule(&self, first: Layout) -> Result<Schedule> {
-        Schedule::derive(&self.ctx.choices, self.ctx.q, first)
+    /// As [`HachiPcs::multilinear_layout`]; [`Error::Parameter`] if the fixed number of
+    /// iterations cannot be parametrised.
+    pub fn multilinear_schedule(&self, vars: usize) -> Result<Schedule> {
+        self.schedule(self.multilinear_layout(vars)?, K)
     }
 
-    /// The number of words of [`Commitment::to_words`]: $3 + n_B d$.
+    /// The schedule of an inner-product opening of a vector of `len` elements (module
+    /// documentation, "Schedule").
+    ///
+    /// # Errors
+    /// As [`HachiPcs::vector_layout`]; [`Error::Parameter`] if the fixed number of iterations
+    /// cannot be parametrised.
+    pub fn vector_schedule(&self, len: usize) -> Result<Schedule> {
+        self.schedule(self.vector_layout(len)?, 0)
+    }
+
+    /// The schedule of an opening of a first witness of layout `first` whose proof carries
+    /// `partials` partial evaluations: [`HachiChoices::fixed_iterations`] iterations if set,
+    /// otherwise the candidate of [`Schedule::candidates`] whose proof has the fewest words, the
+    /// one with fewer iterations on a tie.
+    fn schedule(&self, first: Layout, partials: usize) -> Result<Schedule> {
+        let (c, q) = (&self.ctx.choices, self.ctx.q);
+        if let Some(n) = c.fixed_iterations {
+            return Schedule::fixed(c, q, first, n);
+        }
+        let mut best: Option<(usize, Schedule)> = None;
+        for schedule in Schedule::candidates(c, q, first) {
+            let words = self.proof_words(&schedule, partials);
+            if best.as_ref().is_none_or(|(least, _)| words < *least) {
+                best = Some((words, schedule));
+            }
+        }
+        best.map(|(_, s)| s)
+            .ok_or_else(|| Error::Parameter("no schedule to choose from".into()))
+    }
+
+    /// The bits of a residue in the encodings: $\lceil \log_2 q \rceil$.
+    fn residue_bits(&self) -> usize {
+        (u64::BITS - (self.ctx.q - 1).leading_zeros()) as usize
+    }
+
+    /// The bits of a digit of the final witness: $\lceil \log_2 b \rceil$ (the digit set has
+    /// $b$ elements).
+    fn digit_bits(&self) -> usize {
+        (u64::BITS - (self.ctx.choices.b - 1).leading_zeros()) as usize
+    }
+
+    /// The number of words of [`HachiPcs::commitment_to_words`]: the version, then $n_B d$
+    /// packed residues.
     pub fn commitment_words(&self) -> usize {
-        3 + self.ctx.choices.n_b * self.ctx.d()
+        1 + (self.ctx.choices.n_b * self.ctx.d() * self.residue_bits()).div_ceil(64)
     }
 
-    /// The number of words of [`Proof::to_words`] for an opening of a multilinear polynomial in
-    /// `vars` variables. It depends only on `vars` and the parameters.
+    /// The number of words of [`HachiPcs::proof_to_words`] for an opening of a multilinear
+    /// polynomial in `vars` variables. It depends only on `vars` and the parameters.
     ///
     /// # Errors
-    /// As [`HachiPcs::multilinear_layout`] and [`HachiPcs::schedule`].
+    /// As [`HachiPcs::multilinear_schedule`].
     pub fn multilinear_proof_words(&self, vars: usize) -> Result<usize> {
-        self.proof_words(self.multilinear_layout(vars)?, K)
+        Ok(self.proof_words(&self.multilinear_schedule(vars)?, K))
     }
 
-    /// The number of words of [`Proof::to_words`] for an inner-product opening of a vector of
-    /// `len` elements. It depends only on `len` and the parameters.
+    /// The number of words of [`HachiPcs::proof_to_words`] for an inner-product opening of a
+    /// vector of `len` elements. It depends only on `len` and the parameters.
     ///
     /// # Errors
-    /// As [`HachiPcs::vector_layout`] and [`HachiPcs::schedule`].
+    /// As [`HachiPcs::vector_schedule`].
     pub fn vector_proof_words(&self, len: usize) -> Result<usize> {
-        self.proof_words(self.vector_layout(len)?, 0)
+        Ok(self.proof_words(&self.vector_schedule(len)?, 0))
     }
 
-    /// The words of [`Proof::to_words`] for a first witness of layout `first` and `partials`
-    /// partial evaluations: the version and $d$ (2), the partial evaluations ($1 + K \cdot$
-    /// `partials`), $Y$ ($d$), the number of iterations (1), per iteration $\mathbf v$
-    /// ($1 + n_D d$), $\mathbf u'$ ($1 + n_B d$), the rounds ($1 + L (2 + K (b + 2) + 3K)$, with
-    /// $b + 2$ values of $H_0$ for the $b$ digits and 3 of $H_\alpha$), $y'$ ($K$), the partial
-    /// evaluations ($1 + K^2$) and $p'$ ($d$), and the final message ($1 + 2^{r+m} d$).
-    fn proof_words(&self, first: Layout, partials: usize) -> Result<usize> {
+    /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and `partials`
+    /// partial evaluations (module documentation, "Encodings"): the header ($4 + k$ words for
+    /// $k$ iterations), then $\lceil \log_2 q \rceil$ bits per residue: the partial evaluations
+    /// ($K$ residues each), $Y$ ($d$), per iteration $\mathbf v$ ($n_D d$), $\mathbf u'$
+    /// ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field elements), $y'$ ($K$), the
+    /// partial evaluations ($K^2$) and $p'$ ($d$); and the final message, $2^{r+m} d$ residues
+    /// without iterations, else as many digits of $\lceil \log_2 b \rceil$ bits.
+    fn proof_words(&self, schedule: &Schedule, partials: usize) -> usize {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
-        let schedule = self.schedule(first)?;
-        let (lo, hi) = digit_range(c.b);
-        let digits = usize::try_from(hi - lo + 1)
-            .map_err(|_| Error::Parameter("the digit set is empty".into()))?;
-        let round = (1 + K * (digits + 2)) + (1 + K * 3);
-        let mut words = 2 + (1 + K * partials) + d + 1;
+        let round = K * (c.b as usize + 2 + 3);
+        let mut residues = K * partials + d;
         for it in &schedule.iterations {
-            words += (1 + c.n_d * d) + (1 + c.n_b * d) + (1 + it.table_vars * round);
-            words += K + (1 + K * K) + d;
+            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K + K * K + d;
         }
         let last = schedule.final_layout;
-        Ok(words + 1 + last.chunks() * last.chunk_len() * d)
+        let entries = last.chunks() * last.chunk_len() * d;
+        let entry_bits = if schedule.iterations.is_empty() {
+            self.residue_bits()
+        } else {
+            self.digit_bits()
+        };
+        let bits = residues * self.residue_bits() + entries * entry_bits;
+        4 + schedule.iterations.len() + bits.div_ceil(64)
     }
 
     /// Commits to the multilinear polynomial with monomial coefficients `coeffs` ($2^\ell$
@@ -300,7 +374,6 @@ impl<const K: usize> HachiPcs<K> {
             c.n_a as u64,
             c.n_b as u64,
             c.n_d as u64,
-            c.final_words as u64,
             c.max_iterations as u64,
             c.fixed_iterations.map_or(u64::MAX, |n| n as u64),
         ];
@@ -376,15 +449,17 @@ impl<const K: usize> HachiPcs<K> {
             .collect()
     }
 
-    /// Runs the iterations and the final step for the prover.
+    /// Runs the iterations and the final step for the prover; `partials` is the number of
+    /// partial evaluations the proof carries (it enters the choice of the schedule).
     fn prove_rest(
         &self,
         layout: Layout,
+        partials: usize,
         committed: &Committed,
         claim: Claim,
         fs: &mut Fs,
     ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
-        let schedule = self.schedule(layout)?;
+        let schedule = self.schedule(layout, partials)?;
         let mut witness = committed.clone();
         let mut claim = claim;
         let mut proofs = Vec::with_capacity(schedule.iterations.len());
@@ -461,7 +536,7 @@ impl<const K: usize> HachiPcs<K> {
         fs.exts(LABEL_PARTIALS, &partials);
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
         let (iterations, final_message) =
-            self.prove_rest(layout, &state.committed, claim, &mut fs)?;
+            self.prove_rest(layout, K, &state.committed, claim, &mut fs)?;
         Ok((
             value,
             Proof {
@@ -528,7 +603,7 @@ impl<const K: usize> HachiPcs<K> {
             target: ring_value.clone(),
         };
         let (iterations, final_message) =
-            self.prove_rest(layout, &state.committed, claim, &mut fs)?;
+            self.prove_rest(layout, 0, &state.committed, claim, &mut fs)?;
         Ok((
             value,
             Proof {
@@ -540,17 +615,19 @@ impl<const K: usize> HachiPcs<K> {
         ))
     }
 
-    /// Runs the iterations' verifiers and the final step.
+    /// Runs the iterations' verifiers and the final step; `partials` as for
+    /// [`HachiPcs::prove_rest`].
     fn verify_rest(
         &self,
         layout: Layout,
+        partials: usize,
         commitment: &[Poly],
         claim: Claim,
         proof: &Proof<K>,
         fs: &mut Fs,
     ) -> core::result::Result<(), VerifyError> {
         let ctx = &self.ctx;
-        let schedule = self.schedule(layout)?;
+        let schedule = self.schedule(layout, partials)?;
         if proof.iterations.len() != schedule.iterations.len() {
             return Err(VerifyError::Malformed(format!(
                 "{} iterations, {} expected",
@@ -649,7 +726,7 @@ impl<const K: usize> HachiPcs<K> {
         let mut fs = self.statement(context, 1, vars, &commitment.u, point, value);
         fs.exts(LABEL_PARTIALS, &proof.partials);
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
-        self.verify_rest(layout, &commitment.u, claim, proof, &mut fs)
+        self.verify_rest(layout, K, &commitment.u, claim, proof, &mut fs)
     }
 
     /// Verifies an inner-product opening: $\langle \mathbf s, \mathbf e \rangle = $ `value` for
@@ -693,178 +770,438 @@ impl<const K: usize> HachiPcs<K> {
             a: self.vector_weights(&layout, weights)?,
             target: proof.ring_value.clone(),
         };
-        self.verify_rest(layout, &commitment.u, claim, proof, &mut fs)
+        self.verify_rest(layout, 0, &commitment.u, claim, proof, &mut fs)
     }
 }
 
 // ------------------------------------------------------------------------------- encodings ----
 
-/// A reader of words that never panics.
-struct Reader<'a> {
-    words: &'a [u64],
-    at: usize,
+/// Fields packed least significant bit first into 64-bit words (module documentation,
+/// "Encodings").
+#[derive(Default)]
+struct BitWriter {
+    words: Vec<u64>,
+    bits: usize,
 }
 
-impl Reader<'_> {
-    fn word(&mut self) -> Result<u64> {
-        let w = *self
-            .words
-            .get(self.at)
-            .ok_or_else(|| Error::Shape("the encoding ends early".into()))?;
-        self.at += 1;
-        Ok(w)
-    }
-
-    fn len(&mut self, max: usize) -> Result<usize> {
-        let n = usize::try_from(self.word()?).unwrap_or(usize::MAX);
-        if n > max || n > self.words.len() {
-            return Err(Error::Shape("a length in the encoding is too large".into()));
+impl BitWriter {
+    /// Appends the low `width` bits of `value` (`width` $\le 64$; 0 appends nothing).
+    fn push(&mut self, value: u64, width: usize) {
+        if width == 0 {
+            return;
         }
-        Ok(n)
+        let value = if width >= 64 {
+            value
+        } else {
+            value & ((1u64 << width) - 1)
+        };
+        let at = self.bits % 64;
+        match self.words.last_mut() {
+            Some(last) if at != 0 => {
+                *last |= value << at;
+                if at + width > 64 {
+                    self.words.push(value >> (64 - at));
+                }
+            }
+            _ => self.words.push(value),
+        }
+        self.bits += width;
+    }
+}
+
+/// A reader of the fields of [`BitWriter`] that never panics.
+struct BitReader<'a> {
+    words: &'a [u64],
+    bit: usize,
+}
+
+impl BitReader<'_> {
+    /// The next field of `width` bits (`width` $\le 64$).
+    fn take(&mut self, width: usize) -> Result<u64> {
+        if width == 0 {
+            return Ok(0);
+        }
+        let end = self
+            .bit
+            .checked_add(width)
+            .filter(|end| *end <= self.words.len().saturating_mul(64))
+            .ok_or_else(|| Error::Shape("the encoding ends early".into()))?;
+        let (i, at) = (self.bit / 64, self.bit % 64);
+        let mut value = self.words.get(i).copied().unwrap_or(0) >> at;
+        if at + width > 64 {
+            value |= self.words.get(i + 1).copied().unwrap_or(0) << (64 - at);
+        }
+        self.bit = end;
+        Ok(if width >= 64 {
+            value
+        } else {
+            value & ((1u64 << width) - 1)
+        })
     }
 
-    fn polys(&mut self, d: usize) -> Result<Vec<Poly>> {
-        let n = self.len(self.words.len() / d.max(1) + 1)?;
-        (0..n).map(|_| self.poly(d)).collect()
+    /// Checks that the fields fill the words exactly, up to zero padding in the last word.
+    fn finish(&self) -> Result<()> {
+        if self.bit.div_ceil(64) != self.words.len() {
+            return Err(Error::Shape("trailing words after the encoding".into()));
+        }
+        let at = self.bit % 64;
+        if at != 0 && self.words.last().is_some_and(|w| w >> at != 0) {
+            return Err(Error::Shape("non-zero padding bits".into()));
+        }
+        Ok(())
+    }
+}
+
+impl<const K: usize> HachiPcs<K> {
+    /// Appends the coefficients of `polys` as residues.
+    fn put_polys(&self, w: &mut BitWriter, polys: &[Poly]) {
+        for x in polys.iter().flat_map(|p| &p.0) {
+            w.push(*x, self.residue_bits());
+        }
     }
 
-    fn poly(&mut self, d: usize) -> Result<Poly> {
-        let end = self.at.checked_add(d).filter(|e| *e <= self.words.len());
-        let end = end.ok_or_else(|| Error::Shape("the encoding ends early".into()))?;
-        let p = Poly(self.words[self.at..end].to_vec());
-        self.at = end;
-        Ok(p)
+    /// Appends the coordinates of `exts` as residues.
+    fn put_exts(&self, w: &mut BitWriter, exts: &[Ext<K>]) {
+        for x in exts.iter().flat_map(|e| e.0) {
+            w.push(x, self.residue_bits());
+        }
     }
 
-    fn exts<const K: usize>(&mut self) -> Result<Vec<Ext<K>>> {
-        let n = self.len(self.words.len() / K + 1)?;
-        (0..n).map(|_| self.ext()).collect()
+    /// The next residue.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] if the encoding ends or the residue is not below $q$.
+    fn take_residue(&self, r: &mut BitReader<'_>) -> Result<u64> {
+        let x = r.take(self.residue_bits())?;
+        if x >= self.ctx.q {
+            return Err(Error::Shape("a residue is not below q".into()));
+        }
+        Ok(x)
     }
 
-    fn ext<const K: usize>(&mut self) -> Result<Ext<K>> {
+    /// The next ring element, as $d$ residues.
+    fn take_poly(&self, r: &mut BitReader<'_>) -> Result<Poly> {
+        (0..self.ctx.d())
+            .map(|_| self.take_residue(r))
+            .collect::<Result<Vec<_>>>()
+            .map(Poly)
+    }
+
+    /// The next `count` ring elements.
+    fn take_polys(&self, r: &mut BitReader<'_>, count: usize) -> Result<Vec<Poly>> {
+        (0..count).map(|_| self.take_poly(r)).collect()
+    }
+
+    /// The next field element, as $K$ residues.
+    fn take_ext(&self, r: &mut BitReader<'_>) -> Result<Ext<K>> {
         let mut e = Ext([0u64; K]);
         for x in &mut e.0 {
-            *x = self.word()?;
+            *x = self.take_residue(r)?;
         }
         Ok(e)
     }
-}
 
-fn push_polys(out: &mut Vec<u64>, polys: &[Poly]) {
-    out.push(polys.len() as u64);
-    for p in polys {
-        out.extend_from_slice(&p.0);
+    /// The next `count` field elements.
+    fn take_exts(&self, r: &mut BitReader<'_>, count: usize) -> Result<Vec<Ext<K>>> {
+        (0..count).map(|_| self.take_ext(r)).collect()
     }
-}
 
-fn push_exts<const K: usize>(out: &mut Vec<u64>, exts: &[Ext<K>]) {
-    out.push(exts.len() as u64);
-    for e in exts {
-        out.extend_from_slice(&e.0);
-    }
-}
-
-impl Commitment {
-    /// `[VERSION, n_B, d, coefficients…]`.
-    pub fn to_words(&self) -> Vec<u64> {
-        let d = self.u.first().map_or(0, |p| p.0.len());
-        let mut out = vec![VERSION, self.u.len() as u64, d as u64];
-        for p in &self.u {
-            out.extend_from_slice(&p.0);
+    /// The next ring element of a final witness sent as digits: $d$ indices into the digit set,
+    /// the table that $\psi$ packs into the ring element.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] if the encoding ends or an index is outside the digit set.
+    fn take_digit_poly(&self, r: &mut BitReader<'_>) -> Result<Poly> {
+        let (zq, b) = (self.ctx.ring.zq(), self.ctx.choices.b);
+        let (lo, _) = digit_range(b);
+        let mut table = vec![Ext([0u64; K]); self.ctx.d_over_k()];
+        for x in table.iter_mut().flat_map(|e| e.0.iter_mut()) {
+            let index = r.take(self.digit_bits())?;
+            if index >= b {
+                return Err(Error::Shape("a digit index outside the digit set".into()));
+            }
+            *x = zq.from_i128(lo + i128::from(index));
         }
+        Ok(self.ctx.sub.psi(&table)?)
+    }
+
+    /// The encoding of a commitment: `[VERSION]`, then the $n_B d$ coefficients of
+    /// $\mathbf u$ packed (module documentation, "Encodings"); [`HachiPcs::commitment_words`]
+    /// words.
+    pub fn commitment_to_words(&self, com: &Commitment) -> Vec<u64> {
+        let mut w = BitWriter::default();
+        self.put_polys(&mut w, &com.u);
+        let mut out = vec![VERSION];
+        out.extend(w.words);
         out
     }
 
-    /// The inverse of [`Commitment::to_words`]; the shape is checked by the verifier.
+    /// The inverse of [`HachiPcs::commitment_to_words`].
     ///
     /// # Errors
-    /// [`Error::Shape`] for a malformed encoding.
-    pub fn from_words(words: &[u64]) -> Result<Self> {
-        let mut r = Reader { words, at: 0 };
-        if r.word()? != VERSION {
+    /// [`Error::Shape`] for any input that [`HachiPcs::commitment_to_words`] does not produce
+    /// from a commitment of $n_B$ ring elements: another version or length, a residue not below
+    /// $q$, or non-zero padding.
+    pub fn commitment_from_words(&self, words: &[u64]) -> Result<Commitment> {
+        let Some((&version, stream)) = words.split_first() else {
+            return Err(Error::Shape("the encoding ends early".into()));
+        };
+        if version != VERSION {
             return Err(Error::Shape("unknown commitment version".into()));
         }
-        let n = r.len(words.len())?;
-        let d = r.len(words.len())?;
-        let u = (0..n).map(|_| r.poly(d)).collect::<Result<Vec<_>>>()?;
-        if r.at != words.len() {
-            return Err(Error::Shape("trailing words after the commitment".into()));
+        if self.commitment_words() != words.len() {
+            return Err(Error::Shape(format!(
+                "a commitment has {} words",
+                self.commitment_words()
+            )));
         }
-        Ok(Self { u })
+        let mut r = BitReader {
+            words: stream,
+            bit: 0,
+        };
+        let u = self.take_polys(&mut r, self.ctx.choices.n_b)?;
+        r.finish()?;
+        Ok(Commitment { u })
     }
-}
 
-impl<const K: usize> Proof<K> {
-    /// A canonical encoding: version, $d$, the partial evaluations, $Y$, every iteration (its
-    /// $\mathbf v$, $\mathbf u'$, rounds, final value, partial evaluations and $p'$), and the
-    /// final message, every list length-prefixed.
-    pub fn to_words(&self) -> Vec<u64> {
-        let d = self.ring_value.0.len();
-        let mut out = vec![VERSION, d as u64];
-        push_exts(&mut out, &self.partials);
-        out.extend_from_slice(&self.ring_value.0);
-        out.push(self.iterations.len() as u64);
-        for it in &self.iterations {
-            push_polys(&mut out, &it.v);
-            push_polys(&mut out, &it.next_commitment);
-            out.push(it.rounds.len() as u64);
+    /// The canonical encoding of a proof made by this scheme's prover (module documentation,
+    /// "Encodings"). For any other value it returns some words without panicking, but the
+    /// decoder need not give the value back: values are cut to their fields, and a final witness
+    /// that is not a table of digits is not kept.
+    pub fn proof_to_words(&self, proof: &Proof<K>) -> Vec<u64> {
+        let mut out = vec![
+            VERSION,
+            proof.partials.len() as u64,
+            proof.iterations.len() as u64,
+        ];
+        out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
+        out.push(proof.final_message.len() as u64);
+        let mut w = BitWriter::default();
+        self.put_exts(&mut w, &proof.partials);
+        self.put_polys(&mut w, core::slice::from_ref(&proof.ring_value));
+        for it in &proof.iterations {
+            self.put_polys(&mut w, &it.v);
+            self.put_polys(&mut w, &it.next_commitment);
             for round in &it.rounds {
-                push_exts(&mut out, &round.h0);
-                push_exts(&mut out, &round.h_alpha);
+                self.put_exts(&mut w, &round.h0);
+                self.put_exts(&mut w, &round.h_alpha);
             }
-            out.extend_from_slice(&it.final_eval.0);
-            push_exts(&mut out, &it.partials);
-            out.extend_from_slice(&it.next_target.0);
+            self.put_exts(&mut w, core::slice::from_ref(&it.final_eval));
+            self.put_exts(&mut w, &it.partials);
+            self.put_polys(&mut w, core::slice::from_ref(&it.next_target));
         }
-        push_polys(&mut out, &self.final_message);
+        if proof.iterations.is_empty() {
+            self.put_polys(&mut w, &proof.final_message);
+        } else {
+            let zq = self.ctx.ring.zq();
+            let (lo, _) = digit_range(self.ctx.choices.b);
+            let blank = vec![Ext([0u64; K]); self.ctx.d_over_k()];
+            for p in &proof.final_message {
+                let table = self.ctx.sub.psi_inv(p).unwrap_or_else(|_| blank.clone());
+                for x in table.iter().flat_map(|e| e.0) {
+                    let index = i128::from(zq.to_centered(x)) - lo;
+                    w.push(index as u64, self.digit_bits());
+                }
+            }
+        }
+        out.extend(w.words);
         out
     }
 
-    /// The inverse of [`Proof::to_words`]; shapes are checked by the verifier.
+    /// The inverse of [`HachiPcs::proof_to_words`]. The counts of the header (iterations,
+    /// rounds, final ring elements) are checked against the schedule by the verifier.
     ///
     /// # Errors
-    /// [`Error::Shape`] for a malformed encoding.
-    pub fn from_words(words: &[u64]) -> Result<Self> {
-        let mut r = Reader { words, at: 0 };
-        if r.word()? != VERSION {
-            return Err(Error::Shape("unknown proof version".into()));
+    /// [`Error::Shape`] for any input that [`HachiPcs::proof_to_words`] does not produce from a
+    /// proof of this scheme's shape: another version, a number of partial evaluations other
+    /// than 0 and $K$, a length other than the one the header implies, a residue not below
+    /// $q$, a digit index outside the digit set, or non-zero padding.
+    pub fn proof_from_words(&self, words: &[u64]) -> Result<Proof<K>> {
+        let shape = |what: &str| Error::Shape(what.into());
+        let [version, partials, count, rest @ ..] = words else {
+            return Err(shape("the encoding ends early"));
+        };
+        if *version != VERSION {
+            return Err(shape("unknown proof version"));
         }
-        let d = r.len(words.len())?;
-        let partials = r.exts()?;
-        let ring_value = r.poly(d)?;
-        let count = r.len(words.len())?;
+        let partials = match *partials {
+            0 => 0,
+            p if p == K as u64 => K,
+            _ => return Err(shape("a proof has 0 or K partial evaluations")),
+        };
+        // The header: k round counts and the final count.
+        let count = usize::try_from(*count)
+            .ok()
+            .filter(|k| *k < rest.len())
+            .ok_or_else(|| shape("the encoding ends early"))?;
+        let (round_counts, rest) = rest.split_at(count);
+        let Some((&final_count, stream)) = rest.split_first() else {
+            return Err(shape("the encoding ends early"));
+        };
+        let too_large = || shape("a count in the header is too large");
+        let round_counts = round_counts
+            .iter()
+            .map(|l| usize::try_from(*l).map_err(|_| too_large()))
+            .collect::<Result<Vec<_>>>()?;
+        let final_count = usize::try_from(final_count).map_err(|_| too_large())?;
+        // The length the header implies, checked before anything is allocated.
+        let (d, c) = (self.ctx.d(), &self.ctx.choices);
+        let round = K * (c.b as usize + 2 + 3);
+        let fixed = (c.n_d + c.n_b) * d + K + K * K + d;
+        let mut residues = Some(K * partials + d);
+        for l in &round_counts {
+            residues =
+                residues.and_then(|r| l.checked_mul(round)?.checked_add(fixed)?.checked_add(r));
+        }
+        let entry_bits = if count == 0 {
+            self.residue_bits()
+        } else {
+            self.digit_bits()
+        };
+        let bits = residues
+            .and_then(|r| r.checked_mul(self.residue_bits()))
+            .and_then(|b| {
+                final_count
+                    .checked_mul(d)?
+                    .checked_mul(entry_bits)?
+                    .checked_add(b)
+            })
+            .ok_or_else(too_large)?;
+        if bits.div_ceil(64) != stream.len() {
+            return Err(shape("the length does not match the header"));
+        }
+        let mut r = BitReader {
+            words: stream,
+            bit: 0,
+        };
+        let partials = self.take_exts(&mut r, partials)?;
+        let ring_value = self.take_poly(&mut r)?;
         let mut iterations = Vec::with_capacity(count);
-        for _ in 0..count {
-            let v = r.polys(d)?;
-            let next_commitment = r.polys(d)?;
-            let rounds_n = r.len(words.len())?;
-            let mut rounds = Vec::with_capacity(rounds_n);
-            for _ in 0..rounds_n {
-                let h0 = r.exts()?;
-                let h_alpha = r.exts()?;
-                rounds.push(RoundMessage { h0, h_alpha });
-            }
-            let final_eval = r.ext()?;
-            let it_partials = r.exts()?;
-            let next_target = r.poly(d)?;
+        for l in round_counts {
+            let v = self.take_polys(&mut r, c.n_d)?;
+            let next_commitment = self.take_polys(&mut r, c.n_b)?;
+            let rounds = (0..l)
+                .map(|_| {
+                    Ok(RoundMessage {
+                        h0: self.take_exts(&mut r, c.b as usize + 2)?,
+                        h_alpha: self.take_exts(&mut r, 3)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             iterations.push(IterationProof {
                 v,
                 next_commitment,
                 rounds,
-                final_eval,
-                partials: it_partials,
-                next_target,
+                final_eval: self.take_ext(&mut r)?,
+                partials: self.take_exts(&mut r, K)?,
+                next_target: self.take_poly(&mut r)?,
             });
         }
-        let final_message = r.polys(d)?;
-        if r.at != words.len() {
-            return Err(Error::Shape("trailing words after the proof".into()));
-        }
-        Ok(Self {
+        let final_message = if count == 0 {
+            self.take_polys(&mut r, final_count)?
+        } else {
+            (0..final_count)
+                .map(|_| self.take_digit_poly(&mut r))
+                .collect::<Result<Vec<_>>>()?
+        };
+        r.finish()?;
+        Ok(Proof {
             partials,
             ring_value,
             iterations,
             final_message,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BitReader, BitWriter};
+
+    /// The low `width` bits.
+    fn low(value: u64, width: usize) -> u64 {
+        if width >= 64 {
+            value
+        } else {
+            value & ((1u64 << width) - 1)
+        }
+    }
+
+    #[test]
+    fn fields_of_every_width_round_trip() {
+        // 4000 fields of widths 0 to 64 in a pseudorandom order, so that every offset in a
+        // word meets every width.
+        let mut state = 0x5eed_u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state ^ (state >> 29)
+        };
+        let fields: Vec<(u64, usize)> = (0..4000)
+            .map(|_| {
+                let width = (next() % 65) as usize;
+                (next(), width)
+            })
+            .collect();
+        let mut w = BitWriter::default();
+        for (value, width) in &fields {
+            w.push(*value, *width);
+        }
+        let total: usize = fields.iter().map(|(_, width)| width).sum();
+        assert_eq!(w.words.len(), total.div_ceil(64));
+        let mut r = BitReader {
+            words: &w.words,
+            bit: 0,
+        };
+        for (value, width) in &fields {
+            assert_eq!(
+                r.take(*width).unwrap(),
+                low(*value, *width),
+                "width {width}"
+            );
+        }
+        r.finish().unwrap();
+        let mut end = BitReader {
+            words: &w.words,
+            bit: 64 * w.words.len(),
+        };
+        assert!(end.take(1).is_err());
+        assert_eq!(end.take(0).unwrap(), 0);
+    }
+
+    #[test]
+    fn values_are_cut_and_padding_and_trailing_words_are_refused() {
+        let mut w = BitWriter::default();
+        w.push(u64::MAX, 3);
+        w.push(0, 61);
+        assert_eq!(w.words, vec![7]);
+        w.push(u64::MAX, 64);
+        assert_eq!(w.words, vec![7, u64::MAX]);
+        // A field across two words.
+        let mut w = BitWriter::default();
+        w.push(0, 60);
+        w.push(0b1_0110_1011, 9);
+        assert_eq!(w.words, vec![0b1011 << 60, 0b1_0110]);
+        let mut r = BitReader {
+            words: &w.words,
+            bit: 60,
+        };
+        assert_eq!(r.take(9).unwrap(), 0b1_0110_1011);
+        r.finish().unwrap();
+        // Padding bits must be zero, and no word may be left over.
+        let mut r = BitReader {
+            words: &[1 << 63],
+            bit: 0,
+        };
+        r.take(3).unwrap();
+        assert!(r.finish().is_err());
+        let r = BitReader {
+            words: &[0, 0],
+            bit: 64,
+        };
+        assert!(r.finish().is_err());
+        let r = BitReader { words: &[], bit: 0 };
+        r.finish().unwrap();
     }
 }

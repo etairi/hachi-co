@@ -10,7 +10,7 @@ base PCS of Hachi-Co.
 
 | Crate | Package | Contents |
 |---|---|---|
-| `crates/hachi` | `hachi` | Hachi, the base PCS: inner-outer commitments to multilinear polynomials over $\mathbb Z_q$ and to vectors over $\mathbb F_{q^k}$, openings at points in $\mathbb F_{q^k}$ (multilinear evaluations and inner products with public weights), the recursive iterations of the paper with the final witness in the clear, and Fiat–Shamir. Not hiding yet. |
+| `crates/hachi` | `hachi` | Hachi, the base PCS: inner-outer commitments to multilinear polynomials over $\mathbb Z_q$ and to vectors over $\mathbb F_{q^k}$, openings at points in $\mathbb F_{q^k}$ (multilinear evaluations and inner products with public weights), the recursive iterations of the paper with the final witness in the clear (as many as give the smallest proof), Fiat–Shamir, and packed encodings ($\lceil \log_2 q \rceil$ bits per residue, $\lceil \log_2 b \rceil$ per digit of the final witness). Not hiding yet. |
 | `crates/math` | `hachi-co-math` | Arithmetic for a modulus chosen at run time: $\mathbb Z_q$, exact products in $\mathbf R_q = \mathbb Z_q[X]/(X^d+1)$, gadget decompositions, $\mathbb F_{q^k}$ in Hachi's subfield basis, $\mathbf R_q^H$, the trace, $\psi$ and $E$. |
 | `crates/sampling` | `hachi-co-sampling` | SHAKE-based PRG, exact uniform and short samplers, $\ell_1$-ball challenges, matrices from seeds, uniform rejection sampling. |
 | `crates/transcript` | `hachi-co-transcript` | Framed, domain-separated Fiat–Shamir transcript with an attempt counter. |
@@ -42,8 +42,8 @@ cargo run --release -p hachi -- <l> [d] [iterations]
 
 It commits to a random multilinear polynomial in $\ell$ variables over $\mathbb Z_q$, $q = 2^{32} - 99$, proves
 and verifies its evaluation at a random point of $\mathbb F_{q^4}$, and prints the timings and the proof size.
-`d` is the ring degree (default 64) and `iterations` fixes the number of iterations (default: the automatic
-rule). The parameters are insecure test choices.
+`d` is the ring degree (default 64) and `iterations` fixes the number of iterations (default: the number whose
+proof is smallest). The parameters are insecure test choices.
 
 ## Documentation
 

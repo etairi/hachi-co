@@ -25,6 +25,11 @@
 //!   - the last witness is sent in the clear.
 //! - **Fiat-Shamir** on a framed transcript that absorbs the parameters, the commitment, the
 //!   point and the value, starting from a caller-supplied context.
+//! - **The number of iterations** that gives the smallest proof, unless fixed by the choices
+//!   (`pcs`, "Schedule").
+//! - **Packed encodings**: $\lceil \log_2 q \rceil$ bits per residue and $\lceil \log_2 b
+//!   \rceil$ bits per digit of the final witness, with exact word counts (`pcs`,
+//!   "Encodings").
 //!
 //! **Not implemented:**
 //! - **Hiding.** The scheme is not hiding (paper, 4_P:333 of the Hachi-Co draft); the
@@ -56,4 +61,4 @@ pub mod sumcheck;
 
 pub use error::{Error, Result, VerifyError};
 pub use params::{HachiChoices, Layout, Schedule};
-pub use pcs::{Commitment, HachiPcs, Proof, State};
+pub use pcs::{Commitment, HachiPcs, Proof, State, VERSION};

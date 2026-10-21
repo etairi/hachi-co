@@ -1,14 +1,15 @@
 //! Hachi-Co with Hachi as the base PCS (`HachiBase`), with Fiat-Shamir, over the in-memory
 //! network of `hachi-co-mpc`:
 //!
-//! - honest runs at every toy preset (n = 1, 2, 3, 4, 8) with Hachi's automatic schedule, which
-//!   runs no iteration on polynomials this small, and at n = 1, 2 with one iteration per opening:
-//!   every party has the same proof, the verifier accepts it, the claims it checked are the
-//!   parties' polynomials, every base-PCS item has the size of `HachiBase::words`, every opening
-//!   has the schedule's iterations, and the encoding has the size of the formula;
+//! - honest runs at every toy preset (n = 1, 2, 3, 4, 8) with Hachi's automatic schedule (per
+//!   polynomial, the number of iterations whose proof is smallest), and at n = 1, 2 with one
+//!   iteration per opening: every party has the same proof, the verifier accepts it, the claims
+//!   it checked are the parties' polynomials, every base-PCS item has the size of
+//!   `HachiBase::words`, every opening has the iterations of Hachi's schedule, and the encoding
+//!   has the size of the formula;
 //! - the proof is bound to the base PCS: it is rejected under `ClearPcs`, under Hachi from
-//!   another seed, and under Hachi with other choices but the same schedule (the parameter digest
-//!   is part of the statement);
+//!   another seed, and under Hachi with other choices but the same schedules (the parameter
+//!   digest is part of the statement);
 //! - tampered base-PCS items are rejected: changed, truncated or extended words of every
 //!   commitment and every opening, openings or commitments swapped between parties, and an
 //!   opening of the right polynomial made under another context;
@@ -24,11 +25,11 @@ mod common;
 use common::net::run_parties;
 use common::{
     K, additive_shares, assert_claims_match, clear_pcs, fresh_context, hachi_base, random_instance,
-    seed,
+    seed, setup_seed,
 };
 use hachi_co::{
-    BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalOutput, EvalProof, HachiBase, PcsWords,
-    VerifyError, commit, encoded_len, eval_with, verify, verify_claims_with,
+    BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalOutput, EvalProof, HachiBase, HachiChoices,
+    PcsWords, VerifyError, commit, encoded_len, eval_with, verify, verify_claims_with,
 };
 use hachi_co_core::base_pcs::mobius;
 use hachi_co_core::{Ext, FsChallenger, Poly, PrgRandomness};
@@ -97,9 +98,22 @@ fn run(name: &str, n: usize, iterations: Option<usize>, index: u64) -> Run {
     }
 }
 
-/// The checks of an honest run (see the module documentation); `iterations` is the number of
-/// iterations every opening must have.
-fn check_honest(r: &Run, iterations: usize) {
+/// The number of iterations of Hachi's schedule for the openings of `poly` at the layout of
+/// `ctx`.
+fn scheduled_iterations(pcs: &HachiBase<K>, ctx: &Context<K>, poly: ClaimedPoly) -> usize {
+    let (l, hachi) = (&ctx.layout, pcs.pcs());
+    let schedule = match poly {
+        ClaimedPoly::W => hachi.multilinear_schedule(l.ell_pp),
+        ClaimedPoly::G0 => hachi.vector_schedule(1 + l.ell_pp * l.d0),
+        ClaimedPoly::G1 => hachi.vector_schedule(1 + l.ell_pp * l.d1),
+    };
+    schedule.unwrap().iterations.len()
+}
+
+/// The checks of an honest run (see the module documentation). Returns the numbers of
+/// iterations of the openings, in the order of [`ClaimedPoly::ORDER`] ($g\_0$, $g\_1$,
+/// $\langle \widetilde w \rangle$).
+fn check_honest(r: &Run) -> [usize; 3] {
     let (name, ctx, pcs) = (&r.name, &r.ctx, &r.pcs);
     let proof = r.proof();
     assert!(
@@ -127,10 +141,11 @@ fn check_honest(r: &Run, iterations: usize) {
         "{name}"
     );
 
-    // Every item has the size of HachiBase::words, every opening the expected iterations.
+    // Every item has the size of HachiBase::words, every opening the scheduled iterations.
     let words = pcs.words(&ctx.layout).unwrap();
     let t = &proof.sumcheck;
-    for poly in ClaimedPoly::ORDER {
+    let iterations = ClaimedPoly::ORDER.map(|poly| scheduled_iterations(pcs, ctx, poly));
+    for (poly, iterations) in ClaimedPoly::ORDER.into_iter().zip(iterations) {
         let (commitment, opening) = match poly {
             ClaimedPoly::W => (words.commitment_w, words.proof_w),
             ClaimedPoly::G0 => (words.commitment_g0, words.proof_g0),
@@ -141,7 +156,7 @@ fn check_honest(r: &Run, iterations: usize) {
         for (c, o) in t.commitments.of(poly).iter().zip(t.openings.of(poly)) {
             assert_eq!(c.len() as u128, commitment, "{name}, {poly:?}");
             assert_eq!(o.len() as u128, opening, "{name}, {poly:?}");
-            let decoded = HachiBase::<K>::proof_from_words(o).unwrap();
+            let decoded = pcs.proof_from_words(o).unwrap();
             assert_eq!(decoded.iterations.len(), iterations, "{name}, {poly:?}");
         }
     }
@@ -164,9 +179,10 @@ fn check_honest(r: &Run, iterations: usize) {
     );
     let pcs_bytes = 8 * (t.commitments.total_words() + t.openings.total_words());
     eprintln!(
-        "{name}, {iterations} iterations: proof {} bytes, of which base PCS {pcs_bytes}; \
-         per party: commitments 3 x {} words, openings {} + {} + {} words; \
+        "{name}, iterations {iterations:?} ({:?}): proof {} bytes, of which base PCS \
+         {pcs_bytes}; per party: commitments 3 x {} words, openings {} + {} + {} words; \
          prove {:.2?} (all parties), verify {verify_time:.2?}",
+        ClaimedPoly::ORDER,
         bytes.len(),
         words.commitment_w,
         words.proof_w,
@@ -174,13 +190,14 @@ fn check_honest(r: &Run, iterations: usize) {
         words.proof_g1,
         r.prove_time,
     );
+    iterations
 }
 
 #[test]
 fn honest_runs_with_hachi_are_accepted_at_every_toy_preset() {
     for n in [1, 2, 3, 4, 8] {
         let r = run(&format!("toy-n{n}"), n, None, 0);
-        check_honest(&r, 0);
+        check_honest(&r);
     }
 }
 
@@ -188,7 +205,7 @@ fn honest_runs_with_hachi_are_accepted_at_every_toy_preset() {
 fn honest_runs_with_an_iteration_of_hachi_are_accepted() {
     for n in [1, 2] {
         let r = run(&format!("toy-n{n}"), n, Some(1), 1);
-        check_honest(&r, 1);
+        assert_eq!(check_honest(&r), [1; 3]);
     }
 }
 
@@ -199,16 +216,27 @@ fn the_proof_is_bound_to_the_base_pcs() {
     r.check(proof).unwrap();
     let rejected =
         |result: Result<(), VerifyError>| matches!(result, Err(VerifyError::Sumcheck(_)));
-    // Another scheme, Hachi from another seed, and Hachi whose choices differ (an explicit 0
-    // iterations instead of the automatic schedule) but whose openings are the same: the digest
-    // in the statement changes the coins, and the round checks fail.
+    // Another scheme, Hachi from another seed, and Hachi whose choices differ (a smaller
+    // maximum number of iterations, which the automatic schedules do not reach) but whose
+    // openings are the same: the digest in the statement changes the coins, and the round
+    // checks fail.
     assert!(rejected(r.verify_with(&clear_pcs(&r.ctx), proof)));
     assert!(rejected(
         r.verify_with(&hachi_base(&r.ctx, "toy-n2", 99, None), proof)
     ));
-    assert!(rejected(
-        r.verify_with(&hachi_base(&r.ctx, "toy-n2", 2, Some(0)), proof)
-    ));
+    let choices = HachiChoices {
+        max_iterations: 8,
+        ..HachiBase::default_choices(&r.ctx, &setup_seed("toy-n2", 2))
+    };
+    let other = HachiBase::new(r.ctx.q(), choices).unwrap();
+    for poly in ClaimedPoly::ORDER {
+        assert_eq!(
+            scheduled_iterations(&other, &r.ctx, poly),
+            scheduled_iterations(&r.pcs, &r.ctx, poly),
+            "{poly:?}: the same schedule"
+        );
+    }
+    assert!(rejected(r.verify_with(&other, proof)));
 }
 
 /// `words` with the word at `i` changed (`+ 1`, wrapping).
@@ -315,11 +343,11 @@ fn tampered_hachi_items_are_rejected() {
             }
         };
         assert_eq!(
-            HachiBase::<K>::commitment_to_words(&com),
+            r.pcs.commitment_to_words(&com),
             proof.sumcheck.commitments.of(poly)[0],
             "{poly:?}: the same commitment"
         );
-        let words = HachiBase::<K>::proof_to_words(&opening);
+        let words = r.pcs.proof_to_words(&opening);
         let tampered = with(&|_, o| o.of_mut(poly)[0].clone_from(&words));
         assert!(rejected_opening(r.check(&tampered), 1, poly), "{poly:?}");
         cases += 1;
@@ -337,6 +365,6 @@ fn timings_with_hachi() {
         ("dev-l12", 1, Some(1)),
     ] {
         let r = run(name, n, iterations, 4);
-        check_honest(&r, iterations.unwrap_or(0));
+        check_honest(&r);
     }
 }

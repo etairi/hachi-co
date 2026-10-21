@@ -93,7 +93,7 @@ pub fn fresh_context(name: &str, index: u64) -> Context<K> {
 
 /// Hachi as the base PCS of the context of (`name`, `index`) ([`fresh_context`]), from the same
 /// setup seed, with its default choices and the given number of iterations (`None`: the
-/// automatic schedule, which runs none on the toy presets' polynomials: they are too small).
+/// automatic schedule, the number of iterations whose proof is smallest).
 pub fn hachi_base(
     ctx: &Context<K>,
     name: &str,
@@ -268,9 +268,7 @@ pub fn clear_pcs_words<H: Challenger<K>>(
             (ClaimedPoly::G0, c0),
             (ClaimedPoly::G1, c1),
         ] {
-            commitments
-                .of_mut(poly)
-                .push(Pcs::commitment_to_words(&com));
+            commitments.of_mut(poly).push(pcs.commitment_to_words(&com));
             let context = ch.context(&opening_label(p0 + 1, poly));
             let (_, proof) = match poly {
                 ClaimedPoly::W => pcs.prove_multilinear(&sw, point, &context).unwrap(),
@@ -281,7 +279,7 @@ pub fn clear_pcs_words<H: Challenger<K>>(
                     .prove_inner_product(&s1, &blinder_weights(field, point, l.d1), &context)
                     .unwrap(),
             };
-            openings.of_mut(poly).push(Pcs::proof_to_words(&proof));
+            openings.of_mut(poly).push(pcs.proof_to_words(&proof));
         }
     }
     (commitments, openings)

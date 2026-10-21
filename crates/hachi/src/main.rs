@@ -62,7 +62,8 @@ fn main() {
         pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
             .map_err(|e| e.to_string())?;
         println!("verify  {:>10.2?}", t.elapsed());
-        println!("proof   {} words", proof.to_words().len());
+        let words = pcs.proof_to_words(&proof).len();
+        println!("proof   {words} words ({} bytes)", 8 * words);
         Ok(())
     };
     if let Err(e) = run() {

@@ -8,8 +8,16 @@
 //! "Avoiding re-decomposition"). The iteration folds the chunks into $\mathbf z = \sum_i c_i
 //! \mathbf s_i$ and reduces the claim to one about its next witness $\tilde w$, a table of
 //! $2^L$ short residues, which the next iteration commits packed into $2^{L-\alpha}$ ring elements.
-//! Iterations repeat (Section 4.4) until the witness has at most
-//! [`HachiChoices::final_words`] residues, or would not shrink; the last one is sent in the clear.
+//! Iterations repeat (Section 4.4), and the last witness is sent in the clear.
+//!
+//! **How many iterations.** Only the first iteration pays $\delta$ digits per coefficient of the
+//! input; later witnesses are already short, are committed as they are, and shrink much faster.
+//! So the number of iterations that gives the smallest proof is not found by stopping at the
+//! first iteration that does not shrink the witness: for a polynomial of $2^{17}$ coefficients
+//! at $d = 16$, $b = 4$ and $q \approx 2^{29}$, one iteration doubles the witness and three make
+//! it about four times smaller. [`Schedule::candidates`] lists the schedules of $0, 1, \dots$
+//! [`HachiChoices::max_iterations`] iterations, and the scheme picks the one with the smallest
+//! proof (`HachiPcs`, which knows the encoding); [`HachiChoices::fixed_iterations`] overrides it.
 
 use crate::{Error, Result};
 use hachi_co_math::decompose::{digit_range, num_digits, tight_tau};
@@ -32,15 +40,12 @@ pub struct HachiChoices {
     pub n_b: usize,
     /// See [`HachiChoices::n_a`].
     pub n_d: usize,
-    /// Stop iterating once the witness has at most this many residues; it is then sent in the
-    /// clear.
-    pub final_words: usize,
-    /// An upper bound on the number of iterations (a safety net; the schedule normally stops
-    /// much earlier).
+    /// The most iterations the automatic rule considers (module documentation, "How many
+    /// iterations"), and a bound on [`HachiChoices::fixed_iterations`]; at most
+    /// [`MAX_ITERATIONS`].
     pub max_iterations: usize,
-    /// Run exactly this many iterations instead of the automatic rule (for tests and
-    /// measurements: an iteration shrinks the witness only if the witness is large enough, so
-    /// on a small input the automatic rule sends the input in the clear).
+    /// Run exactly this many iterations, at most [`HachiChoices::max_iterations`], instead of
+    /// the automatic rule (for tests and measurements).
     pub fixed_iterations: Option<usize>,
     /// The seed of the public matrices.
     pub seed: [u8; 32],
@@ -48,9 +53,8 @@ pub struct HachiChoices {
 
 impl HachiChoices {
     /// Small, **insecure** choices for tests at a ring degree $d$: $b = 4$, $\omega = 2$,
-    /// $n_A = n_B = n_D = 1$, a final witness of at most $2^{11}$ residues, at most 16
-    /// iterations. Security needs Module-SIS-sized matrices and a larger challenge set; that is
-    /// left to the final parameters.
+    /// $n_A = n_B = n_D = 1$, at most 16 iterations. Security needs Module-SIS-sized matrices
+    /// and a larger challenge set; that is left to the final parameters.
     pub fn toy(d: usize) -> Self {
         Self {
             d,
@@ -59,7 +63,6 @@ impl HachiChoices {
             n_a: 1,
             n_b: 1,
             n_d: 1,
-            final_words: 1 << 11,
             max_iterations: 16,
             fixed_iterations: None,
             seed: [7u8; 32],
@@ -145,6 +148,11 @@ pub struct Schedule {
     pub final_layout: Layout,
 }
 
+/// The largest [`HachiChoices::max_iterations`] that [`check`] accepts: a bound on the work of
+/// deriving and running a schedule, far above what the schedules use (2 to 4 iterations at
+/// Hachi-Co's toy and development presets).
+pub const MAX_ITERATIONS: usize = 64;
+
 /// The largest absolute value of a digit of base $b$: $\lfloor b/2 \rfloor$.
 pub fn max_digit(b: u64) -> u64 {
     let (lo, hi) = digit_range(b);
@@ -215,33 +223,22 @@ pub fn best_layout(
 }
 
 impl Schedule {
-    /// The schedule for a first witness of layout `first`: exactly
-    /// [`HachiChoices::fixed_iterations`] iterations if set; otherwise iterate while the witness
-    /// has more than [`HachiChoices::final_words`] residues, the iteration would shrink it (in
-    /// residues), and fewer than [`HachiChoices::max_iterations`] iterations have run.
+    /// Exactly `n` iterations on a first witness of layout `first`.
     ///
     /// # Errors
-    /// [`Error::Parameter`] if an iteration cannot be parametrised.
-    pub fn derive(choices: &HachiChoices, q: u64, first: Layout) -> Result<Self> {
-        let d = choices.d;
+    /// [`Error::Parameter`] if `n` exceeds [`HachiChoices::max_iterations`] or one of the
+    /// iterations cannot be parametrised.
+    pub fn fixed(choices: &HachiChoices, q: u64, first: Layout, n: usize) -> Result<Self> {
+        if n > choices.max_iterations {
+            return Err(Error::Parameter(format!(
+                "{n} iterations exceed max_iterations = {}",
+                choices.max_iterations
+            )));
+        }
         let mut iterations = Vec::new();
         let mut current = first;
-        if let Some(n) = choices.fixed_iterations {
-            for _ in 0..n {
-                let it = iteration(choices, q, current)?;
-                current = it.next;
-                iterations.push(it);
-            }
-            return Ok(Self {
-                iterations,
-                final_layout: current,
-            });
-        }
-        while current.words(d) > choices.final_words && iterations.len() < choices.max_iterations {
+        for _ in 0..n {
             let it = iteration(choices, q, current)?;
-            if it.next.words(d) >= current.words(d) {
-                break;
-            }
             current = it.next;
             iterations.push(it);
         }
@@ -250,13 +247,47 @@ impl Schedule {
             final_layout: current,
         })
     }
+
+    /// The schedules the automatic rule chooses from: $0, 1, \dots$
+    /// [`HachiChoices::max_iterations`] iterations on a first witness of layout `first`, each a
+    /// prefix of the next; it always contains the schedule without iterations. The list ends
+    /// early at the first iteration that cannot be parametrised (for example a fold bound beyond
+    /// 64 bits), or whose next witness has the layout of an earlier final witness: the next
+    /// layout depends only on the current one, so from there on every schedule has the final
+    /// witness of an earlier one and strictly more words, and none can be the smallest.
+    pub fn candidates(choices: &HachiChoices, q: u64, first: Layout) -> Vec<Self> {
+        let mut out = vec![Self {
+            iterations: Vec::new(),
+            final_layout: first,
+        }];
+        let mut current = first;
+        let mut iterations = Vec::new();
+        while iterations.len() < choices.max_iterations {
+            let Ok(it) = iteration(choices, q, current) else {
+                break;
+            };
+            if out.iter().any(|s| s.final_layout == it.next) {
+                break;
+            }
+            current = it.next;
+            iterations.push(it);
+            out.push(Self {
+                iterations: iterations.clone(),
+                final_layout: current,
+            });
+        }
+        out
+    }
 }
 
 /// Checks the choices against $q$ and $k$.
 ///
 /// # Errors
-/// [`Error::Parameter`] unless $d$ is a power of two with $2k \mid d$, $b \ge 2$,
-/// $\omega \ge 1$, the heights are positive, and $q \equiv 5 \pmod 8$.
+/// [`Error::Parameter`] unless $d$ is a power of two with $2k \mid d$, $2 \le b \le q$ (so that
+/// the digits are distinct residues whose centred representatives are the digits themselves,
+/// which the encoding of the final witness relies on), $\omega \ge 1$, the heights are
+/// positive, `max_iterations` $\le$ [`MAX_ITERATIONS`], `fixed_iterations` $\le$
+/// `max_iterations`, and $q \equiv 5 \pmod 8$.
 pub fn check(choices: &HachiChoices, q: u64, k: usize) -> Result<()> {
     let d = choices.d;
     if !d.is_power_of_two() || k == 0 || !d.is_multiple_of(2 * k) {
@@ -265,8 +296,19 @@ pub fn check(choices: &HachiChoices, q: u64, k: usize) -> Result<()> {
             2 * k
         )));
     }
-    if choices.b < 2 || choices.omega == 0 {
-        return Err(Error::Parameter("b >= 2 and omega >= 1 are needed".into()));
+    if choices.b < 2 || choices.b > q || choices.omega == 0 {
+        return Err(Error::Parameter(
+            "2 <= b <= q and omega >= 1 are needed".into(),
+        ));
+    }
+    if choices.max_iterations > MAX_ITERATIONS
+        || choices
+            .fixed_iterations
+            .is_some_and(|n| n > choices.max_iterations)
+    {
+        return Err(Error::Parameter(format!(
+            "fixed_iterations <= max_iterations <= {MAX_ITERATIONS} are needed"
+        )));
     }
     if choices.n_a == 0 || choices.n_b == 0 || choices.n_d == 0 {
         return Err(Error::Parameter(

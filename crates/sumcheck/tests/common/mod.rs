@@ -71,9 +71,7 @@ pub fn attach_openings<H: Challenger<K>>(
             (ClaimedPoly::G0, com_g0),
             (ClaimedPoly::G1, com_g1),
         ] {
-            commitments
-                .of_mut(poly)
-                .push(Pcs::commitment_to_words(&com));
+            commitments.of_mut(poly).push(pcs.commitment_to_words(&com));
         }
         for poly in [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1] {
             let context = ch.context(&opening_label(private.party, poly));
@@ -86,7 +84,7 @@ pub fn attach_openings<H: Challenger<K>>(
                     .prove_inner_product(&st_g1, &blinder_weights(field, point, l.d1), &context)
                     .unwrap(),
             };
-            openings.of_mut(poly).push(Pcs::proof_to_words(&proof));
+            openings.of_mut(poly).push(pcs.proof_to_words(&proof));
         }
     }
     transcript.commitments = commitments;

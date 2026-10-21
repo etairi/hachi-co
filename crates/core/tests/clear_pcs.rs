@@ -101,12 +101,12 @@ fn honest_multilinear_openings_verify() {
         pcs.verify_multilinear(&com, ell, &point, &value, &proof, &context)
             .unwrap();
         // The words round-trip, with the sizes of the formulas.
-        let words = Pcs::commitment_to_words(&com);
+        let words = pcs.commitment_to_words(&com);
         assert_eq!(words.len(), Pcs::COMMITMENT_WORDS);
-        assert_eq!(Pcs::commitment_from_words(&words).unwrap(), com);
-        let words = Pcs::proof_to_words(&proof);
+        assert_eq!(pcs.commitment_from_words(&words).unwrap(), com);
+        let words = pcs.proof_to_words(&proof);
         assert_eq!(Some(words.len()), Pcs::multilinear_proof_words(ell));
-        assert_eq!(Pcs::proof_from_words(&words).unwrap(), proof);
+        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof);
         // A non-canonical value stands for its residue class.
         let mut unreduced = value;
         unreduced.0[1] += Q;
@@ -133,9 +133,9 @@ fn honest_inner_product_openings_verify() {
         assert_eq!(value, inner_product(&field, &v, &weights).unwrap());
         pcs.verify_inner_product(&com, len, &weights, &value, &proof, &context)
             .unwrap();
-        let words = Pcs::proof_to_words(&proof);
+        let words = pcs.proof_to_words(&proof);
         assert_eq!(Some(words.len()), Pcs::vector_proof_words(len));
-        assert_eq!(Pcs::proof_from_words(&words).unwrap(), proof);
+        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof);
     }
 }
 
@@ -321,13 +321,13 @@ fn the_provers_refuse_misuse() {
 /// Malformed words are errors, never panics; whatever decodes re-encodes to the same words.
 #[test]
 fn malformed_words_are_errors() {
+    let pcs = Pcs::new(Q).unwrap();
     for len in [0usize, 1, 3, 5, 8] {
         assert!(matches!(
-            Pcs::commitment_from_words(&vec![1; len]),
+            pcs.commitment_from_words(&vec![1; len]),
             Err(Error::BasePcs(_))
         ));
     }
-    let pcs = Pcs::new(Q).unwrap();
     let mut rng = Stream(0xc1ea_0005);
     let (_, _, _, _, ml, _) = multilinear_instance(&pcs, &mut rng, 3);
     let (_, st) = pcs.commit_vector(&rng.exts(2)).unwrap();
@@ -335,24 +335,24 @@ fn malformed_words_are_errors() {
         .prove_inner_product(&st, &rng.exts(2), &[1; 32])
         .unwrap();
     for proof in [ml, vp] {
-        let words = Pcs::proof_to_words(&proof);
+        let words = pcs.proof_to_words(&proof);
         // Every truncation and an extension.
         for cut in 0..words.len() {
-            assert!(Pcs::proof_from_words(&words[..cut]).is_err(), "cut {cut}");
+            assert!(pcs.proof_from_words(&words[..cut]).is_err(), "cut {cut}");
         }
         let mut longer = words.clone();
         longer.push(0);
-        assert!(Pcs::proof_from_words(&longer).is_err());
+        assert!(pcs.proof_from_words(&longer).is_err());
         // The kind and the count.
         for kind in [2u64, 3, u64::MAX] {
             let mut w = words.clone();
             w[4] = kind;
-            assert!(Pcs::proof_from_words(&w).is_err());
+            assert!(pcs.proof_from_words(&w).is_err());
         }
         for count in [words[5] + 1, words[5] - 1, u64::MAX, 1 << 62] {
             let mut w = words.clone();
             w[5] = count;
-            assert!(Pcs::proof_from_words(&w).is_err());
+            assert!(pcs.proof_from_words(&w).is_err());
         }
     }
     // Random words: never a panic; a decoded proof re-encodes to the same words.
@@ -363,8 +363,8 @@ fn malformed_words_are_errors() {
         if len >= 6 && i % 2 == 0 {
             w[5] = (len as u64 - 6) / [1, K as u64][(w[4] % 2) as usize];
         }
-        if let Ok(p) = Pcs::proof_from_words(&w) {
-            assert_eq!(Pcs::proof_to_words(&p), w);
+        if let Ok(p) = pcs.proof_from_words(&w) {
+            assert_eq!(pcs.proof_to_words(&p), w);
             decoded += 1;
         }
     }

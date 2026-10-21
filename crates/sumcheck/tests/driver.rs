@@ -513,20 +513,20 @@ impl BasePcs<K> for FaultyPcs {
         self.inner.params_digest()
     }
 
-    fn commitment_to_words(com: &ClearCommitment) -> Vec<u64> {
-        Pcs::commitment_to_words(com)
+    fn commitment_to_words(&self, com: &ClearCommitment) -> Vec<u64> {
+        self.inner.commitment_to_words(com)
     }
 
-    fn commitment_from_words(words: &[u64]) -> hachi_co_core::Result<ClearCommitment> {
-        Pcs::commitment_from_words(words)
+    fn commitment_from_words(&self, words: &[u64]) -> hachi_co_core::Result<ClearCommitment> {
+        self.inner.commitment_from_words(words)
     }
 
-    fn proof_to_words(p: &ClearOpening<K>) -> Vec<u64> {
-        Pcs::proof_to_words(p)
+    fn proof_to_words(&self, p: &ClearOpening<K>) -> Vec<u64> {
+        self.inner.proof_to_words(p)
     }
 
-    fn proof_from_words(words: &[u64]) -> hachi_co_core::Result<ClearOpening<K>> {
-        Pcs::proof_from_words(words)
+    fn proof_from_words(&self, words: &[u64]) -> hachi_co_core::Result<ClearOpening<K>> {
+        self.inner.proof_from_words(words)
     }
 }
 

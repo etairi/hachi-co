@@ -53,12 +53,17 @@ use hachi_co_math::{Ext, Fqk, Zq};
 ///
 /// **Words.** Commitments and proofs travel as `u64` words: through
 /// [`hachi_co_mpc::Comm::all_gather`], in the Fiat-Shamir transcript (the commitments) and in
-/// the proof encoding. `commitment_from_words` and `proof_from_words` must accept exactly the
-/// encodings that `commitment_to_words` and `proof_to_words` produce, and return an error,
-/// never panic, on any other input: the verifier decodes words it reads from a proof. The
-/// provers publish their commitments and their proofs with one `all_gather` call each, which
-/// needs the same length at every party: the number of words of a commitment or of a proof must
-/// depend only on the size of the committed polynomial (as for `ClearPcs`).
+/// the proof encoding. The encodings belong to an instance of the scheme, so that they can use
+/// its parameters (Hachi packs residues in $\lceil \log\_2 q \rceil$ bits). On one instance,
+/// `commitment_from_words` and `proof_from_words` must give back every commitment and proof the
+/// instance makes from its encoding, accept at most one encoding of any value (whatever they
+/// decode re-encodes to the same words), and return an error, never panic, on any input they
+/// cannot decode: the verifier decodes words it reads from a proof. A decoder may accept values
+/// of a shape that no statement has (Hachi's checks only the lengths its header implies); the
+/// verify methods reject those. The provers publish their
+/// commitments and their proofs with one `all_gather` call each, which needs the same length at
+/// every party: the number of words of a commitment or of a proof must depend only on the size
+/// of the committed polynomial (as for `ClearPcs`).
 ///
 /// **Errors.** The provers' methods return an [`Error`] (for example [`Error::Shape`] or
 /// [`Error::BasePcs`]); the verifier's methods return the reason of a rejection as a `String`,
@@ -149,24 +154,24 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     /// instances with different parameters must have different digests.
     fn params_digest(&self) -> [u8; 32];
 
-    /// The words of a commitment.
-    fn commitment_to_words(com: &Self::Commitment) -> Vec<u64>;
+    /// The words of a commitment (see "Words").
+    fn commitment_to_words(&self, com: &Self::Commitment) -> Vec<u64>;
 
     /// The commitment of `words`, the inverse of
     /// [`commitment_to_words`](Self::commitment_to_words).
     ///
     /// # Errors
     /// For any input that `commitment_to_words` does not produce.
-    fn commitment_from_words(words: &[u64]) -> Result<Self::Commitment>;
+    fn commitment_from_words(&self, words: &[u64]) -> Result<Self::Commitment>;
 
-    /// The words of a proof.
-    fn proof_to_words(p: &Self::Proof) -> Vec<u64>;
+    /// The words of a proof (see "Words").
+    fn proof_to_words(&self, p: &Self::Proof) -> Vec<u64>;
 
     /// The proof of `words`, the inverse of [`proof_to_words`](Self::proof_to_words).
     ///
     /// # Errors
     /// For any input that `proof_to_words` does not produce.
-    fn proof_from_words(words: &[u64]) -> Result<Self::Proof>;
+    fn proof_from_words(&self, words: &[u64]) -> Result<Self::Proof>;
 }
 
 /// Checks that a table of a multilinear polynomial has $2^\ell$ entries for some $\ell \ge 0$.

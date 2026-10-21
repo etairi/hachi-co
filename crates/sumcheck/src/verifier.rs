@@ -359,10 +359,12 @@ fn check_opening<const K: usize, P: BasePcs<K>>(
     value: &Ext<K>,
     context: &[u8; 32],
 ) -> core::result::Result<(), String> {
-    let com = P::commitment_from_words(com_words)
+    let com = pcs
+        .commitment_from_words(com_words)
         .map_err(|e| format!("the commitment does not decode: {e}"))?;
-    let proof =
-        P::proof_from_words(proof_words).map_err(|e| format!("the proof does not decode: {e}"))?;
+    let proof = pcs
+        .proof_from_words(proof_words)
+        .map_err(|e| format!("the proof does not decode: {e}"))?;
     match poly {
         ClaimedPoly::W => pcs.verify_multilinear(&com, point.len(), point, value, &proof, context),
         ClaimedPoly::G0 | ClaimedPoly::G1 => {

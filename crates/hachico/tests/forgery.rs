@@ -161,9 +161,9 @@ fn commit_all<P: BasePcs<K>>(
     let (c0, s0) = pcs.commit_vector(g0).unwrap();
     let (c1, s1) = pcs.commit_vector(g1).unwrap();
     let words = PcsWords {
-        w: vec![P::commitment_to_words(&cw)],
-        g0: vec![P::commitment_to_words(&c0)],
-        g1: vec![P::commitment_to_words(&c1)],
+        w: vec![pcs.commitment_to_words(&cw)],
+        g0: vec![pcs.commitment_to_words(&c0)],
+        g1: vec![pcs.commitment_to_words(&c1)],
     };
     (words, [sw, s0, s1])
 }
@@ -184,9 +184,9 @@ fn open_all<P: BasePcs<K>>(
     let (_, p0) = pcs.prove_inner_product(s0, &w0, ctx_g0).unwrap();
     let (_, p1) = pcs.prove_inner_product(s1, &w1, ctx_g1).unwrap();
     PcsWords {
-        w: vec![P::proof_to_words(&pw)],
-        g0: vec![P::proof_to_words(&p0)],
-        g1: vec![P::proof_to_words(&p1)],
+        w: vec![pcs.proof_to_words(&pw)],
+        g0: vec![pcs.proof_to_words(&p0)],
+        g1: vec![pcs.proof_to_words(&p1)],
     }
 }
 
@@ -265,7 +265,7 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
         .unwrap();
     assert_eq!(value, solved_g1, "the vector takes the solved value");
     let mut variant2 = forged.proof.clone();
-    variant2.sumcheck.openings.g1 = vec![P::proof_to_words(&proof)];
+    variant2.sumcheck.openings.g1 = vec![pcs.proof_to_words(&proof)];
     assert!(rejected_opening(
         check(&variant2),
         ClaimedPoly::G1,
@@ -278,7 +278,7 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
         commit_all(pcs, &vec![0; 1 << l.ell_pp], &vec![zero; len0], &g1_solved);
     let mut variant3 = forged.proof.clone();
     variant3.sumcheck.commitments = commitments3.clone();
-    variant3.sumcheck.openings.g1 = vec![P::proof_to_words(&proof)];
+    variant3.sumcheck.openings.g1 = vec![pcs.proof_to_words(&proof)];
     match check(&variant3) {
         Err(VerifyError::Sumcheck(hachi_co_sumcheck::VerifyError::Rejected { failing })) => {
             assert!(failing.contains(&"round_01_H1".to_owned()), "{failing:?}");
@@ -311,7 +311,8 @@ fn the_forgery_is_rejected_with_clear_pcs() {
 fn the_forgery_is_rejected_with_hachi() {
     let ctx = fresh_context("toy-n1", 9);
     let pcs = hachi_base(&ctx, "toy-n1", 9, None);
-    // The automatic schedule runs no iteration here: the final witness is the whole vector.
+    // The forged openings are the blinder g1's, whose automatic schedule runs no iteration here
+    // (its proof is smallest in the clear): the final witness is the whole vector.
     let reasons = Reasons {
         wrong_value: "the trace of the inner product",
         other_polynomial: "the final witness does not open the commitment",

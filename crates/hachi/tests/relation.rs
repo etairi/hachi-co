@@ -35,7 +35,7 @@ fn every_witness_column_has_a_nonzero_weight() {
                 decomposed,
                 beta_s: if decomposed { 2 } else { 4 },
             };
-            let schedule = Schedule::derive(&choices, Q, layout).unwrap();
+            let schedule = Schedule::fixed(&choices, Q, layout, 1).unwrap();
             let p = &schedule.iterations[0];
             let (chunks, delta) = (layout.chunks(), p.delta);
             let width = layout.width(delta);

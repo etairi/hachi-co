@@ -48,9 +48,8 @@
 //!   component and of the known forgery; they do not prove soundness.
 //! - **The base PCS.** The guarantee is only as good as the base PCS passed to [`verify`]:
 //!   `ClearPcs` is binding (SHA-256 collision resistance) and sound, but neither succinct nor
-//!   hiding. [`HachiBase`] is not hiding either, and [`HachiBase::setup`] uses insecure test
-//!   parameters. At the toy presets the committed polynomials are too small for an iteration
-//!   of Hachi to shrink them, so an opening sends the committed polynomial in the clear.
+//!   hiding. [`HachiBase`] is not hiding either (each opening sends its last witness in the
+//!   clear), and [`HachiBase::setup`] uses insecure test parameters.
 //! - **Fiat-Shamir** is in the random-oracle model (a SHAKE128 transcript,
 //!   `hachi-co-transcript`), as accepted for the project (user, 2026-10-17). The digest of the
 //!   base PCS's parameters ([`BasePcs::params_digest`]) is part of the statement

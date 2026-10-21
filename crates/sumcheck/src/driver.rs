@@ -211,7 +211,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         let mut coeffs = prover.w_table().to_vec();
         mobius(field.zq(), &mut coeffs)?;
         let (com, st) = pcs.commit_multilinear(&coeffs)?;
-        (st, P::commitment_to_words(&com))
+        (st, pcs.commitment_to_words(&com))
     };
     let (g0, g1) = prover.blinders();
     let (com_g0, st_g0) = pcs.commit_vector(&blinder_coefficients(g0))?;
@@ -222,8 +222,8 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     let (g0_sums, g1_sums) = (column(&sums, 0), column(&sums, 1));
     let local = [
         com_w,
-        P::commitment_to_words(&com_g0),
-        P::commitment_to_words(&com_g1),
+        pcs.commitment_to_words(&com_g0),
+        pcs.commitment_to_words(&com_g1),
     ];
     let commitments = all_gather_words(comm, ALL_GATHER_COMMITMENTS, n, &local)?;
     ch.absorb_exts(LABEL_G0, &g0_sums);
@@ -278,7 +278,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         let (value, words) = match poly {
             ClaimedPoly::W => {
                 let (value, proof) = pcs.prove_multilinear(&st_w, &point, &context)?;
-                (value, P::proof_to_words(&proof))
+                (value, pcs.proof_to_words(&proof))
             }
             ClaimedPoly::G0 | ClaimedPoly::G1 => {
                 let (st, degree) = if poly == ClaimedPoly::G0 {
@@ -288,7 +288,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
                 };
                 let weights = blinder_weights(field, &point, degree);
                 let (value, proof) = pcs.prove_inner_product(st, &weights, &context)?;
-                (value, P::proof_to_words(&proof))
+                (value, pcs.proof_to_words(&proof))
             }
         };
         if field.reduce(&value) != expected[slot(poly)] {

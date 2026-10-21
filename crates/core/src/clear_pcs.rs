@@ -358,13 +358,13 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         self.check_value(&got, value)
     }
 
-    fn commitment_to_words(com: &ClearCommitment) -> Vec<u64> {
+    fn commitment_to_words(&self, com: &ClearCommitment) -> Vec<u64> {
         bytes_to_words(&com.0).to_vec()
     }
 
     /// # Errors
     /// [`Error::BasePcs`] unless there are exactly 4 words.
-    fn commitment_from_words(words: &[u64]) -> Result<ClearCommitment> {
+    fn commitment_from_words(&self, words: &[u64]) -> Result<ClearCommitment> {
         let words: &[u64; COMMITMENT_WORDS] = words.try_into().map_err(|_| {
             Error::BasePcs(format!(
                 "a ClearPcs commitment has {COMMITMENT_WORDS} words, got {}",
@@ -374,7 +374,7 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         Ok(ClearCommitment(words_to_bytes(words)))
     }
 
-    fn proof_to_words(p: &ClearOpening<K>) -> Vec<u64> {
+    fn proof_to_words(&self, p: &ClearOpening<K>) -> Vec<u64> {
         let mut out = Vec::with_capacity(PROOF_HEADER_WORDS + K * p.polynomial.len());
         out.extend_from_slice(&bytes_to_words(&p.context));
         out.push(p.polynomial.kind().0);
@@ -386,7 +386,7 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
     /// # Errors
     /// [`Error::BasePcs`] for fewer than 6 words, an unknown kind, or a number of entries that
     /// does not match the number of words.
-    fn proof_from_words(words: &[u64]) -> Result<ClearOpening<K>> {
+    fn proof_from_words(&self, words: &[u64]) -> Result<ClearOpening<K>> {
         let Some((header, data)) = words.split_at_checked(PROOF_HEADER_WORDS) else {
             return Err(Error::BasePcs(format!(
                 "a ClearPcs proof has at least {PROOF_HEADER_WORDS} words, got {}",
