@@ -260,6 +260,21 @@ impl ClaimedPoly {
             Self::W => "w",
         }
     }
+
+    /// The index of the base PCS's seed ([`PartyRandomness::base_pcs`]) for the commitment to
+    /// this polynomial (`opening` false) or for its opening: the position $j$ in
+    /// [`ClaimedPoly::ORDER`] for the commitment and $3 + j$ for the opening, so that the six
+    /// seeds of a party are distinct.
+    ///
+    /// [`PartyRandomness::base_pcs`]: hachi_co_core::PartyRandomness::base_pcs
+    pub fn seed_index(self, opening: bool) -> u64 {
+        let j = match self {
+            Self::G0 => 0,
+            Self::G1 => 1,
+            Self::W => 2,
+        };
+        if opening { 3 + j } else { j }
+    }
 }
 
 /// An evaluation claim "the polynomial `poly` committed by party `party` takes the value `value`

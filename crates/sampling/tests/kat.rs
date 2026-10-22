@@ -1,12 +1,13 @@
-//! Known-answer tests: the PRG and every sampler against `tests/fixtures/kat.json`, which
-//! `tests/fixtures/gen_kat.py` computes with Python's `hashlib.shake_128` and a Python
-//! transcription of the documented byte-level rules. Besides the values, each case checks the
-//! number of 64-bit words read and the next word of the stream, so the consumption matches too.
+//! Known-answer tests: the PRG and every sampler (the Gaussian included) against
+//! `tests/fixtures/kat.json`, which `tests/fixtures/gen_kat.py` computes with Python's
+//! `hashlib.shake_128` and a Python transcription of the documented byte-level rules. Besides the
+//! values, each case checks the number of 64-bit words read and the next word of the stream, so
+//! the consumption matches too.
 
 mod common;
 
 use common::{Counting, hex, seed};
-use hachi_co_sampling::{ShakePrg, l1ball, matrix, rej, uniform};
+use hachi_co_sampling::{ShakePrg, gauss, l1ball, matrix, rej, uniform};
 use num_bigint::BigUint;
 use rand::Rng;
 use serde_json::Value;
@@ -168,6 +169,22 @@ fn uniform_samplers_match_the_python_reference() {
             "beta = {beta}"
         );
         check_tail(rng, case, &format!("short beta = {beta}"));
+    }
+}
+
+#[test]
+fn the_gaussian_sampler_matches_the_python_reference() {
+    let kat = kat();
+    for case in cases(&kat, "gaussian") {
+        let mut rng = prg(case);
+        let log_sigma = case["log_sigma"].as_u64().unwrap() as u32;
+        let len = case["len"].as_u64().unwrap() as usize;
+        assert_eq!(
+            gauss::gaussian(&mut rng, log_sigma, len).unwrap(),
+            i64s(&case["values"]),
+            "log_sigma = {log_sigma}"
+        );
+        check_tail(rng, case, &format!("gaussian log_sigma = {log_sigma}"));
     }
 }
 

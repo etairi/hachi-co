@@ -157,7 +157,7 @@ pub use statement::{
 };
 pub use verifier::{verify, verify_claims_with, verify_with};
 
-pub use hachi::HachiChoices;
+pub use hachi::{HachiChoices, Hiding, Noise};
 pub use hachi_co_core::{BasePcs, Context, PartyState};
 pub use hachi_co_params::BasePcsWords;
 pub use hachi_co_sumcheck::{Claim, ClaimedPoly, FinalClaims, PcsWords, SumcheckTranscript};

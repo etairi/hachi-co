@@ -19,7 +19,16 @@
 //! [`HachiChoices::fixed_iterations`] to fix the number of iterations.
 //!
 //! **Not hiding.** Hachi as implemented is not hiding: the last witness of every opening is
-//! sent in the clear, and with no iteration that is the committed polynomial itself.
+//! sent in the clear, and with no iteration that is the committed polynomial itself. Choices
+//! with [`HachiChoices::hiding`] randomize every commitment (`docs/hachi-hiding.md` §6):
+//! - at an MLWE rank of real security, a commitment then hides the committed polynomial under
+//!   MLWE until it is opened;
+//! - the openings reveal as much as before, and Hachi-Co opens every commitment, so its proofs
+//!   are not hiding yet (with no iteration, as for the blinders at the toy presets, the opening
+//!   sends the blinder and its randomness).
+//!
+//! The default choices do not use randomized commitments yet. The provers draw the seeds of the
+//! randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).
 //!
 //! **Encodings.** Commitments and proofs travel as the words of
 //! [`HachiPcs::commitment_to_words`] and [`HachiPcs::proof_to_words`]: packed, with
@@ -141,7 +150,9 @@ impl<const K: usize> HachiBase<K> {
 
 /// The parameter digest: the challenge seed of a transcript with the domain
 /// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice, Hachi's version
-/// ([`hachi::VERSION`]) and the seed of the matrices.
+/// ([`hachi::VERSION`]) and the seed of the matrices, then, only for randomized commitments
+/// ([`HachiChoices::hiding`]), $\nu$ and the distribution's two words
+/// ([`hachi::Noise::words`]): the digest of non-hiding choices is unchanged.
 fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
     let mut t = Transcript::new(HACHI_BASE_DIGEST_DOMAIN);
     let words: [(&[u8], u64); 11] = [
@@ -164,6 +175,12 @@ fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
         t.append_u64(label, value);
     }
     t.append_message(b"seed", &c.seed);
+    if let Some(h) = c.hiding {
+        let [kind, param] = h.noise.words();
+        t.append_u64(b"nu", h.nu as u64);
+        t.append_u64(b"noise", kind);
+        t.append_u64(b"noise-param", param);
+    }
     t.challenge_seed(b"digest")
 }
 
@@ -178,13 +195,23 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
     type Proof = Proof<K>;
 
     /// [`HachiPcs::commit_multilinear`]: $2^\ell$ coefficients with $2^\ell \ge d$.
-    fn commit_multilinear(&self, coeffs: &[u64]) -> hachi_co_core::Result<(Commitment, State<K>)> {
-        self.pcs.commit_multilinear(coeffs).map_err(base_error)
+    fn commit_multilinear(
+        &self,
+        coeffs: &[u64],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        self.pcs
+            .commit_multilinear(coeffs, seed)
+            .map_err(base_error)
     }
 
     /// [`HachiPcs::commit_vector`]: at least one element.
-    fn commit_vector(&self, v: &[Ext<K>]) -> hachi_co_core::Result<(Commitment, State<K>)> {
-        self.pcs.commit_vector(v).map_err(base_error)
+    fn commit_vector(
+        &self,
+        v: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        self.pcs.commit_vector(v, seed).map_err(base_error)
     }
 
     /// [`HachiPcs::prove_multilinear`].
@@ -193,9 +220,10 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
         st: &State<K>,
         point: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
         self.pcs
-            .prove_multilinear(st, point, context)
+            .prove_multilinear(st, point, context, seed)
             .map_err(base_error)
     }
 
@@ -205,9 +233,10 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
         st: &State<K>,
         weights: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
         self.pcs
-            .prove_inner_product(st, weights, context)
+            .prove_inner_product(st, weights, context, seed)
             .map_err(base_error)
     }
 

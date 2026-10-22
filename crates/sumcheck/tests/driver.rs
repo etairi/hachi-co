@@ -443,18 +443,20 @@ impl BasePcs<K> for FaultyPcs {
     fn commit_multilinear(
         &self,
         coeffs: &[u64],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(ClearCommitment, ClearPolynomial<K>)> {
-        self.inner.commit_multilinear(coeffs)
+        self.inner.commit_multilinear(coeffs, seed)
     }
 
     fn commit_vector(
         &self,
         v: &[Ext<K>],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(ClearCommitment, ClearPolynomial<K>)> {
         if self.refuse_vectors {
             return Err(hachi_co_core::Error::BasePcs("refused".into()));
         }
-        self.inner.commit_vector(v)
+        self.inner.commit_vector(v, seed)
     }
 
     fn prove_multilinear(
@@ -462,8 +464,9 @@ impl BasePcs<K> for FaultyPcs {
         st: &ClearPolynomial<K>,
         point: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(Ext<K>, ClearOpening<K>)> {
-        let (mut value, proof) = self.inner.prove_multilinear(st, point, context)?;
+        let (mut value, proof) = self.inner.prove_multilinear(st, point, context, seed)?;
         if self.wrong == Some(ClaimedPoly::W) {
             value.0[0] ^= 1;
         }
@@ -475,8 +478,9 @@ impl BasePcs<K> for FaultyPcs {
         st: &ClearPolynomial<K>,
         weights: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> hachi_co_core::Result<(Ext<K>, ClearOpening<K>)> {
-        let (mut value, proof) = self.inner.prove_inner_product(st, weights, context)?;
+        let (mut value, proof) = self.inner.prove_inner_product(st, weights, context, seed)?;
         if matches!(self.wrong, Some(ClaimedPoly::G0 | ClaimedPoly::G1)) {
             value.0[0] ^= 1;
         }
@@ -570,4 +574,19 @@ fn a_faulty_base_pcs_is_caught_by_the_provers() {
         run(&faulty(None, true)),
         Err(Error::Core(hachi_co_core::Error::BasePcs(_)))
     ));
+}
+
+/// The six base-PCS seeds of a party have distinct indices: the commitments take the positions
+/// of `ClaimedPoly::ORDER`, the openings those plus 3.
+#[test]
+fn the_base_pcs_seed_indices_are_distinct() {
+    let mut seen = Vec::new();
+    for opening in [false, true] {
+        for (j, poly) in ClaimedPoly::ORDER.into_iter().enumerate() {
+            let index = poly.seed_index(opening);
+            assert_eq!(index, j as u64 + if opening { 3 } else { 0 });
+            assert!(!seen.contains(&index));
+            seen.push(index);
+        }
+    }
 }

@@ -22,6 +22,11 @@ const Q34: u64 = 8589934621;
 /// The modulus of the secure presets with $\ell = 30$, $\alpha = 8$ (63 bits).
 const Q63: u64 = 6618259129420972141;
 
+/// The prover's seeds; these non-hiding choices do not use them, so the pinned outputs do not
+/// depend on them.
+const SEED: [u8; 32] = [5u8; 32];
+const OPEN_SEED: [u8; 32] = [6u8; 32];
+
 fn residues_mod(q: u64, tag: &str, index: u64, len: usize) -> Vec<u64> {
     uniform_mod_q(
         &mut ShakePrg::new(&[3u8; 32], tag.as_bytes(), index),
@@ -87,9 +92,11 @@ fn multilinear_openings_verify_with_and_without_iterations() {
         let pcs = HachiPcs::<K>::new(Q, choices(iterations)).unwrap();
         let coeffs = residues("f", vars as u64, 1 << vars);
         let point = exts("x", vars as u64, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
         let context = [vars as u8; 32];
-        let (value, proof) = pcs.prove_multilinear(&state, &point, &context).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
         assert_eq!(value, evaluate(&field, &coeffs, &point), "vars {vars}");
         let schedule = pcs.multilinear_schedule(vars).unwrap();
         assert_eq!(proof.iterations.len(), schedule.iterations.len());
@@ -140,9 +147,11 @@ fn inner_products_verify_with_and_without_iterations() {
         let pcs = HachiPcs::<K>::new(Q, choices(iterations)).unwrap();
         let values = exts("s", len as u64, len);
         let weights = exts("e", len as u64, len);
-        let (com, state) = pcs.commit_vector(&values).unwrap();
+        let (com, state) = pcs.commit_vector(&values, &SEED).unwrap();
         let context = [len as u8; 32];
-        let (value, proof) = pcs.prove_inner_product(&state, &weights, &context).unwrap();
+        let (value, proof) = pcs
+            .prove_inner_product(&state, &weights, &context, &OPEN_SEED)
+            .unwrap();
         let direct = values
             .iter()
             .zip(&weights)
@@ -189,9 +198,11 @@ fn every_altered_word_of_a_proof_is_rejected() {
         let vars = 8;
         let coeffs = residues("f", 77, 1 << vars);
         let point = exts("x", 77, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
         let context = [1u8; 32];
-        let (value, proof) = pcs.prove_multilinear(&state, &point, &context).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
         assert_eq!(proof.iterations.len(), iterations);
         let words = pcs.proof_to_words(&proof);
         let step = (words.len() / 150).max(1);
@@ -236,10 +247,12 @@ fn timings_at_hachi_co_sizes() {
         let coeffs = residues("f", vars as u64, 1 << vars);
         let point = exts("x", vars as u64, vars);
         let t = Instant::now();
-        let (com, state) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
         let commit = t.elapsed();
         let t = Instant::now();
-        let (value, proof) = pcs.prove_multilinear(&state, &point, &[0u8; 32]).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &[0u8; 32], &OPEN_SEED)
+            .unwrap();
         let prove = t.elapsed();
         let t = Instant::now();
         pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
@@ -284,8 +297,10 @@ fn other_choices_verify_as_well() {
         let vars = 9;
         let coeffs = residues("g", d as u64, 1 << vars);
         let point = exts("y", d as u64, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs).unwrap();
-        let (value, proof) = pcs.prove_multilinear(&state, &point, &[2u8; 32]).unwrap();
+        let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &[2u8; 32], &OPEN_SEED)
+            .unwrap();
         assert_eq!(value, evaluate(&field, &coeffs, &point));
         pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[2u8; 32])
             .unwrap_or_else(|e| panic!("d {d}, b {b}, heights {n_a} {n_b} {n_d}: {e}"));
@@ -297,9 +312,9 @@ fn other_choices_verify_as_well() {
         let len = 29;
         let values = exts("v", d as u64, len);
         let weights = exts("w", d as u64, len);
-        let (com, state) = pcs.commit_vector(&values).unwrap();
+        let (com, state) = pcs.commit_vector(&values, &SEED).unwrap();
         let (value, proof) = pcs
-            .prove_inner_product(&state, &weights, &[4u8; 32])
+            .prove_inner_product(&state, &weights, &[4u8; 32], &OPEN_SEED)
             .unwrap();
         pcs.verify_inner_product(&com, len, &weights, &value, &proof, &[4u8; 32])
             .unwrap_or_else(|e| panic!("vector, d {d}, b {b}: {e}"));
@@ -321,9 +336,11 @@ fn a_proof_about_another_witness_is_rejected() {
         let mut other = coeffs.clone();
         other[17] = (other[17] + 1) % Q;
         let point = exts("x", 5, vars);
-        let (com, _) = pcs.commit_multilinear(&coeffs).unwrap();
-        let (_, cheat) = pcs.commit_multilinear(&other).unwrap();
-        let (value, proof) = pcs.prove_multilinear(&cheat, &point, &[0u8; 32]).unwrap();
+        let (com, _) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        let (_, cheat) = pcs.commit_multilinear(&other, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&cheat, &point, &[0u8; 32], &OPEN_SEED)
+            .unwrap();
         assert!(
             pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
                 .is_err(),
@@ -334,10 +351,10 @@ fn a_proof_about_another_witness_is_rejected() {
         let mut changed = values.clone();
         changed[3].0[1] = (changed[3].0[1] + 1) % Q;
         let weights = exts("e", 6, len);
-        let (com, _) = pcs.commit_vector(&values).unwrap();
-        let (_, cheat) = pcs.commit_vector(&changed).unwrap();
+        let (com, _) = pcs.commit_vector(&values, &SEED).unwrap();
+        let (_, cheat) = pcs.commit_vector(&changed, &SEED).unwrap();
         let (value, proof) = pcs
-            .prove_inner_product(&cheat, &weights, &[0u8; 32])
+            .prove_inner_product(&cheat, &weights, &[0u8; 32], &OPEN_SEED)
             .unwrap();
         assert!(
             pcs.verify_inner_product(&com, len, &weights, &value, &proof, &[0u8; 32])
@@ -528,8 +545,10 @@ fn packed_encodings_have_the_sizes_of_the_formulas() {
         let vars = 9;
         let coeffs = residues_mod(q, "packed/f", d as u64 + b, 1 << vars);
         let point = exts_mod(q, "packed/x", d as u64 + b, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs).unwrap();
-        let (value, proof) = pcs.prove_multilinear(&state, &point, &[6u8; 32]).unwrap();
+        let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear(&state, &point, &[6u8; 32], &OPEN_SEED)
+            .unwrap();
         assert_eq!(value, evaluate(&field, &coeffs, &point), "{what}");
         let words = pcs.proof_to_words(&proof);
         assert_eq!(
@@ -551,9 +570,9 @@ fn packed_encodings_have_the_sizes_of_the_formulas() {
         let len = 37;
         let values = exts_mod(q, "packed/s", d as u64 + b, len);
         let weights = exts_mod(q, "packed/e", d as u64 + b, len);
-        let (com, state) = pcs.commit_vector(&values).unwrap();
+        let (com, state) = pcs.commit_vector(&values, &SEED).unwrap();
         let (value, proof) = pcs
-            .prove_inner_product(&state, &weights, &[7u8; 32])
+            .prove_inner_product(&state, &weights, &[7u8; 32], &OPEN_SEED)
             .unwrap();
         let words = pcs.proof_to_words(&proof);
         assert_eq!(words.len(), pcs.vector_proof_words(len).unwrap(), "{what}");
@@ -602,10 +621,12 @@ fn malformed_encodings_are_rejected() {
     let (vars, com, point, value, proof) = (8..12)
         .map(|vars| {
             let (com, state) = pcs
-                .commit_multilinear(&residues_mod(Q34, "bad/f", 0, 1 << vars))
+                .commit_multilinear(&residues_mod(Q34, "bad/f", 0, 1 << vars), &SEED)
                 .unwrap();
             let point = exts_mod(Q34, "bad/x", 0, vars);
-            let (value, proof) = pcs.prove_multilinear(&state, &point, &[5u8; 32]).unwrap();
+            let (value, proof) = pcs
+                .prove_multilinear(&state, &point, &[5u8; 32], &OPEN_SEED)
+                .unwrap();
             (vars, com, point, value, proof)
         })
         .find(|(_, _, _, _, proof)| !stream_bits(&pcs, proof).is_multiple_of(64))
@@ -732,10 +753,12 @@ fn whatever_decodes_reencodes_to_the_same_words() {
         .unwrap();
         let vars = 8;
         let (_, state) = pcs
-            .commit_multilinear(&residues_mod(Q34, "canon/f", b, 1 << vars))
+            .commit_multilinear(&residues_mod(Q34, "canon/f", b, 1 << vars), &SEED)
             .unwrap();
         let point = exts_mod(Q34, "canon/x", b, vars);
-        let (_, proof) = pcs.prove_multilinear(&state, &point, &[8u8; 32]).unwrap();
+        let (_, proof) = pcs
+            .prove_multilinear(&state, &point, &[8u8; 32], &OPEN_SEED)
+            .unwrap();
         let words = pcs.proof_to_words(&proof);
         let mut rng = Mix(b * 100 + iterations as u64);
         let (mut decoded, mut rejected) = (0, 0);
@@ -817,16 +840,19 @@ fn outputs_are_pinned() {
         let context = [9u8; 32];
         let (com, words) = if kind == "multilinear" {
             let (com, state) = pcs
-                .commit_multilinear(&residues("pin/f", 0, 1 << 10))
+                .commit_multilinear(&residues("pin/f", 0, 1 << 10), &SEED)
                 .unwrap();
             let point = exts("pin/x", 0, 10);
-            let proof = pcs.prove_multilinear(&state, &point, &context).unwrap().1;
+            let proof = pcs
+                .prove_multilinear(&state, &point, &context, &OPEN_SEED)
+                .unwrap()
+                .1;
             (com, pcs.proof_to_words(&proof))
         } else {
-            let (com, state) = pcs.commit_vector(&exts("pin/s", 0, 46)).unwrap();
+            let (com, state) = pcs.commit_vector(&exts("pin/s", 0, 46), &SEED).unwrap();
             let weights = exts("pin/e", 0, 46);
             let proof = pcs
-                .prove_inner_product(&state, &weights, &context)
+                .prove_inner_product(&state, &weights, &context, &OPEN_SEED)
                 .unwrap()
                 .1;
             (com, pcs.proof_to_words(&proof))

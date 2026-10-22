@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import platform
+import re
 import ssl
 from pathlib import Path
 
@@ -89,6 +90,37 @@ def boxed(prg, gamma, n):
 
 def short(prg, beta, n):
     return [below(prg, beta) - beta // 2 for _ in range(n)]
+
+
+def gauss_tables():
+    """The tables of src/gauss_tables.rs, read from the Rust file (so that this script needs no
+    mpmath): GAUSS_SIGMA_<sigma> by log2(sigma)."""
+    text = (Path(__file__).resolve().parents[2] / "src" / "gauss_tables.rs").read_text()
+    out = {}
+    for sigma, body in re.findall(r"pub const GAUSS_SIGMA_(\d+): \[u128; \d+\] = \[(.*?)\];", text, re.S):
+        out[int(sigma).bit_length() - 1] = [int(h, 16) for h in re.findall(r"0x([0-9a-f]{32})", body)]
+    return out
+
+
+def gaussian(prg, table, n):
+    """gauss::gaussian: per try V = w0 + 2^64 w1 and the sign bit of w2; K counts the entries
+    above V (a full count here; Rust searches the prefix); -K for sign 0, K for sign 1 and
+    K != 0, else another try."""
+    out = []
+    for _ in range(n):
+        for _try in range(256):
+            v = prg.u64() | (prg.u64() << 64)
+            sign = prg.u64() & 1
+            k = sum(1 for t in table if v < t)
+            if sign == 0:
+                out.append(-k)
+                break
+            if k != 0:
+                out.append(k)
+                break
+        else:
+            raise ArithmeticError("repetition cap")
+    return out
 
 
 def floyd(prg, n, k):
@@ -223,6 +255,14 @@ def main():
         prg = Prg(SEED_A, b"short", i)
         case = dict(stream(SEED_A, b"short", i), beta=beta, len=25, values=short(prg, beta, 25))
         out["short"].append(with_tail(prg, case))
+
+    out["gaussian"] = []
+    tables = gauss_tables()
+    for log_sigma in sorted(tables):
+        prg = Prg(SEED_A, b"gaussian", log_sigma)
+        case = dict(stream(SEED_A, b"gaussian", log_sigma), log_sigma=log_sigma, len=40,
+                    values=gaussian(prg, tables[log_sigma], 40))
+        out["gaussian"].append(with_tail(prg, case))
 
     out["l1ball_count"] = [
         {"d": d, "omega": w, "count": str(sum(l1_weights(d, w)))}

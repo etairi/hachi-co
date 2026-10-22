@@ -18,6 +18,9 @@ use hachi_co_sumcheck::{
 };
 use std::sync::OnceLock;
 
+/// The base PCS's seed for the direct calls: `ClearPcs` ignores it.
+const SEED: [u8; 32] = [0; 32];
+
 pub const K: usize = 4;
 
 /// The reference base PCS of the tests.
@@ -59,12 +62,12 @@ pub fn attach_openings<H: Challenger<K>>(
     for private in privates {
         let mut coeffs = private.w_table.clone();
         mobius(field.zq(), &mut coeffs).unwrap();
-        let (com_w, st_w) = pcs.commit_multilinear(&coeffs).unwrap();
+        let (com_w, st_w) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
         let (com_g0, st_g0) = pcs
-            .commit_vector(&blinder_coefficients(&private.g0))
+            .commit_vector(&blinder_coefficients(&private.g0), &SEED)
             .unwrap();
         let (com_g1, st_g1) = pcs
-            .commit_vector(&blinder_coefficients(&private.g1))
+            .commit_vector(&blinder_coefficients(&private.g1), &SEED)
             .unwrap();
         for (poly, com) in [
             (ClaimedPoly::W, com_w),
@@ -76,12 +79,24 @@ pub fn attach_openings<H: Challenger<K>>(
         for poly in [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1] {
             let context = ch.context(&opening_label(private.party, poly));
             let (_, proof) = match poly {
-                ClaimedPoly::W => pcs.prove_multilinear(&st_w, point, &context).unwrap(),
+                ClaimedPoly::W => pcs
+                    .prove_multilinear(&st_w, point, &context, &SEED)
+                    .unwrap(),
                 ClaimedPoly::G0 => pcs
-                    .prove_inner_product(&st_g0, &blinder_weights(field, point, l.d0), &context)
+                    .prove_inner_product(
+                        &st_g0,
+                        &blinder_weights(field, point, l.d0),
+                        &context,
+                        &SEED,
+                    )
                     .unwrap(),
                 ClaimedPoly::G1 => pcs
-                    .prove_inner_product(&st_g1, &blinder_weights(field, point, l.d1), &context)
+                    .prove_inner_product(
+                        &st_g1,
+                        &blinder_weights(field, point, l.d1),
+                        &context,
+                        &SEED,
+                    )
                     .unwrap(),
             };
             openings.of_mut(poly).push(pcs.proof_to_words(&proof));

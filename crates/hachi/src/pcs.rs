@@ -18,8 +18,25 @@
 //!
 //! Then the iterations of the [`Schedule`] ([`crate::iteration`]) and the final step, which
 //! sends the last witness in the clear (paper, Section 4.4): the verifier recomputes its
-//! commitment and checks the claim directly. No step hides anything: this is the non-hiding
-//! scheme (hiding comes with the Hwang-Seo-Song changes).
+//! commitment and checks the claim directly.
+//!
+//! **Hiding.** With [`HachiChoices::hiding`] every commitment is randomized
+//! ([`Hiding`](crate::params::Hiding), `docs/hachi-hiding.md` §6; the draft's item (i),
+//! 4_preliminaries.tex:334).
+//! - Under MLWE the inner commitments $\mathbf t_i$ are pseudorandom, so $\mathbf u$ is
+//!   indistinguishable from the commitment of uniform $\mathbf t_i$, which does not depend on
+//!   the committed object: the commitment hides it. This holds at an MLWE rank $\nu$ of real
+//!   security; the toy choices have $\nu = 1$.
+//! - The final step also sends the last commitment's randomness, and the verifier checks that it
+//!   lies in the support of $\chi$.
+//! - The openings reveal what they revealed before, the last witness and its randomness
+//!   included. So a commitment hides only until it is opened, and with no iteration the opening
+//!   sends the committed object itself.
+//!
+//! **Randomness.** The prover's methods take a secret 32-byte seed, which only hiding uses; a
+//! commitment draws from the PRG stream `(seed, "hachi/commit/r", 0)`, an opening from the
+//! streams of [`crate::iteration`]. Every commitment and every opening needs a fresh seed: an
+//! opening of the same state with a reused seed repeats its randomness.
 //!
 //! **Schedule.** Unless [`HachiChoices::fixed_iterations`] fixes it, an opening runs the number
 //! of iterations, from 0 to [`HachiChoices::max_iterations`], whose proof has the fewest words
@@ -38,17 +55,24 @@
 //! - proof: `[VERSION, #partials, k, L_1, …, L_k, N]` for $k$ iterations of $L_i$ sumcheck
 //!   rounds and a final message of $N$ ring elements, then the partial evaluations, $Y$, per
 //!   iteration $\mathbf v$, $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$,
-//!   the $K$ partial evaluations and $p'$, and the final message.
+//!   the $K$ partial evaluations and $p'$, and the final message. With hiding the header ends
+//!   with the number $R$ of ring elements of the final randomness, which follows the final
+//!   message, each coefficient $x$ as $x - \mathrm{lo}$ in
+//!   $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1) \rceil$ bits for the support
+//!   $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$. Without hiding the encodings are those of the
+//!   non-hiding scheme, unchanged.
 //!
 //! Every value has a single encoding: the decoders reject residues not below $q$, digit indices
-//! outside the digit set, non-zero padding, and any length other than the one the header and
-//! the parameters imply. The counts in a header are checked against the schedule by the
-//! verifier.
+//! outside the digit set, randomness outside the support of $\chi$, non-zero padding, and any
+//! length other than the one the header and the parameters imply. The counts in a header are
+//! checked against the schedule by the verifier.
 
 use crate::commit::{Committed, Ctx, commit};
 use crate::error::VerifyError;
 use crate::fs::Fs;
-use crate::iteration::{self, Claim, IterationProof, check_exts, check_polys, evaluate_claim};
+use crate::iteration::{
+    self, Claim, IterationProof, check_exts, check_polys, commitment_randomness, evaluate_claim,
+};
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
 use crate::sumcheck::RoundMessage;
 use crate::{Error, Result};
@@ -93,6 +117,9 @@ pub struct Proof<const K: usize> {
     pub iterations: Vec<IterationProof<K>>,
     /// The final witness's message, chunk after chunk.
     pub final_message: Vec<Poly>,
+    /// With hiding, the final witness's commitment randomness, chunk after chunk ($\nu + n_A$
+    /// ring elements per chunk); empty without.
+    pub final_randomness: Vec<Poly>,
 }
 
 /// Hachi with fixed parameters.
@@ -108,6 +135,9 @@ const LABEL_POINT: &[u8] = b"hachi/point";
 const LABEL_VALUE: &[u8] = b"hachi/value";
 const LABEL_PARTIALS: &[u8] = b"hachi/input/partials";
 const LABEL_RING_VALUE: &[u8] = b"hachi/input/ring-value";
+
+/// The PRG domain of a commitment's randomness (index 0).
+pub const DOMAIN_COMMIT_R: &[u8] = b"hachi/commit/r";
 
 impl<const K: usize> HachiPcs<K> {
     /// Hachi over $\mathbb F_{q^K}$ with the given choices.
@@ -215,6 +245,17 @@ impl<const K: usize> HachiPcs<K> {
         (u64::BITS - (self.ctx.choices.b - 1).leading_zeros()) as usize
     }
 
+    /// With hiding, the support $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$ and the bits of a
+    /// coefficient of the final randomness, $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1)
+    /// \rceil$; `None` without.
+    fn noise_field(&self) -> Option<(i64, i64, usize)> {
+        let h = self.ctx.hiding()?;
+        // The range is valid: `check` accepted the choices.
+        let (lo, hi) = h.noise.range(self.ctx.choices.b).ok()?;
+        let width = (hi - lo) as u64;
+        Some((lo, hi, (u64::BITS - width.leading_zeros()) as usize))
+    }
+
     /// The number of words of [`HachiPcs::commitment_to_words`]: the version, then $n_B d$
     /// packed residues.
     pub fn commitment_words(&self) -> usize {
@@ -241,11 +282,13 @@ impl<const K: usize> HachiPcs<K> {
 
     /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and `partials`
     /// partial evaluations (module documentation, "Encodings"): the header ($4 + k$ words for
-    /// $k$ iterations), then $\lceil \log_2 q \rceil$ bits per residue: the partial evaluations
-    /// ($K$ residues each), $Y$ ($d$), per iteration $\mathbf v$ ($n_D d$), $\mathbf u'$
-    /// ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field elements), $y'$ ($K$), the
-    /// partial evaluations ($K^2$) and $p'$ ($d$); and the final message, $2^{r+m} d$ residues
-    /// without iterations, else as many digits of $\lceil \log_2 b \rceil$ bits.
+    /// $k$ iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue:
+    /// the partial evaluations ($K$ residues each), $Y$ ($d$), per iteration $\mathbf v$
+    /// ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field
+    /// elements), $y'$ ($K$), the partial evaluations ($K^2$) and $p'$ ($d$); the final message,
+    /// $2^{r+m} d$ residues without iterations, else as many digits of
+    /// $\lceil \log_2 b \rceil$ bits; and with hiding the final randomness,
+    /// $2^r (\nu + n_A) d$ coefficients of the bits of [`Noise`](crate::params::Noise)'s support.
     fn proof_words(&self, schedule: &Schedule, partials: usize) -> usize {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
@@ -260,16 +303,26 @@ impl<const K: usize> HachiPcs<K> {
         } else {
             self.digit_bits()
         };
-        let bits = residues * self.residue_bits() + entries * entry_bits;
-        4 + schedule.iterations.len() + bits.div_ceil(64)
+        let mut bits = residues * self.residue_bits() + entries * entry_bits;
+        let mut header = 4 + schedule.iterations.len();
+        if let Some((_, _, noise_bits)) = self.noise_field() {
+            header += 1;
+            bits += last.chunks() * self.ctx.rand_len(c.n_a) * d * noise_bits;
+        }
+        header + bits.div_ceil(64)
     }
 
     /// Commits to the multilinear polynomial with monomial coefficients `coeffs` ($2^\ell$
-    /// residues, $\ell \ge \alpha$; module documentation for the order).
+    /// residues, $\ell \ge \alpha$; module documentation for the order), with randomness from
+    /// the secret `seed` if the choices hide (module documentation, "Randomness").
     ///
     /// # Errors
     /// [`Error::Shape`] unless the length is a power of two of at least $d$; arithmetic errors.
-    pub fn commit_multilinear(&self, coeffs: &[u64]) -> Result<(Commitment, State<K>)> {
+    pub fn commit_multilinear(
+        &self,
+        coeffs: &[u64],
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
         let ctx = &self.ctx;
         if !coeffs.len().is_power_of_two() || coeffs.len() < ctx.d() {
             return Err(Error::Shape(format!(
@@ -281,7 +334,8 @@ impl<const K: usize> HachiPcs<K> {
         let layout = self.multilinear_layout(vars)?;
         let coeffs: Vec<u64> = coeffs.iter().map(|c| ctx.ring.zq().reduce(*c)).collect();
         let message = self.multilinear_message(&layout, vars, &coeffs)?;
-        let committed = commit(ctx, 0, layout, message)?;
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
+        let committed = commit(ctx, 0, layout, message, r)?;
         Ok((
             Commitment {
                 u: committed.u.clone(),
@@ -316,16 +370,22 @@ impl<const K: usize> HachiPcs<K> {
             .collect())
     }
 
-    /// Commits to the vector `values` ($N \ge 1$ field elements).
+    /// Commits to the vector `values` ($N \ge 1$ field elements), with randomness from the
+    /// secret `seed` if the choices hide.
     ///
     /// # Errors
     /// [`Error::Shape`] for an empty vector; arithmetic errors.
-    pub fn commit_vector(&self, values: &[Ext<K>]) -> Result<(Commitment, State<K>)> {
+    pub fn commit_vector(
+        &self,
+        values: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
         let ctx = &self.ctx;
         let layout = self.vector_layout(values.len())?;
         let values: Vec<Ext<K>> = values.iter().map(|v| ctx.field().reduce(v)).collect();
         let message = vec![self.vector_blocks(&layout, &values)?];
-        let committed = commit(ctx, 0, layout, message)?;
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
+        let committed = commit(ctx, 0, layout, message, r)?;
         Ok((
             Commitment {
                 u: committed.u.clone(),
@@ -384,6 +444,11 @@ impl<const K: usize> HachiPcs<K> {
                 .iter()
                 .map(|b| u64::from_le_bytes(*b)),
         );
+        // Only with hiding, after the other words: a non-hiding statement is unchanged.
+        if let Some(h) = c.hiding {
+            words.push(h.nu as u64);
+            words.extend(h.noise.words());
+        }
         fs.words(LABEL_STATEMENT, &words);
         fs.polys(LABEL_COMMITMENT, commitment);
         fs.exts(LABEL_POINT, point);
@@ -450,7 +515,8 @@ impl<const K: usize> HachiPcs<K> {
     }
 
     /// Runs the iterations and the final step for the prover; `partials` is the number of
-    /// partial evaluations the proof carries (it enters the choice of the schedule).
+    /// partial evaluations the proof carries (it enters the choice of the schedule). Returns the
+    /// iterations, the final message and the final randomness.
     fn prove_rest(
         &self,
         layout: Layout,
@@ -458,23 +524,25 @@ impl<const K: usize> HachiPcs<K> {
         committed: &Committed,
         claim: Claim,
         fs: &mut Fs,
-    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
+        seed: &[u8; 32],
+    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>, Vec<Poly>)> {
         let schedule = self.schedule(layout, partials)?;
         let mut witness = committed.clone();
         let mut claim = claim;
         let mut proofs = Vec::with_capacity(schedule.iterations.len());
         for (index, params) in schedule.iterations.iter().enumerate() {
             let (proof, next, next_claim) =
-                iteration::prove(&self.ctx, index, params, &witness, &claim, fs)?;
+                iteration::prove(&self.ctx, index, params, &witness, &claim, fs, seed)?;
             proofs.push(proof);
             witness = next;
             claim = next_claim;
         }
-        Ok((proofs, witness.message.concat()))
+        Ok((proofs, witness.message.concat(), witness.r.concat()))
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
-    /// proof. `context` binds the proof to the caller's transcript.
+    /// proof. `context` binds the proof to the caller's transcript; `seed` is the opening's
+    /// fresh secret seed (module documentation, "Randomness").
     ///
     /// # Errors
     /// [`Error::Shape`] for a point of the wrong length or a state of a vector; prover errors.
@@ -483,6 +551,7 @@ impl<const K: usize> HachiPcs<K> {
         state: &State<K>,
         point: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> Result<(Ext<K>, Proof<K>)> {
         let ctx = &self.ctx;
         let field = ctx.field();
@@ -535,8 +604,8 @@ impl<const K: usize> HachiPcs<K> {
         let mut fs = self.statement(context, 1, *vars, &state.committed.u, &point, &value);
         fs.exts(LABEL_PARTIALS, &partials);
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let (iterations, final_message) =
-            self.prove_rest(layout, K, &state.committed, claim, &mut fs)?;
+        let (iterations, final_message, final_randomness) =
+            self.prove_rest(layout, K, &state.committed, claim, &mut fs, seed)?;
         Ok((
             value,
             Proof {
@@ -544,12 +613,14 @@ impl<const K: usize> HachiPcs<K> {
                 ring_value,
                 iterations,
                 final_message,
+                final_randomness,
             },
         ))
     }
 
     /// Proves $\langle \mathbf s, \mathbf e \rangle$ for a committed vector $\mathbf s$ and
-    /// public weights $\mathbf e$ of the same length; returns the value and the proof.
+    /// public weights $\mathbf e$ of the same length; returns the value and the proof. `seed` as
+    /// for [`HachiPcs::prove_multilinear`].
     ///
     /// # Errors
     /// [`Error::Shape`] for weights of the wrong length or a state of a polynomial; prover
@@ -559,6 +630,7 @@ impl<const K: usize> HachiPcs<K> {
         state: &State<K>,
         weights: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> Result<(Ext<K>, Proof<K>)> {
         let ctx = &self.ctx;
         let field = ctx.field();
@@ -602,8 +674,8 @@ impl<const K: usize> HachiPcs<K> {
             a,
             target: ring_value.clone(),
         };
-        let (iterations, final_message) =
-            self.prove_rest(layout, 0, &state.committed, claim, &mut fs)?;
+        let (iterations, final_message, final_randomness) =
+            self.prove_rest(layout, 0, &state.committed, claim, &mut fs, seed)?;
         Ok((
             value,
             Proof {
@@ -611,6 +683,7 @@ impl<const K: usize> HachiPcs<K> {
                 ring_value,
                 iterations,
                 final_message,
+                final_randomness,
             },
         ))
     }
@@ -656,12 +729,38 @@ impl<const K: usize> HachiPcs<K> {
                 }
             }
         }
+        let rand_len = ctx.rand_len(ctx.choices.n_a);
+        check_polys(
+            ctx,
+            "final randomness",
+            &proof.final_randomness,
+            last.chunks() * rand_len,
+        )?;
+        if let Some((lo, hi, _)) = self.noise_field() {
+            let zq = ctx.ring.zq();
+            for x in proof.final_randomness.iter().flat_map(|p| &p.0) {
+                if !(lo..=hi).contains(&zq.to_centered(*x)) {
+                    return Err(VerifyError::Check(
+                        "the final randomness is outside the support of chi".into(),
+                    ));
+                }
+            }
+        }
         let message: Vec<Vec<Poly>> = proof
             .final_message
             .chunks_exact(last.chunk_len())
             .map(<[Poly]>::to_vec)
             .collect();
-        let recomputed = commit(ctx, schedule.iterations.len(), last, message.clone())?;
+        let r: Vec<Vec<Poly>> = if rand_len == 0 {
+            Vec::new()
+        } else {
+            proof
+                .final_randomness
+                .chunks_exact(rand_len)
+                .map(<[Poly]>::to_vec)
+                .collect()
+        };
+        let recomputed = commit(ctx, schedule.iterations.len(), last, message.clone(), r)?;
         if recomputed.u != u {
             return Err(VerifyError::Check(
                 "the final witness does not open the commitment".into(),
@@ -976,6 +1075,10 @@ impl<const K: usize> HachiPcs<K> {
         ];
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
         out.push(proof.final_message.len() as u64);
+        let noise = self.noise_field();
+        if noise.is_some() {
+            out.push(proof.final_randomness.len() as u64);
+        }
         let mut w = BitWriter::default();
         self.put_exts(&mut w, &proof.partials);
         self.put_polys(&mut w, core::slice::from_ref(&proof.ring_value));
@@ -1004,18 +1107,29 @@ impl<const K: usize> HachiPcs<K> {
                 }
             }
         }
+        if let Some((lo, _, bits)) = noise {
+            let zq = self.ctx.ring.zq();
+            for x in proof.final_randomness.iter().flat_map(|p| &p.0) {
+                w.push(
+                    (i128::from(zq.to_centered(*x)) - i128::from(lo)) as u64,
+                    bits,
+                );
+            }
+        }
         out.extend(w.words);
         out
     }
 
     /// The inverse of [`HachiPcs::proof_to_words`]. The counts of the header (iterations,
-    /// rounds, final ring elements) are checked against the schedule by the verifier.
+    /// rounds, final ring elements, and with hiding the final randomness) are checked against
+    /// the schedule by the verifier.
     ///
     /// # Errors
     /// [`Error::Shape`] for any input that [`HachiPcs::proof_to_words`] does not produce from a
     /// proof of this scheme's shape: another version, a number of partial evaluations other
     /// than 0 and $K$, a length other than the one the header implies, a residue not below
-    /// $q$, a digit index outside the digit set, or non-zero padding.
+    /// $q$, a digit index outside the digit set, a randomness coefficient outside the support
+    /// of $\chi$, or non-zero padding.
     pub fn proof_from_words(&self, words: &[u64]) -> Result<Proof<K>> {
         let shape = |what: &str| Error::Shape(what.into());
         let [version, partials, count, rest @ ..] = words else {
@@ -1038,12 +1152,23 @@ impl<const K: usize> HachiPcs<K> {
         let Some((&final_count, stream)) = rest.split_first() else {
             return Err(shape("the encoding ends early"));
         };
+        let noise = self.noise_field();
+        let (rand_count, stream) = match noise {
+            None => (0, stream),
+            Some(_) => {
+                let Some((&r, stream)) = stream.split_first() else {
+                    return Err(shape("the encoding ends early"));
+                };
+                (r, stream)
+            }
+        };
         let too_large = || shape("a count in the header is too large");
         let round_counts = round_counts
             .iter()
             .map(|l| usize::try_from(*l).map_err(|_| too_large()))
             .collect::<Result<Vec<_>>>()?;
         let final_count = usize::try_from(final_count).map_err(|_| too_large())?;
+        let rand_count = usize::try_from(rand_count).map_err(|_| too_large())?;
         // The length the header implies, checked before anything is allocated.
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
@@ -1058,12 +1183,19 @@ impl<const K: usize> HachiPcs<K> {
         } else {
             self.digit_bits()
         };
+        let noise_bits = noise.map_or(0, |(_, _, bits)| bits);
         let bits = residues
             .and_then(|r| r.checked_mul(self.residue_bits()))
             .and_then(|b| {
                 final_count
                     .checked_mul(d)?
                     .checked_mul(entry_bits)?
+                    .checked_add(b)
+            })
+            .and_then(|b| {
+                rand_count
+                    .checked_mul(d)?
+                    .checked_mul(noise_bits)?
                     .checked_add(b)
             })
             .ok_or_else(too_large)?;
@@ -1104,12 +1236,36 @@ impl<const K: usize> HachiPcs<K> {
                 .map(|_| self.take_digit_poly(&mut r))
                 .collect::<Result<Vec<_>>>()?
         };
+        let final_randomness = match noise {
+            None => Vec::new(),
+            Some((lo, hi, bits)) => {
+                let zq = self.ctx.ring.zq();
+                let width = (hi - lo) as u64;
+                (0..rand_count)
+                    .map(|_| {
+                        (0..d)
+                            .map(|_| {
+                                let x = r.take(bits)?;
+                                if x > width {
+                                    return Err(shape(
+                                        "a randomness coefficient outside the support of chi",
+                                    ));
+                                }
+                                Ok(zq.from_i128(i128::from(lo) + i128::from(x)))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                            .map(Poly)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+        };
         r.finish()?;
         Ok(Proof {
             partials,
             ring_value,
             iterations,
             final_message,
+            final_randomness,
         })
     }
 }

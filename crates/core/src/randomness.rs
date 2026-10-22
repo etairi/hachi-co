@@ -5,6 +5,7 @@ use crate::data::{Blinder, BlinderKind};
 use crate::{Error, Result};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::{ShakePrg, rej, uniform};
+use rand::Rng;
 use std::collections::BTreeSet;
 
 /// The PRG domain of the resharing in Commit ([`PartyRandomness::reshare`]; index 0).
@@ -18,6 +19,8 @@ pub const DOMAIN_RHO: &str = "hachi-co/r2l/rho";
 pub const DOMAIN_BLINDER_G0: &str = "hachi-co/sumcheck/g0";
 /// The PRG domain of the blinder $g\_{1,i}$ ([`PartyRandomness::blinder`]; index 0).
 pub const DOMAIN_BLINDER_G1: &str = "hachi-co/sumcheck/g1";
+/// The PRG domain of the base PCS's seeds ([`PartyRandomness::base_pcs`]; index as there).
+pub const DOMAIN_BASE_PCS: &str = "hachi-co/sumcheck/base-pcs";
 
 /// One uniform element of $\mathbb F\_{q^K}$: its $K$ coordinates, each
 /// [`uniform::uniform_mod_q`] (exact rejection sampling, in coordinate order).
@@ -43,7 +46,7 @@ pub(crate) fn uniform_ext<const K: usize>(prg: &mut ShakePrg, q: u64) -> Result<
 ///
 /// [`PrgRandomness`] and `ReplayRandomness` implement the trait for every `K`. Generic code with
 /// a bound `R: PartyRandomness<K>` calls `rng.mask(..)` directly; on a concrete value, a method
-/// whose signature does not mention `K` (`mask`, `rho`) needs it spelled out:
+/// whose signature does not mention `K` (`mask`, `rho`, `base_pcs`) needs it spelled out:
 /// `PartyRandomness::<4>::mask(&mut rng, attempt, gamma, len)`.
 pub trait PartyRandomness<const K: usize> {
     /// $\mathsf{AS.Share}(\mathbf x, n)$ (`4_preliminaries.tex`:154; Commit,
@@ -85,6 +88,15 @@ pub trait PartyRandomness<const K: usize> {
         ell_pp: usize,
         degree: usize,
     ) -> Result<Blinder<K>>;
+
+    /// A fresh secret 32-byte seed for the base PCS ([`BasePcs`](crate::BasePcs), "Randomness";
+    /// `docs/hachi-hiding.md` 6.5). The sumcheck asks for one per commitment and per opening of each
+    /// of its three polynomials; the index distinguishes them (`ClaimedPoly::seed_index` of
+    /// `hachi-co-sumcheck`).
+    ///
+    /// # Errors
+    /// Implementation-specific.
+    fn base_pcs(&mut self, index: u64) -> Result<[u8; 32]>;
 }
 
 /// [`PartyRandomness`] from a [`ShakePrg`] keyed by the party's secret 32-byte seed, one PRG
@@ -96,6 +108,7 @@ pub trait PartyRandomness<const K: usize> {
 /// | `mask` | [`DOMAIN_MASK`], attempt | [`rej::mask`] ($\[-\gamma, \gamma\]$, entry by entry) |
 /// | `rho` | [`DOMAIN_RHO`], attempt | [`uniform::short`] ($S\_b$, entry by entry) |
 /// | `blinder` | [`DOMAIN_BLINDER_G0`] or [`DOMAIN_BLINDER_G1`], 0 | $s\_0$, then $s\_{j,k}$ row by row, each element as in `reshare` |
+/// | `base_pcs` | [`DOMAIN_BASE_PCS`], index | the first 32 bytes of the stream |
 ///
 /// **No reuse.** Each stream is served at most once: a second request for the same domain and
 /// index is [`Error::RandomnessReuse`], because a reused mask or share leaks the secret it hides
@@ -201,6 +214,14 @@ impl<const K: usize> PartyRandomness<K> for PrgRandomness {
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Blinder { s0, s })
+        })
+    }
+
+    fn base_pcs(&mut self, index: u64) -> Result<[u8; 32]> {
+        self.draw(DOMAIN_BASE_PCS, index, |prg| {
+            let mut seed = [0u8; 32];
+            prg.fill_bytes(&mut seed);
+            Ok(seed)
         })
     }
 }

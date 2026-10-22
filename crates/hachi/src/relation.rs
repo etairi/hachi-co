@@ -1,15 +1,19 @@
 //! The linear relation of one iteration (paper, Eq. (20)) and its ring switching (Section 4.3).
 //!
-//! The witness $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf t}, \hat{\mathbf z})$ satisfies, over
-//! $\mathcal R_q$, the rows
-//! 1. $\mathbf D \hat{\mathbf w} = \mathbf v$ ($n_D$ rows);
+//! The witness $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf t}, \hat{\mathbf z})$, with
+//! [`Hiding`](crate::params::Hiding) also $\hat{\boldsymbol\rho} = \mathbf J^{-1}(\boldsymbol\rho)$
+//! and $\hat{\mathbf r}_z = \mathbf J^{-1}(\mathbf r_z)$, satisfies, over $\mathcal R_q$, the rows
+//! 1. $\mathbf D \hat{\mathbf w} = \mathbf v$ ($n_D$ rows), with hiding
+//!    $\mathbf D \hat{\mathbf w} + \mathbf D' \mathbf J \hat{\boldsymbol\rho} = \mathbf v$;
 //! 2. $\mathbf B \hat{\mathbf t} = \mathbf u$ ($n_B$ rows, the commitment);
 //! 3. $\mathbf b^\top \mathbf G \hat{\mathbf w} = T$ (the claim $\sum_i b_i \mathbf a^\top
 //!    \mathbf f_i = T$, since $w_i = \mathbf a^\top \mathbf f_i$);
 //! 4. $(\mathbf c^\top \otimes \mathbf G_1) \hat{\mathbf w} - \mathbf a^\top \mathbf G \mathbf J
 //!    \hat{\mathbf z} = 0$ ($\mathbf G$ only for a decomposed witness);
 //! 5. $(\mathbf c^\top \otimes \mathbf G_{n_A}) \hat{\mathbf t} - \mathbf A \mathbf J \hat{\mathbf
-//!    z} = 0$ ($n_A$ rows).
+//!    z} = 0$ ($n_A$ rows), with hiding $\dots - \mathbf A' \mathbf J \hat{\mathbf r}_z = 0$, since
+//!    $\sum_i c_i \mathbf t_i = \mathbf A \mathbf z + \mathbf A' \mathbf r_z$ for
+//!    $\mathbf r_z = \sum_i c_i \mathbf r_i$.
 //!
 //! Over $\mathbb Z_q\[X\]$ each row holds up to $(X^d + 1) q_i$; the quotients are decomposed,
 //! $\hat q_i = \mathbf G^{-1}(q_i)$, so that every entry of the next witness is a digit. The next
@@ -20,7 +24,13 @@
 //! - $\hat{\mathbf w}$ at $[0, 2^r\delta)$, chunk $i$ and digit $k$ at $i\delta + k$;
 //! - $\hat{\mathbf t}$, chunk $j$, row $i$ and digit $k$ at offset $j n_A\delta + i\delta + k$;
 //! - $\hat{\mathbf z}$, element $x$ and digit $t$ at offset $x\tau + t$;
+//! - with hiding, $\hat{\boldsymbol\rho}$, entry $x$ and digit $t$ at offset $x\tau_\rho + t$,
+//!   then $\hat{\mathbf r}_z$, entry $x$ and digit $t$ at offset $x\tau_r + t$;
 //! - $\hat{\mathbf q}$, row $i$ and digit $k$ at $\mu + i\delta + k$.
+//!
+//! In $\mathbf A' = [\mathbf A_1' \mid \mathbf I_{n_A}]$ and
+//! $\mathbf D' = [\mathbf D_1' \mid \mathbf I_{n_D}]$, entry $x < \nu$ of the randomness meets
+//! column $x$ of $\mathbf A_1'$ or $\mathbf D_1'$, and entry $\nu + i$ meets row $i$ alone.
 
 use crate::commit::Ctx;
 use crate::mle::eval_poly;
@@ -48,6 +58,10 @@ pub struct Public<'a> {
     pub b_mat: &'a [Vec<Poly>],
     /// $\mathbf A$ ($n_A \times W$).
     pub a_mat: &'a [Vec<Poly>],
+    /// $\mathbf A_1'$ ($n_A \times \nu$) with [`Hiding`](crate::params::Hiding), else empty.
+    pub a_rand: &'a [Vec<Poly>],
+    /// $\mathbf D_1'$ ($n_D \times \nu$) with [`Hiding`](crate::params::Hiding), else empty.
+    pub d_rand: &'a [Vec<Poly>],
     /// $\mathbf v$ ($n_D$).
     pub v: &'a [Poly],
     /// The commitment $\mathbf u$ ($n_B$).
@@ -61,6 +75,10 @@ pub struct Columns {
     pub t: usize,
     /// Start of $\hat{\mathbf z}$.
     pub z: usize,
+    /// Start of $\hat{\boldsymbol\rho}$ (equal to the start of $\hat{\mathbf q}$ without hiding).
+    pub rho: usize,
+    /// Start of $\hat{\mathbf r}_z$ (equal to the start of $\hat{\mathbf q}$ without hiding).
+    pub r: usize,
     /// Start of $\hat{\mathbf q}$ ($= \mu$).
     pub q: usize,
     /// The number of ring-element columns, $2^{L-\alpha}$.
@@ -68,14 +86,18 @@ pub struct Columns {
 }
 
 impl Columns {
-    /// The offsets of an iteration.
-    pub fn of(params: &IterParams, n_a: usize, alpha: usize) -> Self {
+    /// The offsets of an iteration; `rho_len` is the length $\nu + n_D$ of
+    /// $\boldsymbol\rho$ (0 without hiding).
+    pub fn of(params: &IterParams, n_a: usize, alpha: usize, rho_len: usize) -> Self {
         let chunks = params.layout.chunks();
         let t = chunks * params.delta;
         let z = t + chunks * n_a * params.delta;
+        let rho = z + params.layout.width(params.delta) * params.tau;
         Self {
             t,
             z,
+            rho,
+            r: rho + rho_len * params.tau_rho,
             q: params.mu,
             total: 1 << (params.table_vars - alpha),
         }
@@ -132,11 +154,14 @@ fn exact_inner(ring2: &Ring, x: &[Poly], y: &[Poly]) -> Result<Poly> {
 
 /// The quotients $q_i$ of the rows: $(\text{row}_i(\mathbf z') - y_i) = (X^d + 1) q_i$ in
 /// $\mathbb Z_q\[X\]$, from the undecomposed values $\mathbf w$, the inner commitments
-/// $\mathbf t_j$ and $\mathbf z$ (equal, digit for digit, to the recompositions of
-/// $\hat{\mathbf w}$, $\hat{\mathbf t}$ and $\hat{\mathbf z}$).
+/// $\mathbf t_j$, $\mathbf z$, and with hiding $\boldsymbol\rho$ and $\mathbf r_z$ (equal, digit for
+/// digit, to the recompositions of $\hat{\mathbf w}$, $\hat{\mathbf t}$, $\hat{\mathbf z}$,
+/// $\hat{\boldsymbol\rho}$ and $\hat{\mathbf r}_z$; `rho` and `r_z` are empty without hiding).
 ///
 /// # Errors
+/// [`Error::Shape`] for randomness or randomness matrices of the wrong shape;
 /// [`Error::Protocol`] if a row does not vanish modulo $X^d + 1$ (a bug); arithmetic errors.
+#[allow(clippy::too_many_arguments)] // the parts of the witness
 pub fn quotients<const K: usize>(
     ctx: &Ctx<K>,
     public: &Public<'_>,
@@ -145,6 +170,8 @@ pub fn quotients<const K: usize>(
     t: &[Vec<Poly>],
     t_hat: &[Poly],
     z: &[Poly],
+    rho: &[Poly],
+    r_z: &[Poly],
 ) -> Result<Vec<Poly>> {
     let (ring, ring2, d) = (&ctx.ring, &ctx.ring2, ctx.d());
     let p = public.params;
@@ -164,9 +191,39 @@ pub fn quotients<const K: usize>(
     } else {
         z.to_vec()
     };
+    let nu = ctx.hiding().map_or(0, |h| h.nu);
+    let (n_a, n_d) = (ctx.choices.n_a, ctx.choices.n_d);
+    let (rand_a, rand_d) = if nu == 0 { (0, 0) } else { (n_a, n_d) };
+    if public.a_rand.len() != rand_a
+        || public.d_rand.len() != rand_d
+        || public
+            .a_rand
+            .iter()
+            .chain(public.d_rand)
+            .any(|row| row.len() != nu)
+        || r_z.len() != ctx.rand_len(n_a)
+        || rho.len() != ctx.rand_len(n_d)
+    {
+        return Err(Error::Shape(
+            "the randomness does not fit the hiding choices".into(),
+        ));
+    }
+    // [A1' | I] r or [D1' | I] r for row i, exactly: the matrix's row i against the first nu
+    // entries, plus entry nu + i.
+    let rand_row = |m1: &[Vec<Poly>], r: &[Poly], i: usize| -> Result<Poly> {
+        if r.is_empty() {
+            return Ok(ring2.zero());
+        }
+        let prod = exact_inner(ring2, &m1[i], &r[..nu])?;
+        Ok(ring2.add(&prod, &lift(ring2, &r[nu + i]))?)
+    };
     let mut sums: Vec<(Poly, Poly)> = Vec::new();
     for (i, row) in public.d_mat.iter().enumerate() {
-        sums.push((exact_inner(ring2, row, w_hat)?, public.v[i].clone()));
+        let s = ring2.add(
+            &exact_inner(ring2, row, w_hat)?,
+            &rand_row(public.d_rand, rho, i)?,
+        )?;
+        sums.push((s, public.v[i].clone()));
     }
     for (i, row) in public.b_mat.iter().enumerate() {
         sums.push((exact_inner(ring2, row, t_hat)?, public.u[i].clone()));
@@ -183,6 +240,7 @@ pub fn quotients<const K: usize>(
             &exact_inner(ring2, public.c, &ti)?,
             &exact_inner(ring2, row, z)?,
         )?;
+        let s = ring2.sub(&s, &rand_row(public.a_rand, r_z, i)?)?;
         sums.push((s, ring.zero()));
     }
     let mut out = Vec::with_capacity(sums.len());
@@ -252,10 +310,12 @@ pub fn mstar<const K: usize>(
         p.tau,
     );
     let rows = Rows::of(ctx);
-    let cols = Columns::of(p, n_a, ctx.alpha());
+    let nu = ctx.hiding().map_or(0, |h| h.nu);
+    let cols = Columns::of(p, n_a, ctx.alpha(), ctx.rand_len(n_d));
     let chunks = p.layout.chunks();
     let width = p.layout.width(delta);
     let d = ctx.d();
+    let (rand_a, rand_d) = if nu == 0 { (0, 0) } else { (n_a, n_d) };
     if eq1.len() < p.rows
         || alpha_pows.len() < d + 1
         || public.b.len() != chunks
@@ -266,13 +326,24 @@ pub fn mstar<const K: usize>(
         || public.a_mat.len() != n_a
         || public.v.len() != n_d
         || public.u.len() != n_b
+        || public.a_rand.len() != rand_a
+        || public.d_rand.len() != rand_d
+        || public
+            .a_rand
+            .iter()
+            .chain(public.d_rand)
+            .any(|row| row.len() != nu)
     {
         return Err(Error::Shape(
             "the relation's public data does not fit its parameters".into(),
         ));
     }
     let ev = |x: &Poly| eval_poly(field, x, &alpha_pows[..d]);
-    let pow = base_powers(&ctx.ring, ctx.choices.b, delta.max(tau));
+    let pow = base_powers(
+        &ctx.ring,
+        ctx.choices.b,
+        delta.max(tau).max(p.tau_rho).max(p.tau_r),
+    );
     let mut m = vec![field.zero(); cols.total];
     // w-hat.
     let (b_alpha, c_alpha): (Vec<Ext<K>>, Vec<Ext<K>>) = (
@@ -329,6 +400,34 @@ pub fn mstar<const K: usize>(
         let neg = field.neg(&base);
         for (t, pt) in pow[..tau].iter().enumerate() {
             m[cols.z + x * tau + t] = field.scale(&neg, *pt);
+        }
+    }
+    // rho-hat (row 1, +D') and r_z-hat (rows 5, -A'), digit t weighted by b^t.
+    if nu > 0 {
+        let (tau_rho, tau_r) = (p.tau_rho, p.tau_r);
+        for (r, row) in public.d_rand.iter().enumerate() {
+            let mut entries: Vec<(usize, Ext<K>)> =
+                row.iter().enumerate().map(|(x, m)| (x, ev(m))).collect();
+            entries.push((nu + r, field.one()));
+            for (x, e) in entries {
+                let weight = field.mul(&eq1[r], &e);
+                for (t, pt) in pow[..tau_rho].iter().enumerate() {
+                    let c = cols.rho + x * tau_rho + t;
+                    m[c] = field.add(&m[c], &field.scale(&weight, *pt));
+                }
+            }
+        }
+        for (i, row) in public.a_rand.iter().enumerate() {
+            let mut entries: Vec<(usize, Ext<K>)> =
+                row.iter().enumerate().map(|(x, m)| (x, ev(m))).collect();
+            entries.push((nu + i, field.one()));
+            for (x, e) in entries {
+                let weight = field.neg(&field.mul(&eq1[rows.a_rows + i], &e));
+                for (t, pt) in pow[..tau_r].iter().enumerate() {
+                    let c = cols.r + x * tau_r + t;
+                    m[c] = field.add(&m[c], &field.scale(&weight, *pt));
+                }
+            }
         }
     }
     // q-hat: -(alpha^d + 1) b^k in the row's own columns.

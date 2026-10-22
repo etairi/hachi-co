@@ -226,6 +226,7 @@ dependencies = [
  "hachi-co-params",
  "hachi-co-sampling",
  "hachi-co-transcript",
+ "rand",
  "serde_json",
  "sha2",
  "thiserror",

@@ -84,8 +84,8 @@ pub use error::{Error, Result};
 pub use layout::{Layout, NamedBlock};
 pub use linear::{build_m, build_y};
 pub use randomness::{
-    DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE, DOMAIN_RHO, PartyRandomness,
-    PrgRandomness,
+    DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE, DOMAIN_RHO,
+    PartyRandomness, PrgRandomness,
 };
 
 #[cfg(feature = "fixtures")]
@@ -93,7 +93,7 @@ pub use clear_pcs::{ClearCommitment, ClearOpening, ClearPcs, ClearPolynomial};
 #[cfg(feature = "fixtures")]
 pub use fixture::{Fixture, escape_key, sha256_residues};
 #[cfg(feature = "fixtures")]
-pub use replay::{REPLAY_CONTEXT_TAG, ReplayChallenger, ReplayRandomness};
+pub use replay::{REPLAY_BASE_PCS_TAG, REPLAY_CONTEXT_TAG, ReplayChallenger, ReplayRandomness};
 
 pub use hachi_co_math::{Ext, Fqk, Poly, Ring, Subfield};
 pub use hachi_co_mpc::PartyId;

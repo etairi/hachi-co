@@ -24,6 +24,9 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sha2::{Digest, Sha256};
 
+/// The base PCS's seed for the direct calls: `ClearPcs` ignores it.
+const SEED: [u8; 32] = [0; 32];
+
 /// The extension degree of every toy and development preset.
 pub const K: usize = 4;
 
@@ -260,9 +263,9 @@ pub fn clear_pcs_words<H: Challenger<K>>(
     for (p0, (table, g0, g1)) in polynomials.iter().enumerate() {
         let mut coeffs = table.clone();
         mobius(field.zq(), &mut coeffs).unwrap();
-        let (cw, sw) = pcs.commit_multilinear(&coeffs).unwrap();
-        let (c0, s0) = pcs.commit_vector(&blinder_coefficients(g0)).unwrap();
-        let (c1, s1) = pcs.commit_vector(&blinder_coefficients(g1)).unwrap();
+        let (cw, sw) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        let (c0, s0) = pcs.commit_vector(&blinder_coefficients(g0), &SEED).unwrap();
+        let (c1, s1) = pcs.commit_vector(&blinder_coefficients(g1), &SEED).unwrap();
         for (poly, com) in [
             (ClaimedPoly::W, cw),
             (ClaimedPoly::G0, c0),
@@ -271,12 +274,12 @@ pub fn clear_pcs_words<H: Challenger<K>>(
             commitments.of_mut(poly).push(pcs.commitment_to_words(&com));
             let context = ch.context(&opening_label(p0 + 1, poly));
             let (_, proof) = match poly {
-                ClaimedPoly::W => pcs.prove_multilinear(&sw, point, &context).unwrap(),
+                ClaimedPoly::W => pcs.prove_multilinear(&sw, point, &context, &SEED).unwrap(),
                 ClaimedPoly::G0 => pcs
-                    .prove_inner_product(&s0, &blinder_weights(field, point, l.d0), &context)
+                    .prove_inner_product(&s0, &blinder_weights(field, point, l.d0), &context, &SEED)
                     .unwrap(),
                 ClaimedPoly::G1 => pcs
-                    .prove_inner_product(&s1, &blinder_weights(field, point, l.d1), &context)
+                    .prove_inner_product(&s1, &blinder_weights(field, point, l.d1), &context, &SEED)
                     .unwrap(),
             };
             openings.of_mut(poly).push(pcs.proof_to_words(&proof));

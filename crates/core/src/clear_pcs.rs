@@ -233,11 +233,16 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         h.finalize().into()
     }
 
-    /// The hash of the coefficients reduced modulo $q$.
+    /// The hash of the coefficients reduced modulo $q$; the scheme is deterministic and ignores
+    /// the seed.
     ///
     /// # Errors
     /// [`Error::Shape`] unless there are $2^\ell$ coefficients for some $\ell \ge 0$.
-    fn commit_multilinear(&self, coeffs: &[u64]) -> Result<(ClearCommitment, ClearPolynomial<K>)> {
+    fn commit_multilinear(
+        &self,
+        coeffs: &[u64],
+        _seed: &[u8; 32],
+    ) -> Result<(ClearCommitment, ClearPolynomial<K>)> {
         if !coeffs.len().is_power_of_two() {
             return Err(Error::Shape {
                 what: "multilinear coefficients (2^l entries)",
@@ -250,8 +255,12 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         Ok((ClearCommitment(digest(self.field.modulus(), &poly)), poly))
     }
 
-    /// The hash of the vector reduced modulo $q$ (any length).
-    fn commit_vector(&self, v: &[Ext<K>]) -> Result<(ClearCommitment, ClearPolynomial<K>)> {
+    /// The hash of the vector reduced modulo $q$ (any length); the seed is ignored.
+    fn commit_vector(
+        &self,
+        v: &[Ext<K>],
+        _seed: &[u8; 32],
+    ) -> Result<(ClearCommitment, ClearPolynomial<K>)> {
         let poly = ClearPolynomial::Vector(v.iter().map(|x| self.field.reduce(x)).collect());
         Ok((ClearCommitment(digest(self.field.modulus(), &poly)), poly))
     }
@@ -264,6 +273,7 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         st: &ClearPolynomial<K>,
         point: &[Ext<K>],
         context: &[u8; 32],
+        _seed: &[u8; 32],
     ) -> Result<(Ext<K>, ClearOpening<K>)> {
         let ClearPolynomial::Multilinear(coeffs) = st else {
             return Err(Error::BasePcs(
@@ -288,6 +298,7 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         st: &ClearPolynomial<K>,
         weights: &[Ext<K>],
         context: &[u8; 32],
+        _seed: &[u8; 32],
     ) -> Result<(Ext<K>, ClearOpening<K>)> {
         let ClearPolynomial::Vector(v) = st else {
             return Err(Error::BasePcs(

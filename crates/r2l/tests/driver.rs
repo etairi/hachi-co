@@ -768,6 +768,9 @@ fn malformed_randomness_is_refused() {
                 _ => vec![0; len],
             })
         }
+        fn base_pcs(&mut self, _: u64) -> hachi_co_core::Result<[u8; 32]> {
+            unreachable!()
+        }
         fn rho(&mut self, _: u64, b: u64, len: usize) -> hachi_co_core::Result<Vec<i64>> {
             Ok(match self.0 {
                 2 => vec![0; len + 1],

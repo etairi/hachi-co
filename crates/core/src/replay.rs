@@ -16,6 +16,7 @@
 //! | `sumcheck_coins` | `/sumcheck/coins/alpha`, `rho`, `tau0`, `tau1` | $k$; $k$; $(\ell'' + \lceil \log n \rceil) \times k$; $\lceil \log \nu \rceil \times k$ |
 //! | `round_coin(r)` | `/sumcheck/coins/a/<r-1>` | $k$ |
 //! | `context(label)` | none (the oracle does not model the base PCS): a fixed hash of the label, see [`ReplayChallenger`] | 32 bytes |
+//! | `base_pcs(index)` | none (the oracle does not model the base PCS): a fixed hash of the party and the index, see [`REPLAY_BASE_PCS_TAG`] | 32 bytes |
 //!
 //! (`/ring_to_linear/attempts/<a>/provers/<p-1>/prover` is checked to be $p$.) The oracle's
 //! resharing of party $p$ is `commit/reshare[p-1]` $= (\langle \mathbf f\_p \rangle\_1, \dots,
@@ -263,7 +264,24 @@ impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
                 .collect::<Result<_>>()?,
         })
     }
+
+    /// Not recorded, since the oracle has no base PCS: the SHA-256 of the framed fields
+    /// [`REPLAY_BASE_PCS_TAG`], LE64($p$) and LE64(`index`), each preceded by its LE64 length.
+    /// The same request gives the same seed. These seeds are public and equal across fixtures:
+    /// they reproduce runs, and must not be used to test hiding.
+    fn base_pcs(&mut self, index: u64) -> Result<[u8; 32]> {
+        let mut h = Sha256::new();
+        let (party, index) = ((self.party as u64).to_le_bytes(), index.to_le_bytes());
+        for field in [REPLAY_BASE_PCS_TAG.as_bytes(), &party, &index] {
+            h.update((field.len() as u64).to_le_bytes());
+            h.update(field);
+        }
+        Ok(h.finalize().into())
+    }
 }
+
+/// The tag of the replayed base-PCS seeds ([`ReplayRandomness`]'s `base_pcs`).
+pub const REPLAY_BASE_PCS_TAG: &str = "hachi-co/replay/base-pcs";
 
 /// The tag of the contexts of [`ReplayChallenger`].
 pub const REPLAY_CONTEXT_TAG: &str = "hachi-co/replay/context";

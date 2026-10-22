@@ -8,6 +8,7 @@ use hachi::{HachiChoices, HachiPcs};
 use hachi_co_math::Ext;
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
+use rand::Rng;
 use std::time::Instant;
 
 const Q: u64 = 4294967197;
@@ -45,13 +46,19 @@ fn main() {
         .iter()
         .map(|c| Ext(*c))
         .collect();
+    // The prover's seeds (unused by these non-hiding choices), drawn after the inputs.
+    let (mut commit_seed, mut open_seed) = ([0u8; 32], [0u8; 32]);
+    prg.fill_bytes(&mut commit_seed);
+    prg.fill_bytes(&mut open_seed);
     let run = || -> Result<(), String> {
         let t = Instant::now();
-        let (com, state) = pcs.commit_multilinear(&coeffs).map_err(|e| e.to_string())?;
+        let (com, state) = pcs
+            .commit_multilinear(&coeffs, &commit_seed)
+            .map_err(|e| e.to_string())?;
         println!("commit  {:>10.2?}", t.elapsed());
         let t = Instant::now();
         let (value, proof) = pcs
-            .prove_multilinear(&state, &point, &[0u8; 32])
+            .prove_multilinear(&state, &point, &[0u8; 32], &open_seed)
             .map_err(|e| e.to_string())?;
         println!(
             "prove   {:>10.2?}  ({} iterations)",

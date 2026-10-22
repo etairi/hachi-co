@@ -1,11 +1,12 @@
-//! `PrgRandomness`: the documented streams, the distributions' supports, AS.Share, and the
-//! refusal to serve a stream twice.
+//! `PrgRandomness`: the documented streams, the distributions' supports, AS.Share, the base
+//! PCS's seeds, and the refusal to serve a stream twice.
 
 use hachi_co_core::{
-    BlinderKind, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE, DOMAIN_RHO,
-    Error, Ext, Fqk, PartyRandomness, PrgRandomness,
+    BlinderKind, DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK,
+    DOMAIN_RESHARE, DOMAIN_RHO, Error, Ext, Fqk, PartyRandomness, PrgRandomness,
 };
 use hachi_co_sampling::{ShakePrg, rej, uniform};
+use rand::Rng;
 
 const K: usize = 4;
 /// The toy-n1 modulus and mask width (`docs/m0-spec.md`, "Toy presets").
@@ -145,6 +146,30 @@ fn blinders_have_the_requested_shape_and_separate_streams() {
             index: 0
         })
     );
+}
+
+#[test]
+fn base_pcs_seeds_follow_their_stream_and_are_served_once() {
+    let mut rng = PrgRandomness::new(SEED);
+    let seeds: Vec<[u8; 32]> = (0..6u64)
+        .map(|i| PartyRandomness::<K>::base_pcs(&mut rng, i).unwrap())
+        .collect();
+    for (i, s) in seeds.iter().enumerate() {
+        let mut want = [0u8; 32];
+        ShakePrg::new(&SEED, DOMAIN_BASE_PCS.as_bytes(), i as u64).fill_bytes(&mut want);
+        assert_eq!(*s, want, "index {i}");
+        for t in &seeds[..i] {
+            assert_ne!(s, t, "distinct seeds");
+        }
+        assert_eq!(
+            PartyRandomness::<K>::base_pcs(&mut rng, i as u64),
+            Err(Error::RandomnessReuse {
+                kind: DOMAIN_BASE_PCS,
+                index: i as u64
+            })
+        );
+    }
+    assert_eq!(DOMAIN_BASE_PCS, "hachi-co/sumcheck/base-pcs");
 }
 
 #[test]

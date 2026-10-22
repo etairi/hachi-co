@@ -30,11 +30,25 @@
 //! - **Packed encodings**: $\lceil \log_2 q \rceil$ bits per residue and $\lceil \log_2 b
 //!   \rceil$ bits per digit of the final witness, with exact word counts (`pcs`,
 //!   "Encodings").
+//! - **Randomized commitments**, optional ([`HachiChoices::hiding`]; the Hachi-Co draft's item
+//!   (i), 4_P:334; `docs/hachi-hiding.md` §6):
+//!   - $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \mathbf r_i$ and
+//!     $\mathbf v = \mathbf D \hat{\mathbf w} + \mathbf D' \boldsymbol\rho$, with discrete
+//!     Gaussian or uniform-digit randomness drawn from the prover's 32-byte seeds;
+//!   - by the draft's argument, a commitment then hides the committed object under MLWE, at
+//!     an MLWE rank $\nu$ of real security (the toy choices have $\nu = 1$).
 //!
 //! **Not implemented:**
-//! - **Hiding.** The scheme is not hiding (paper, 4_P:333 of the Hachi-Co draft); the
-//!   Hwang-Seo-Song changes come later.
-//! - **Secure parameters.** [`HachiChoices::toy`] are test parameters.
+//! - **Hiding openings.** An opening reveals what it revealed before:
+//!   - the partial evaluations and $Y$;
+//!   - per iteration, the rounds and the evaluations of the next witness;
+//!   - the last witness and its randomness.
+//!
+//!   So a commitment hides only until it is opened, and with no iteration the opening sends the
+//!   committed object itself. The rest of the Hwang-Seo-Song route waits for the co-authors'
+//!   answers (`docs/hachi-hiding.md` §8).
+//! - **Secure parameters.** [`HachiChoices::toy`] and [`HachiChoices::toy_hiding`] are test
+//!   parameters.
 //!
 //! ## Modules
 //!
@@ -60,5 +74,5 @@ pub mod relation;
 pub mod sumcheck;
 
 pub use error::{Error, Result, VerifyError};
-pub use params::{HachiChoices, Layout, Schedule};
+pub use params::{HachiChoices, Hiding, Layout, Noise, Schedule};
 pub use pcs::{Commitment, HachiPcs, Proof, State, VERSION};

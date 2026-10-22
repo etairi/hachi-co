@@ -13,6 +13,9 @@ use hachi_co_core::{
     BasePcs, ClearCommitment, ClearOpening, ClearPcs, ClearPolynomial, Error, Ext, Fqk,
 };
 
+/// The base PCS's seed: `ClearPcs` is deterministic and ignores it.
+const SEED: [u8; 32] = [0; 32];
+
 const K: usize = 4;
 /// The toy-n1 modulus.
 const Q: u64 = 8388637;
@@ -83,10 +86,10 @@ fn multilinear_instance(
     let values = rng.residues(1 << ell);
     let mut coeffs = values.clone();
     mobius(pcs.field().zq(), &mut coeffs).unwrap();
-    let (com, st) = pcs.commit_multilinear(&coeffs).unwrap();
+    let (com, st) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
     let point = rng.exts(ell);
     let context = rng.context();
-    let (value, proof) = pcs.prove_multilinear(&st, &point, &context).unwrap();
+    let (value, proof) = pcs.prove_multilinear(&st, &point, &context, &SEED).unwrap();
     (values, point, com, value, proof, context)
 }
 
@@ -124,8 +127,10 @@ fn honest_inner_product_openings_verify() {
         let v = rng.exts(len);
         let weights = rng.exts(len);
         let context = rng.context();
-        let (com, st) = pcs.commit_vector(&v).unwrap();
-        let (value, proof) = pcs.prove_inner_product(&st, &weights, &context).unwrap();
+        let (com, st) = pcs.commit_vector(&v, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_inner_product(&st, &weights, &context, &SEED)
+            .unwrap();
         let direct = v.iter().zip(&weights).fold(field.zero(), |acc, (x, e)| {
             field.add(&acc, &field.mul(x, e))
         });
@@ -147,14 +152,14 @@ fn commitments_are_to_residue_classes() {
     let coeffs = rng.residues(8);
     let shifted: Vec<u64> = coeffs.iter().map(|c| c + Q).collect();
     assert_eq!(
-        pcs.commit_multilinear(&coeffs).unwrap(),
-        pcs.commit_multilinear(&shifted).unwrap()
+        pcs.commit_multilinear(&coeffs, &SEED).unwrap(),
+        pcs.commit_multilinear(&shifted, &SEED).unwrap()
     );
     let v = rng.exts(3);
     let shifted: Vec<Ext<K>> = v.iter().map(|x| Ext(x.0.map(|c| c + 2 * Q))).collect();
     assert_eq!(
-        pcs.commit_vector(&v).unwrap(),
-        pcs.commit_vector(&shifted).unwrap()
+        pcs.commit_vector(&v, &SEED).unwrap(),
+        pcs.commit_vector(&shifted, &SEED).unwrap()
     );
 }
 
@@ -166,12 +171,12 @@ fn commitments_are_domain_separated() {
     let pcs = Pcs::new(Q).unwrap();
     let other = Pcs::new(33554501).unwrap();
     let residues = vec![1u64, 2, 3, 4];
-    let (multilinear, _) = pcs.commit_multilinear(&residues).unwrap();
-    let (vector, _) = pcs.commit_vector(&[Ext([1, 2, 3, 4])]).unwrap();
-    let (other_q, _) = other.commit_multilinear(&residues).unwrap();
+    let (multilinear, _) = pcs.commit_multilinear(&residues, &SEED).unwrap();
+    let (vector, _) = pcs.commit_vector(&[Ext([1, 2, 3, 4])], &SEED).unwrap();
+    let (other_q, _) = other.commit_multilinear(&residues, &SEED).unwrap();
     let mut longer = residues.clone();
     longer.extend([0, 0, 0, 0]);
-    let (longer, _) = pcs.commit_multilinear(&longer).unwrap();
+    let (longer, _) = pcs.commit_multilinear(&longer, &SEED).unwrap();
     let all = [multilinear, vector, other_q, longer];
     for i in 0..all.len() {
         for j in i + 1..all.len() {
@@ -241,8 +246,10 @@ fn the_verifier_refuses_every_change() {
     // Inner products.
     let v = rng.exts(9);
     let weights = rng.exts(9);
-    let (vcom, st) = pcs.commit_vector(&v).unwrap();
-    let (vvalue, vproof) = pcs.prove_inner_product(&st, &weights, &context).unwrap();
+    let (vcom, st) = pcs.commit_vector(&v, &SEED).unwrap();
+    let (vvalue, vproof) = pcs
+        .prove_inner_product(&st, &weights, &context, &SEED)
+        .unwrap();
     let vcheck = |len: usize, weights: &[Ext<K>], value: &Ext<K>, proof: &ClearOpening<K>| {
         pcs.verify_inner_product(&vcom, len, weights, value, proof, &context)
     };
@@ -289,27 +296,27 @@ fn the_provers_refuse_misuse() {
     let context = [7u8; 32];
     for len in [0usize, 3, 6, 12] {
         assert!(matches!(
-            pcs.commit_multilinear(&vec![1; len]),
+            pcs.commit_multilinear(&vec![1; len], &SEED),
             Err(Error::Shape { .. })
         ));
     }
-    let (_, ml) = pcs.commit_multilinear(&[1, 2, 3, 4]).unwrap();
-    let (_, vec_state) = pcs.commit_vector(&[Ext([1, 2, 3, 4])]).unwrap();
+    let (_, ml) = pcs.commit_multilinear(&[1, 2, 3, 4], &SEED).unwrap();
+    let (_, vec_state) = pcs.commit_vector(&[Ext([1, 2, 3, 4])], &SEED).unwrap();
     let one = pcs.field().one();
     assert!(matches!(
-        pcs.prove_multilinear(&vec_state, &[], &context),
+        pcs.prove_multilinear(&vec_state, &[], &context, &SEED),
         Err(Error::BasePcs(_))
     ));
     assert!(matches!(
-        pcs.prove_inner_product(&ml, &[one; 4], &context),
+        pcs.prove_inner_product(&ml, &[one; 4], &context, &SEED),
         Err(Error::BasePcs(_))
     ));
     assert!(matches!(
-        pcs.prove_multilinear(&ml, &[one; 3], &context),
+        pcs.prove_multilinear(&ml, &[one; 3], &context, &SEED),
         Err(Error::Shape { .. })
     ));
     assert!(matches!(
-        pcs.prove_inner_product(&vec_state, &[one; 2], &context),
+        pcs.prove_inner_product(&vec_state, &[one; 2], &context, &SEED),
         Err(Error::Shape { .. })
     ));
     assert!(matches!(Pcs::new(8388636), Err(Error::Math(_))));
@@ -330,9 +337,9 @@ fn malformed_words_are_errors() {
     }
     let mut rng = Stream(0xc1ea_0005);
     let (_, _, _, _, ml, _) = multilinear_instance(&pcs, &mut rng, 3);
-    let (_, st) = pcs.commit_vector(&rng.exts(2)).unwrap();
+    let (_, st) = pcs.commit_vector(&rng.exts(2), &SEED).unwrap();
     let (_, vp) = pcs
-        .prove_inner_product(&st, &rng.exts(2), &[1; 32])
+        .prove_inner_product(&st, &rng.exts(2), &[1; 32], &SEED)
         .unwrap();
     for proof in [ml, vp] {
         let words = pcs.proof_to_words(&proof);
@@ -384,13 +391,13 @@ fn a_monomial_by_hand() {
     let point = [Ext([2, 1, 0, 0]), Ext([9, 9, 9, 9]), Ext([3, 0, 0, 1])];
     let want = field.scale(&field.mul(&point[0], &point[2]), 5);
     assert_eq!(evaluate_multilinear(&field, &coeffs, &point).unwrap(), want);
-    let (com, st) = pcs.commit_multilinear(&coeffs).unwrap();
-    let (value, proof) = pcs.prove_multilinear(&st, &point, &[0; 32]).unwrap();
+    let (com, st) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+    let (value, proof) = pcs.prove_multilinear(&st, &point, &[0; 32], &SEED).unwrap();
     assert_eq!(value, want);
     pcs.verify_multilinear(&com, 3, &point, &want, &proof, &[0; 32])
         .unwrap();
-    let (zero, st) = pcs.commit_multilinear(&[0; 8]).unwrap();
-    let (value, proof) = pcs.prove_multilinear(&st, &point, &[0; 32]).unwrap();
+    let (zero, st) = pcs.commit_multilinear(&[0; 8], &SEED).unwrap();
+    let (value, proof) = pcs.prove_multilinear(&st, &point, &[0; 32], &SEED).unwrap();
     assert_eq!(value, field.zero());
     pcs.verify_multilinear(&zero, 3, &point, &field.zero(), &proof, &[0; 32])
         .unwrap();

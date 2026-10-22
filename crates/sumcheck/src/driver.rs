@@ -131,7 +131,8 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 /// $\Pi\_{\mathsf{conv}}$) and the base PCS `pcs`. Every party obtains the same public
 /// transcript.
 ///
-/// **Steps** (each party; the coins come from `ch`, the blinders from `rng`):
+/// **Steps** (each party; the coins come from `ch`; the blinders and the base PCS's six seeds,
+/// [`PartyRandomness::base_pcs`] at [`ClaimedPoly::seed_index`], from `rng`):
 /// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share`]) and the table of
 ///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), lines 198-229;
 /// 2. $g\_{0,p}, g\_{1,p}$ from [`PartyRandomness::blinder`] ($\ell'' \times d\_0$ and
@@ -210,12 +211,15 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     let (st_w, com_w) = {
         let mut coeffs = prover.w_table().to_vec();
         mobius(field.zq(), &mut coeffs)?;
-        let (com, st) = pcs.commit_multilinear(&coeffs)?;
+        let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
+        let (com, st) = pcs.commit_multilinear(&coeffs, &seed)?;
         (st, pcs.commitment_to_words(&com))
     };
     let (g0, g1) = prover.blinders();
-    let (com_g0, st_g0) = pcs.commit_vector(&blinder_coefficients(g0))?;
-    let (com_g1, st_g1) = pcs.commit_vector(&blinder_coefficients(g1))?;
+    let seed = rng.base_pcs(ClaimedPoly::G0.seed_index(false))?;
+    let (com_g0, st_g0) = pcs.commit_vector(&blinder_coefficients(g0), &seed)?;
+    let seed = rng.base_pcs(ClaimedPoly::G1.seed_index(false))?;
+    let (com_g1, st_g1) = pcs.commit_vector(&blinder_coefficients(g1), &seed)?;
     // Step 4.
     let (s0, s1) = prover.hypercube_sums();
     let sums = all_gather(comm, ALL_GATHER_SUMS, n, &[s0, s1])?;
@@ -275,9 +279,10 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     let mut proofs: [Vec<u64>; 3] = Default::default();
     for poly in ClaimedPoly::ORDER {
         let context = ch.context(&opening_label(party, poly));
+        let seed = rng.base_pcs(poly.seed_index(true))?;
         let (value, words) = match poly {
             ClaimedPoly::W => {
-                let (value, proof) = pcs.prove_multilinear(&st_w, &point, &context)?;
+                let (value, proof) = pcs.prove_multilinear(&st_w, &point, &context, &seed)?;
                 (value, pcs.proof_to_words(&proof))
             }
             ClaimedPoly::G0 | ClaimedPoly::G1 => {
@@ -287,7 +292,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
                     (&st_g1, l.d1)
                 };
                 let weights = blinder_weights(field, &point, degree);
-                let (value, proof) = pcs.prove_inner_product(st, &weights, &context)?;
+                let (value, proof) = pcs.prove_inner_product(st, &weights, &context, &seed)?;
                 (value, pcs.proof_to_words(&proof))
             }
         };

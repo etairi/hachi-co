@@ -267,6 +267,38 @@ fn replay_challenger_refuses_mismatched_requests() {
     assert!(replay_err(ch.round_coin(&other, 1)));
 }
 
+/// The replayed base-PCS seeds: SHA-256 of the framed tag, party and index, computed here by
+/// hand; the same request gives the same seed, and parties and indices differ.
+#[test]
+fn replay_base_pcs_seeds_are_fixed_hashes_of_the_party_and_index() {
+    use sha2::{Digest, Sha256};
+    let fx = Fixture::load("toy-n2").unwrap();
+    let by_hand = |party: u64, index: u64| -> [u8; 32] {
+        let mut h = Sha256::new();
+        let tag = b"hachi-co/replay/base-pcs";
+        for field in [&tag[..], &party.to_le_bytes(), &index.to_le_bytes()] {
+            h.update((field.len() as u64).to_le_bytes());
+            h.update(field);
+        }
+        h.finalize().into()
+    };
+    assert_eq!(
+        hachi_co_core::REPLAY_BASE_PCS_TAG,
+        "hachi-co/replay/base-pcs"
+    );
+    let mut seen = Vec::new();
+    for party in [1usize, 2] {
+        let mut rng = ReplayRandomness::new(&fx, party).unwrap();
+        for index in 0..6u64 {
+            let s = PartyRandomness::<K>::base_pcs(&mut rng, index).unwrap();
+            assert_eq!(s, by_hand(party as u64, index));
+            assert_eq!(PartyRandomness::<K>::base_pcs(&mut rng, index).unwrap(), s);
+            assert!(!seen.contains(&s));
+            seen.push(s);
+        }
+    }
+}
+
 /// The replay challenger's contexts: SHA-256 of the framed tag and label, computed here by
 /// hand; independent of the absorbs and of the coins drawn; different labels differ.
 #[test]

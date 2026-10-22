@@ -6,12 +6,17 @@
 //!
 //! **Iteration.**
 //! 1. $w_i = \mathbf a^\top \mathbf f_i$, $\hat{\mathbf w} = \mathbf G^{-1}(\mathbf w)$, send
-//!    $\mathbf v = \mathbf D \hat{\mathbf w}$.
+//!    $\mathbf v = \mathbf D \hat{\mathbf w}$; with [`Hiding`](crate::params::Hiding),
+//!    $\mathbf v = \mathbf D \hat{\mathbf w} + \mathbf D' \boldsymbol\rho$ with
+//!    $\boldsymbol\rho \leftarrow \chi$ from the stream `(seed, "hachi/prove/rho", index)`.
 //! 2. Receive $\mathbf c \in \mathcal C^{2^r}$; $\mathbf z = \sum_i c_i \mathbf s_i$ (norm at most
-//!    $\beta$), $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$.
+//!    $\beta$), $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$; with hiding also
+//!    $\mathbf r_z = \sum_i c_i \mathbf r_i$ (norm at most $\beta_r$) and the digits of
+//!    $\boldsymbol\rho$ and $\mathbf r_z$.
 //! 3. Ring switching: the quotients of the relation's rows ([`crate::relation`]) and the next
-//!    witness table $\tilde w$ of $2^L$ digits. Commit to it packed (below) and send the
-//!    commitment $\mathbf u'$.
+//!    witness table $\tilde w$ of $2^L$ digits. Commit to it packed (below), with hiding under
+//!    randomness from the stream `(seed, "hachi/prove/r", index + 1)`, chunk after chunk, and
+//!    send the commitment $\mathbf u'$.
 //! 4. Receive $\alpha, \tau_0, \tau_1$; the two sumchecks ([`crate::sumcheck`]) reduce everything
 //!    to $\tilde w(\mathbf a) = y'$, which the verifier checks against both final claims.
 //!
@@ -42,6 +47,7 @@ use crate::sumcheck::{self, RoundMessage, range_poly};
 use crate::{Error, Result};
 use hachi_co_math::decompose::{digit_range, g_inv, j_inv};
 use hachi_co_math::{Ext, Poly};
+use hachi_co_sampling::ShakePrg;
 
 const LABEL_V: &[u8] = b"hachi/iter/v";
 const LABEL_C: &[u8] = b"hachi/iter/c";
@@ -50,6 +56,47 @@ const LABEL_COINS: &[u8] = b"hachi/iter/coins";
 const LABEL_FINAL: &[u8] = b"hachi/iter/final";
 const LABEL_PARTIALS: &[u8] = b"hachi/iter/partials";
 const LABEL_TARGET: &[u8] = b"hachi/iter/next-target";
+
+/// The PRG domain of $\boldsymbol\rho$ in iteration `index` (index `index`).
+pub const DOMAIN_RHO: &[u8] = b"hachi/prove/rho";
+/// The PRG domain of the randomness of the commitment at level `index + 1` (index `index + 1`).
+pub const DOMAIN_NEXT_R: &[u8] = b"hachi/prove/r";
+
+/// A matrix of ring elements, row after row.
+type Matrix = Vec<Vec<Poly>>;
+
+/// $\mathbf A_1'$ ($n_A \times \nu$) and $\mathbf D_1'$ ($n_D \times \nu$) of iteration `index`, or
+/// two empty matrices without hiding.
+fn rand_matrices<const K: usize>(ctx: &Ctx<K>, index: usize) -> Result<(Matrix, Matrix)> {
+    match ctx.hiding() {
+        None => Ok((Vec::new(), Vec::new())),
+        Some(_) => Ok((
+            ctx.rand_matrix(b"A'", index, ctx.choices.n_a)?,
+            ctx.rand_matrix(b"D'", index, ctx.choices.n_d)?,
+        )),
+    }
+}
+
+/// The randomness of a commitment at level `level` in `layout`: per chunk, $\nu + n_A$ ring
+/// elements from the stream `(seed, domain, level)`, chunk after chunk; no chunk without hiding.
+///
+/// # Errors
+/// Sampling errors.
+pub fn commitment_randomness<const K: usize>(
+    ctx: &Ctx<K>,
+    layout: &crate::params::Layout,
+    seed: &[u8; 32],
+    domain: &[u8],
+    level: usize,
+) -> Result<Vec<Vec<Poly>>> {
+    if ctx.hiding().is_none() {
+        return Ok(Vec::new());
+    }
+    let mut prg = ShakePrg::new(seed, domain, level as u64);
+    (0..layout.chunks())
+        .map(|_| ctx.noise(&mut prg, ctx.rand_len(ctx.choices.n_a)))
+        .collect()
+}
 
 /// The claim $\sum_i b_i \cdot \mathbf a^\top \mathbf f_i = T$ on a committed witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,7 +112,8 @@ pub struct Claim {
 /// The messages of one iteration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IterationProof<const K: usize> {
-    /// $\mathbf v = \mathbf D \hat{\mathbf w}$ ($n_D$ ring elements).
+    /// $\mathbf v = \mathbf D \hat{\mathbf w}$, plus $\mathbf D' \boldsymbol\rho$ with
+    /// [`Hiding`](crate::params::Hiding) ($n_D$ ring elements).
     pub v: Vec<Poly>,
     /// The commitment $\mathbf u'$ to the next witness ($n_B$ ring elements).
     pub next_commitment: Vec<Poly>,
@@ -192,7 +240,8 @@ fn scaled_trace<const K: usize>(ctx: &Ctx<K>, p: &Poly) -> Result<Ext<K>> {
 }
 
 /// The prover of one iteration (`index` numbers the iterations from 0; it selects the
-/// matrices). Returns the messages, the next committed witness and the next claim.
+/// matrices and the PRG streams of `seed`, the opening's secret seed, which only hiding uses).
+/// Returns the messages, the next committed witness and the next claim.
 ///
 /// # Errors
 /// [`Error::Protocol`] if an honest-prover invariant fails (a bug or a witness outside the
@@ -204,6 +253,7 @@ pub fn prove<const K: usize>(
     witness: &Committed,
     claim: &Claim,
     fs: &mut Fs,
+    seed: &[u8; 32],
 ) -> Result<(IterationProof<K>, Committed, Claim)> {
     let (ring, field, d) = (&ctx.ring, ctx.field(), ctx.d());
     let (b, delta, tau) = (ctx.choices.b, params.delta, params.tau);
@@ -221,7 +271,19 @@ pub fn prove<const K: usize>(
         .collect::<hachi_co_math::Result<_>>()?;
     let w_hat = g_inv(ring, b, delta, &w)?;
     let d_mat = ctx.matrix(b"D", index, ctx.choices.n_d, layout.chunks() * delta)?;
-    let v = ring.mat_vec(&d_mat, &w_hat)?;
+    let mut v = ring.mat_vec(&d_mat, &w_hat)?;
+    let (a_rand, d_rand) = rand_matrices(ctx, index)?;
+    let rho = if ctx.hiding().is_some() {
+        let mut prg = ShakePrg::new(seed, DOMAIN_RHO, index as u64);
+        let rho = ctx.noise(&mut prg, ctx.rand_len(ctx.choices.n_d))?;
+        let term = ctx.rand_term(&d_rand, &rho)?;
+        for (x, y) in v.iter_mut().zip(&term) {
+            *x = ring.add(x, y)?;
+        }
+        rho
+    } else {
+        Vec::new()
+    };
     fs.polys(LABEL_V, &v);
     // Step 2.
     let c: Vec<Poly> = fs
@@ -245,6 +307,21 @@ pub fn prove<const K: usize>(
         }
     }
     let z_hat = j_inv(ring, b, tau, &z)?;
+    // The folded randomness r_z = sum_i c_i r_i, within beta_r.
+    let mut r_z = vec![ring.zero(); witness.r.first().map_or(0, Vec::len)];
+    for (ci, ri) in c.iter().zip(&witness.r) {
+        for (x, y) in r_z.iter_mut().zip(ri) {
+            *x = ring.add(x, &ring.mul(ci, y)?)?;
+        }
+    }
+    for x in &r_z {
+        if ring.inf_norm(x)? > params.beta_r {
+            return Err(Error::Protocol(format!(
+                "the folded randomness exceeds its bound beta_r = {}",
+                params.beta_r
+            )));
+        }
+    }
     // Step 3.
     let b_mat = ctx.matrix(
         b"B",
@@ -262,15 +339,38 @@ pub fn prove<const K: usize>(
         d_mat: &d_mat,
         b_mat: &b_mat,
         a_mat: &a_mat,
+        a_rand: &a_rand,
+        d_rand: &d_rand,
         v: &v,
         u: &witness.u,
     };
-    let q = quotients(ctx, &public, &w, &w_hat, &witness.t, &witness.t_hat, &z)?;
+    let q = quotients(
+        ctx,
+        &public,
+        &w,
+        &w_hat,
+        &witness.t,
+        &witness.t_hat,
+        &z,
+        &rho,
+        &r_z,
+    )?;
     let mut z_prime = w_hat;
     z_prime.extend(witness.t_hat.iter().cloned());
     z_prime.extend(z_hat);
+    if ctx.hiding().is_some() {
+        z_prime.extend(j_inv(ring, b, params.tau_rho, &rho)?);
+        z_prime.extend(j_inv(ring, b, params.tau_r, &r_z)?);
+    }
     let table = next_table(ctx, params, &z_prime, &q)?;
-    let next = commit(ctx, index + 1, params.next, pack(ctx, params, &table)?)?;
+    let r_next = commitment_randomness(ctx, &params.next, seed, DOMAIN_NEXT_R, index + 1)?;
+    let next = commit(
+        ctx,
+        index + 1,
+        params.next,
+        pack(ctx, params, &table)?,
+        r_next,
+    )?;
     fs.polys(LABEL_U_NEXT, &next.u);
     // Step 4.
     let lr = log_rows(params.rows);
@@ -420,6 +520,7 @@ pub fn verify<const K: usize>(
         layout.chunks() * ctx.choices.n_a * delta,
     )?;
     let a_mat = ctx.matrix(b"A", index, ctx.choices.n_a, layout.width(delta))?;
+    let (a_rand, d_rand) = rand_matrices(ctx, index)?;
     let public = Public {
         params,
         b: &claim.b,
@@ -429,6 +530,8 @@ pub fn verify<const K: usize>(
         d_mat: &d_mat,
         b_mat: &b_mat,
         a_mat: &a_mat,
+        a_rand: &a_rand,
+        d_rand: &d_rand,
         v: &proof.v,
         u: commitment,
     };

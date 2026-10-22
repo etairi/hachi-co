@@ -57,6 +57,9 @@ use hachi_co_sumcheck::{
     blinder_weights, claimed_sum, eq_table, opening_label,
 };
 
+/// The base PCS's seed for the forger's calls: `ClearPcs` and the default `HachiBase` ignore it.
+const SEED: [u8; 32] = [0; 32];
+
 /// The forged proof for given commitments, without openings, and what the forger learns while
 /// making it: the point $\mathbf a$ and the contexts of the three openings (in the order $g\_0$,
 /// $g\_1$, $\widetilde w$).
@@ -157,9 +160,9 @@ fn commit_all<P: BasePcs<K>>(
     g0: &[Ext<K>],
     g1: &[Ext<K>],
 ) -> (PcsWords, [P::State; 3]) {
-    let (cw, sw) = pcs.commit_multilinear(w).unwrap();
-    let (c0, s0) = pcs.commit_vector(g0).unwrap();
-    let (c1, s1) = pcs.commit_vector(g1).unwrap();
+    let (cw, sw) = pcs.commit_multilinear(w, &SEED).unwrap();
+    let (c0, s0) = pcs.commit_vector(g0, &SEED).unwrap();
+    let (c1, s1) = pcs.commit_vector(g1, &SEED).unwrap();
     let words = PcsWords {
         w: vec![pcs.commitment_to_words(&cw)],
         g0: vec![pcs.commitment_to_words(&c0)],
@@ -178,11 +181,13 @@ fn open_all<P: BasePcs<K>>(
     let (l, field) = (&ctx.layout, ctx.field());
     let [sw, s0, s1] = states;
     let [ctx_g0, ctx_g1, ctx_w] = &forged.contexts;
-    let (_, pw) = pcs.prove_multilinear(sw, &forged.point, ctx_w).unwrap();
+    let (_, pw) = pcs
+        .prove_multilinear(sw, &forged.point, ctx_w, &SEED)
+        .unwrap();
     let w0 = blinder_weights(field, &forged.point, l.d0);
     let w1 = blinder_weights(field, &forged.point, l.d1);
-    let (_, p0) = pcs.prove_inner_product(s0, &w0, ctx_g0).unwrap();
-    let (_, p1) = pcs.prove_inner_product(s1, &w1, ctx_g1).unwrap();
+    let (_, p0) = pcs.prove_inner_product(s0, &w0, ctx_g0, &SEED).unwrap();
+    let (_, p1) = pcs.prove_inner_product(s1, &w1, ctx_g1, &SEED).unwrap();
     PcsWords {
         w: vec![pcs.proof_to_words(&pw)],
         g0: vec![pcs.proof_to_words(&p0)],
@@ -258,10 +263,10 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
     // (s_0 = the value, every other coefficient 0).
     let mut g1_solved = vec![zero; len1];
     g1_solved[0] = solved_g1;
-    let (_, state_solved) = pcs.commit_vector(&g1_solved).unwrap();
+    let (_, state_solved) = pcs.commit_vector(&g1_solved, &SEED).unwrap();
     let weights1 = blinder_weights(field, &forged.point, l.d1);
     let (value, proof) = pcs
-        .prove_inner_product(&state_solved, &weights1, &forged.contexts[1])
+        .prove_inner_product(&state_solved, &weights1, &forged.contexts[1], &SEED)
         .unwrap();
     assert_eq!(value, solved_g1, "the vector takes the solved value");
     let mut variant2 = forged.proof.clone();

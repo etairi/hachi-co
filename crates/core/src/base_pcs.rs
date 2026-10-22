@@ -51,6 +51,12 @@ use hachi_co_math::{Ext, Fqk, Zq};
 /// made under one context must not verify under another. A scheme without coins does not need
 /// it for soundness; `ClearPcs` checks it anyway, so that the tests catch a context mismatch.
 ///
+/// **Randomness.** The provers' methods take a secret 32-byte `seed` for the scheme's own
+/// randomness (a hiding commitment's, `docs/hachi-hiding.md` 6.5): each commitment and each opening
+/// needs a fresh seed, which the sumcheck draws from
+/// [`PartyRandomness::base_pcs`](crate::PartyRandomness::base_pcs). A deterministic scheme, such
+/// as `ClearPcs` or Hachi without hiding, ignores it.
+///
 /// **Words.** Commitments and proofs travel as `u64` words: through
 /// [`hachi_co_mpc::Comm::all_gather`], in the Fiat-Shamir transcript (the commitments) and in
 /// the proof encoding. The encodings belong to an instance of the scheme, so that they can use
@@ -79,21 +85,32 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     type Proof: Clone + Debug + PartialEq + Eq + Send + Sync;
 
     /// Commits to the multilinear polynomial with the monomial coefficients `coeffs`
-    /// ($2^\ell$ residues of $\mathbb Z\_q$, in the convention of the trait).
+    /// ($2^\ell$ residues of $\mathbb Z\_q$, in the convention of the trait), with the secret
+    /// `seed` (see "Randomness").
     ///
     /// # Errors
     /// Implementation-specific, for example [`Error::Shape`] unless the length is a power of
     /// two.
-    fn commit_multilinear(&self, coeffs: &[u64]) -> Result<(Self::Commitment, Self::State)>;
+    fn commit_multilinear(
+        &self,
+        coeffs: &[u64],
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)>;
 
-    /// Commits to the vector `v` over $\mathbb F\_{q^K}$ (a blinder's coefficients).
+    /// Commits to the vector `v` over $\mathbb F\_{q^K}$ (a blinder's coefficients), with the
+    /// secret `seed`.
     ///
     /// # Errors
     /// Implementation-specific.
-    fn commit_vector(&self, v: &[Ext<K>]) -> Result<(Self::Commitment, Self::State)>;
+    fn commit_vector(
+        &self,
+        v: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)>;
 
     /// Opens a commitment of [`commit_multilinear`](Self::commit_multilinear) at `point`
-    /// ($\ell$ coordinates) under `context`: returns $f(\mathbf a)$ and a proof of it.
+    /// ($\ell$ coordinates) under `context`, with the secret `seed`: returns $f(\mathbf a)$ and
+    /// a proof of it.
     ///
     /// # Errors
     /// Implementation-specific, for example a state of a vector commitment or a point of the
@@ -103,10 +120,12 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         st: &Self::State,
         point: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> Result<(Ext<K>, Self::Proof)>;
 
     /// Opens a commitment of [`commit_vector`](Self::commit_vector) against `weights` (one per
-    /// entry) under `context`: returns $\langle \mathbf v, \mathbf e \rangle$ and a proof of it.
+    /// entry) under `context`, with the secret `seed`: returns $\langle \mathbf v, \mathbf e
+    /// \rangle$ and a proof of it.
     ///
     /// # Errors
     /// Implementation-specific, for example a state of a multilinear commitment or weights of
@@ -116,6 +135,7 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         st: &Self::State,
         weights: &[Ext<K>],
         context: &[u8; 32],
+        seed: &[u8; 32],
     ) -> Result<(Ext<K>, Self::Proof)>;
 
     /// Checks that `proof` opens `com`, a commitment to a multilinear polynomial in `num_vars`
