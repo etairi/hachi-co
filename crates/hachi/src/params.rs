@@ -26,7 +26,7 @@
 //! $(\nu + n_D)\tau_\rho + (\nu + n_A)\tau_r$ ring elements ([`IterParams`]).
 
 use crate::{Error, Result};
-use hachi_co_math::decompose::{digit_range, num_digits, tight_tau};
+use hachi_co_math::decompose::{digit_range, num_digits, representable_range, tight_tau};
 use hachi_co_sampling::gauss;
 
 /// What the user chooses; everything else is derived. These are the parameters of Hachi as the
@@ -218,7 +218,9 @@ pub struct IterParams {
     /// 4.4, with Lemma 2).
     pub beta: u64,
     /// The digits $\tau$ of $\mathbf J^{-1}(\mathbf z)$: the least $\tau$ whose balanced digits
-    /// cover $[-\beta, \beta]$.
+    /// cover $[-\beta, \beta]$. An iteration is refused if the values that $\tau$, $\tau_r$ or
+    /// $\tau_\rho$ digits represent reach beyond the centred residues mod $q$: the range check lets
+    /// them all through, and the norm arguments need each to be its own centred residue.
     pub tau: usize,
     /// The bound $\beta_r = 2^r \omega B_\chi$ on $\lVert \mathbf r_z \rVert_\infty$, the folded
     /// commitment randomness (0 without [`Hiding`]).
@@ -310,6 +312,19 @@ fn iteration(choices: &HachiChoices, q: u64, layout: Layout) -> Result<IterParam
         None => 0,
     };
     let (tau, tau_rho, tau_r, mu) = witness_size(choices, delta, &layout)?;
+    // The range checks let through every value that tau balanced digits represent. The norm
+    // arguments read those values as integers, so each must be its own centred residue mod q:
+    // otherwise a relaxed opening has norm q/2 or more, and binding is void.
+    let half = i128::from((q - 1) / 2);
+    for (part, digits) in [("z", tau), ("r_z", tau_r), ("rho", tau_rho)] {
+        let (lo, hi) = representable_range(choices.b, digits);
+        if -lo > half || hi > half {
+            return Err(Error::Parameter(format!(
+                "the {digits} digits of {part} represent [{lo}, {hi}], beyond the centred residues \
+                 mod q = {q}"
+            )));
+        }
+    }
     let rows = choices.n_d + choices.n_b + 2 + choices.n_a;
     let entries = (mu + rows * delta) * d;
     let table_vars = entries.next_power_of_two().trailing_zeros() as usize;

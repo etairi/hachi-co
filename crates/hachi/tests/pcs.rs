@@ -5,8 +5,8 @@
 //! at moduli of 24, 34 and 63 bits and bases 4, 6 and 16; whatever decodes re-encodes to the same
 //! words, and malformed encodings are rejected. Pinned outputs guard against unintended changes.
 
-use hachi::params::MAX_ITERATIONS;
-use hachi::{HachiChoices, HachiPcs, Proof, Schedule};
+use hachi::params::{MAX_ITERATIONS, max_digit};
+use hachi::{HachiChoices, HachiPcs, Layout, Proof, Schedule};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -512,6 +512,34 @@ fn unusable_parameters_are_refused() {
         .unwrap();
     assert!(Schedule::fixed(&toy, Q, first, usize::MAX).is_err());
     assert!(Schedule::fixed(&toy, Q, first, 16).is_ok());
+}
+
+#[test]
+fn iterations_whose_digits_pass_half_of_q_are_refused() {
+    // The toy choices (b = 4, omega = 2) at q = 8 388 637, toy-n1's modulus: a first witness of
+    // 2^r decomposed chunks folds to beta = 2^r * 2 * 2, and tau balanced digits represent
+    // [-2 S, S] with S = (4^tau - 1)/3. At r = 18, beta = 2^20 needs tau = 11 (S = 1 398 101),
+    // and [-2 796 202, 1 398 101] lies within q/2 = 4 194 318. At r = 19, beta = 2^21 needs
+    // tau = 12 (S = 5 592 405), whose negative end -11 184 810 does not: that iteration is
+    // refused, and the automatic schedule stops before it.
+    let q = 8_388_637;
+    let toy = HachiChoices::toy(16);
+    let layout = |r| Layout {
+        r,
+        m: 1,
+        decomposed: true,
+        beta_s: max_digit(4),
+    };
+    assert!(Schedule::fixed(&toy, q, layout(18), 1).is_ok());
+    let err = Schedule::fixed(&toy, q, layout(19), 1)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("beyond the centred residues"), "{err}");
+    assert_eq!(
+        Schedule::candidates(&toy, q, layout(19)).len(),
+        1,
+        "only the schedule without iterations"
+    );
 }
 
 #[test]
