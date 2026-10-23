@@ -28,10 +28,11 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: cargo docs --locked
   test:
+    # macOS runs weekly instead (macos.yml).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

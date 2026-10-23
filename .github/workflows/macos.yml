@@ -1,0 +1,23 @@
+name: macOS
+# CI's test job on macOS, weekly and on demand rather than on every push: GitHub's macOS runners
+# are often short ("Due to capacity constraints, jobs targeting macOS arm64 runners may experience
+# longer queue times"), and a job that no runner picks up is cancelled and fails the run.
+# macos-retry.yml re-runs such a job once; a job that ran and failed is a real failure.
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, 05:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  test:
+    name: test (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --workspace --release
+      - run: cargo run --locked --release -p hachi -- 14 16 1

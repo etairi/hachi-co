@@ -1,0 +1,26 @@
+name: macOS retry
+# Re-runs a macOS run (macos.yml) once if its job was cancelled before any runner picked it up:
+# no steps and no runner. A job that ran and failed is not re-run.
+on:
+  workflow_run:
+    workflows: [macOS]
+    types: [completed]
+permissions:
+  actions: write
+jobs:
+  rerun:
+    if: github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run the job if it got no runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          unstarted=$(gh api "repos/$REPO/actions/runs/$RUN/attempts/1/jobs" --jq \
+            '[.jobs[] | select(.conclusion == "cancelled" and (.steps | length) == 0 and (.runner_id // 0) == 0)] | length')
+          echo "jobs that got no runner: $unstarted"
+          if [ "$unstarted" -gt 0 ]; then
+            gh run rerun "$RUN" --failed --repo "$REPO"
+          fi
