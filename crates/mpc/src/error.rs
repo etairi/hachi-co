@@ -83,7 +83,8 @@ pub enum Error {
     },
     /// A message whose payload does not have the shape that the call expects (a flag that is
     /// neither 0 nor 1, a residue that is not below $q$, a set-up message of the wrong length,
-    /// parameters that differ between the parties).
+    /// parameters that differ between the parties), or a frame that breaks the wire format of
+    /// the transport (see [`TcpTransport`](crate::TcpTransport)).
     #[error("{label}: malformed message from party {party}: {message}")]
     Malformed {
         /// The label of the call.
@@ -91,6 +92,17 @@ pub enum Error {
         /// The sender.
         party: PartyId,
         /// What is wrong.
+        message: String,
+    },
+    /// The handshake of a network transport with a peer failed
+    /// ([`TcpTransport`](crate::TcpTransport)): the peer speaks another wire format, belongs to
+    /// another session or to a network of another size, claims an unexpected or duplicate party
+    /// index, or closed the connection or fell silent before the handshake was complete.
+    #[error("handshake with {peer}: {message}")]
+    Handshake {
+        /// The peer: its socket address, and its party index where it is known.
+        peer: String,
+        /// What went wrong.
         message: String,
     },
 }

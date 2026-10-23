@@ -15,11 +15,14 @@
 //! | [`absorb_statement`], [`check_statement`], [`EVAL_DOMAIN`] | the statement in the transcript | — |
 //! | [`hachi_co_params::sizes_with_base`], [`hachi_co_params::sizes`](fn@hachi_co_params::sizes) | the size of the encoding, per component, with and without the base PCS's items | — |
 //! | [`HachiBase`], [`HachiBase::setup`] | Hachi as the base PCS, and its $\mathsf{pp}\_{\mathsf{PCS}}$ from the setup seed | 289-292 |
+//! | [`harness`] | one party per process over TCP, from a JSON configuration, and the verifier of what it writes: the test and benchmark harness behind the program `hachi-co-party` (not a deployment) | — |
 //!
 //! The protocol code is that of the building blocks (`hachi-co-commit`, `-conv`, `-r2l`,
 //! `-sumcheck`); this crate chains them, owns the Fiat-Shamir transcript of a proof, and
 //! defines what the provers send. With [`hachi_co_mpc::Loopback`] it runs one prover; the party
-//! code is that of $n$ provers, each calling [`commit`] and [`eval`] with its own network end.
+//! code is that of $n$ provers, each calling [`commit`] and [`eval`] with its own network end:
+//! threads over the in-memory network in the tests, or one process per party over
+//! [`hachi_co_mpc::TcpTransport`] ([`harness`]).
 //! The base PCS is a parameter of [`eval`] and [`verify`] (`P: BasePcs<K>`), the same at every
 //! party and at the verifier: Hachi ([`HachiBase`]), or `ClearPcs` of `hachi-co-core` (feature
 //! `fixtures`), a reference stand-in that the fixture tests use.
@@ -144,6 +147,7 @@
 
 mod base;
 mod error;
+pub mod harness;
 mod proof;
 mod prover;
 mod statement;

@@ -15,9 +15,16 @@
 //!   its share of a random additive sharing of 0 to its output share, broadcasts the sum and
 //!   adds everything up; [`ZeroSharing`]), and per-label accounting ([`Stats`]).
 //!
-//! [`MemoryTransport`] connects $n$ parties of the same program; [`run_in_memory`] runs one thread per
-//! party over it. [`Faulty`] injects failures into any transport, and a [`Tap`] records the
-//! frames of an in-memory network for tests.
+//! Two implementations of [`Transport`], with the same semantics:
+//! - [`MemoryTransport`] connects $n$ parties of the same program; [`run_in_memory`] runs one
+//!   thread per party over it;
+//! - [`TcpTransport`] connects $n$ parties in separate processes, or on separate machines, with
+//!   one TCP connection per pair of parties, a handshake that checks the session, $n$ and the
+//!   party indices ([`TcpConfig`]), and a documented wire format. It is neither encrypted nor
+//!   authenticated (see its module documentation).
+//!
+//! [`Faulty`] injects failures into any transport, and a [`Tap`] records the frames of an
+//! in-memory network for tests.
 //!
 //! **Conventions.** Parties are numbered $1, \dots, n$ ([`PartyId`]). Values in $\mathbb Z_q$ are
 //! `u64` residues; a call reads them modulo [`Comm::modulus`] where it adds them, and returns
@@ -38,6 +45,7 @@ mod loopback;
 mod memory;
 mod run;
 mod stats;
+mod tcp;
 mod transport;
 
 pub use endpoint::{Endpoint, LABEL_SETUP, ZeroSharing};
@@ -47,6 +55,7 @@ pub use loopback::Loopback;
 pub use memory::{MemoryTransport, Tap, TapRecord, memory_network};
 pub use run::{MemoryConfig, MemoryEndpoint, PartyRun, run_in_memory};
 pub use stats::{LabelStats, Stats};
+pub use tcp::{TcpConfig, TcpTransport};
 pub use transport::{Frame, Transport};
 
 /// A party (prover) index, in $1, \dots, n$ (`docs/m1-spec.md`, "Conventions"; the draft numbers
