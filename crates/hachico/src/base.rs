@@ -11,24 +11,26 @@
 //! opening needs, so it needs neither $\ell''$ nor $d\_0$ in advance. Its other parameters are
 //! its own (the authors' answer 3 of 2026-10-21): only $q$ and $k$ are Hachi-Co's.
 //!
-//! **Parameters.** [`HachiBase::setup`] uses [`HachiChoices::toy`] at Hachi-Co's ring degree,
-//! which is **insecure** (test parameters, like the toy presets of Hachi-Co). Each opening runs
-//! the number of iterations whose proof is smallest (`hachi::pcs`, "Schedule"): at the toy
-//! presets, two or three for the share polynomial and none for the blinders, whose proofs are
-//! smallest in the clear. [`HachiBase::new`] takes any choices, for example
+//! **Parameters.** [`HachiBase::setup`] uses [`HachiChoices::toy_hiding`] at Hachi-Co's ring
+//! degree: the toy choices with randomized commitments ($\nu = 1$, Gaussian randomness of standard
+//! deviation 8). They are **insecure** (test parameters, like the toy presets of Hachi-Co). Each
+//! opening runs the number of iterations whose proof is smallest (`hachi::pcs`, "Schedule"): at
+//! the toy presets, two or three for the share polynomial and none for the blinders, whose proofs
+//! are smallest in the clear. [`HachiBase::new`] takes any choices, for example
 //! [`HachiChoices::fixed_iterations`] to fix the number of iterations.
 //!
-//! **Not hiding.** Hachi as implemented is not hiding: the last witness of every opening is
-//! sent in the clear, and with no iteration that is the committed polynomial itself. Choices
-//! with [`HachiChoices::hiding`] randomize every commitment (`docs/hachi-hiding.md` §6):
-//! - at an MLWE rank of real security, a commitment then hides the committed polynomial under
-//!   MLWE until it is opened;
-//! - the openings reveal as much as before, and Hachi-Co opens every commitment, so its proofs
-//!   are not hiding yet (with no iteration, as for the blinders at the toy presets, the opening
-//!   sends the blinder and its randomness).
+//! **Not hiding yet.** The default choices randomize every commitment
+//! ([`HachiChoices::hiding`], `docs/hachi-hiding.md` §6), which hiding needs, but the openings
+//! still reveal: the last witness of every opening is sent in the clear, and with no iteration
+//! that is the committed polynomial itself.
+//! - At an MLWE rank of real security, a commitment hides the committed polynomial under MLWE
+//!   until it is opened.
+//! - Hachi-Co opens every commitment, so its proofs are not hiding yet (with no iteration, as
+//!   for the blinders at the toy presets, the opening sends the blinder and its randomness).
 //!
-//! The default choices do not use randomized commitments yet. The provers draw the seeds of the
-//! randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).
+//! [`HachiBase::new`] with `hiding: None` gives deterministic commitments. The provers draw the
+//! seeds of the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness)
+//! (`base_pcs`).
 //!
 //! **Encodings.** Commitments and proofs travel as the words of
 //! [`HachiPcs::commitment_to_words`] and [`HachiPcs::proof_to_words`]: packed, with
@@ -94,13 +96,13 @@ impl<const K: usize> HachiBase<K> {
         Self::new(ctx.q(), Self::default_choices(ctx, seed))
     }
 
-    /// The choices of [`HachiBase::setup`]: [`HachiChoices::toy`] at Hachi-Co's ring degree $d$,
-    /// with the seed of the public matrices derived from the setup seed ([`base_pcs_seed`]).
-    /// **Insecure** (see the module documentation).
+    /// The choices of [`HachiBase::setup`]: [`HachiChoices::toy_hiding`] (randomized commitments)
+    /// at Hachi-Co's ring degree $d$, with the seed of the public matrices derived from the setup
+    /// seed ([`base_pcs_seed`]). **Insecure** (see the module documentation).
     pub fn default_choices(ctx: &Context<K>, seed: &[u8; 32]) -> HachiChoices {
         HachiChoices {
             seed: base_pcs_seed(seed),
-            ..HachiChoices::toy(ctx.layout.d)
+            ..HachiChoices::toy_hiding(ctx.layout.d)
         }
     }
 

@@ -21,7 +21,7 @@ base PCS of Hachi-Co.
 | `crates/conv` | `hachi-co-conv` | Πconv, the reduction from F_{q^k} to R_q, and the verifier's check y = E(u). |
 | `crates/r2l` | `hachi-co-r2l` | The ring-to-linear step: masks, rejection sampling, aborts and retries, and the shares of the linear relation. |
 | `crates/sumcheck` | `hachi-co-sumcheck` | The collaborative sumcheck and its verifier. Each prover commits to its share polynomial and its two blinders with the base PCS before the coins and opens them at the sumcheck's point; the verifier checks the 3n openings against the final values. |
-| `crates/hachico` | `hachi-co` | The PCS: Setup, Commit, Eval and Verify with Fiat–Shamir, with Hachi as the base PCS (`HachiBase`, whose public matrices come from the setup seed), the proof format and its size. Its tests run Commit and Eval with 1 to 8 provers, one thread each, with Hachi and with `ClearPcs`. Not hiding, and the parameters are insecure test choices. |
+| `crates/hachico` | `hachi-co` | The PCS: Setup, Commit, Eval and Verify with Fiat–Shamir, with Hachi as the base PCS (`HachiBase`, whose public matrices come from the setup seed), the proof format and its size. Its tests run Commit and Eval with 1 to 8 provers, one thread each, with Hachi and with `ClearPcs`. Not hiding: the commitments of the base PCS are randomized by default, but its openings still reveal. The parameters are insecure test choices. |
 | `ref/` | — | A SageMath reference implementation of the building blocks, used as a test oracle and fixture generator. |
 
 `parameters.sage` computes parameters and security estimates. It clones the lattice estimator into a

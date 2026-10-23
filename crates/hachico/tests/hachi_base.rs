@@ -13,9 +13,10 @@
 //! - tampered base-PCS items are rejected: changed, truncated or extended words of every
 //!   commitment and every opening, openings or commitments swapped between parties, and an
 //!   opening of the right polynomial made under another context;
-//! - with randomized commitments (`HachiChoices::hiding`, `docs/hachi-hiding.md` §6), honest runs
-//!   at n = 1, 2, 3 (Gaussian randomness, automatic schedule) and n = 2 (digits, one iteration)
-//!   pass the same checks, and the proof is bound to the hiding choices;
+//! - the default choices randomize the commitments (`HachiChoices::hiding`, Gaussian randomness,
+//!   `docs/hachi-hiding.md` §6), so the tests above run with them; honest runs with
+//!   deterministic commitments at n = 1, 2, 3 (automatic schedule) and with digit randomness at
+//!   n = 2 (one iteration) pass the same checks, and the proof is bound to the hiding choices;
 //! - an ignored test prints timings and sizes.
 //!
 //! Seeds: setup `seed("setup/<preset>", [index])` (also the source of Hachi's matrices,
@@ -37,16 +38,12 @@ use hachi_co::{
     verify_claims_with,
 };
 use hachi_co_core::base_pcs::mobius;
-use hachi_co_core::{Ext, FsChallenger, Poly, PrgRandomness};
+use hachi_co_core::{Ext, FsChallenger, PartyRandomness, Poly, PrgRandomness};
 use hachi_co_params::sizes_with_base;
 use hachi_co_sumcheck::{blinder_coefficients, blinder_weights};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::time::{Duration, Instant};
-
-/// The base PCS's seed for the direct calls: the default `HachiBase` does not hide and ignores
-/// it.
-const SEED: [u8; 32] = [0; 32];
 
 /// One run of every party: the context, the base PCS, the statement and the parties' outputs.
 struct Run {
@@ -265,23 +262,24 @@ fn the_proof_is_bound_to_the_base_pcs() {
     assert!(rejected(r.verify_with(&other, proof)));
 }
 
-/// Hachi with randomized commitments for the context of (`name`, `index`): the default choices
-/// with `hiding` and the given number of iterations.
+/// Hachi for the context of (`name`, `index`): the default choices with `hiding` (`None`:
+/// deterministic commitments) and the given number of iterations.
 fn hiding_base(
     ctx: &Context<K>,
     name: &str,
     index: u64,
-    hiding: Hiding,
+    hiding: Option<Hiding>,
     iterations: Option<usize>,
 ) -> HachiBase<K> {
     let choices = HachiChoices {
-        hiding: Some(hiding),
+        hiding,
         fixed_iterations: iterations,
         ..HachiBase::default_choices(ctx, &setup_seed(name, index))
     };
     HachiBase::new(ctx.q(), choices).unwrap()
 }
 
+/// The hiding choices of the default ([`HachiChoices::toy_hiding`]).
 const GAUSS8: Hiding = Hiding {
     nu: 1,
     noise: Noise::Gaussian { log_sigma: 3 },
@@ -292,19 +290,28 @@ const DIGITS2: Hiding = Hiding {
 };
 
 #[test]
-fn honest_runs_with_randomized_commitments_are_accepted() {
+fn honest_runs_with_other_commitment_choices_are_accepted() {
+    let ctx = fresh_context("toy-n1", 5);
+    let default = HachiBase::default_choices(&ctx, &setup_seed("toy-n1", 5));
+    assert_eq!(
+        default.hiding,
+        Some(GAUSS8),
+        "the default randomizes the commitments"
+    );
+    // Deterministic commitments.
     for n in [1, 2, 3] {
         let name = format!("toy-n{n}");
         let ctx = fresh_context(&name, 5);
-        let r = run_with(&name, n, 5, |c| hiding_base(c, &name, 5, GAUSS8, None), ctx);
+        let r = run_with(&name, n, 5, |c| hiding_base(c, &name, 5, None, None), ctx);
         check_honest(&r);
     }
+    // Uniform digits as the randomness, with one iteration.
     let ctx = fresh_context("toy-n2", 5);
     let r = run_with(
         "toy-n2",
         2,
         5,
-        |c| hiding_base(c, "toy-n2", 5, DIGITS2, Some(1)),
+        |c| hiding_base(c, "toy-n2", 5, Some(DIGITS2), Some(1)),
         ctx,
     );
     assert_eq!(check_honest(&r), [1; 3]);
@@ -317,7 +324,7 @@ fn the_proof_is_bound_to_the_hiding_choices() {
         "toy-n2",
         2,
         6,
-        |c| hiding_base(c, "toy-n2", 6, GAUSS8, Some(1)),
+        |c| hiding_base(c, "toy-n2", 6, Some(GAUSS8), Some(1)),
         ctx,
     );
     let proof = r.proof();
@@ -325,14 +332,7 @@ fn the_proof_is_bound_to_the_hiding_choices() {
     let rejected =
         |result: Result<(), VerifyError>| matches!(result, Err(VerifyError::Sumcheck(_)));
     // The same Hachi without hiding, or with other hiding choices: other digests, other coins.
-    let plain = HachiBase::new(
-        r.ctx.q(),
-        HachiChoices {
-            fixed_iterations: Some(1),
-            ..HachiBase::default_choices(&r.ctx, &setup_seed("toy-n2", 6))
-        },
-    )
-    .unwrap();
+    let plain = hiding_base(&r.ctx, "toy-n2", 6, None, Some(1));
     assert!(rejected(r.verify_with(&plain, proof)));
     for other in [
         Hiding { nu: 2, ..GAUSS8 },
@@ -345,7 +345,7 @@ fn the_proof_is_bound_to_the_hiding_choices() {
             noise: Noise::Digits,
         },
     ] {
-        let pcs = hiding_base(&r.ctx, "toy-n2", 6, other, Some(1));
+        let pcs = hiding_base(&r.ctx, "toy-n2", 6, Some(other), Some(1));
         assert_ne!(pcs.params_digest(), r.pcs.params_digest());
         assert!(rejected(r.verify_with(&pcs, proof)), "{other:?}");
     }
@@ -427,9 +427,9 @@ fn tampered_hachi_items_are_rejected() {
         assert!(matches!(r.check(&swapped), Err(VerifyError::Sumcheck(_))));
         cases += 2;
     }
-    // Party 1's polynomials, committed and opened again (the default choices' commitment is
-    // deterministic)
-    // under another context: the commitments are the proof's, the values are right, but the
+    // Party 1's polynomials, committed and opened again under another context, with party 1's
+    // base-PCS seeds (`PartyRandomness::base_pcs` draws each from its own stream, so they can be
+    // drawn again here): the commitments are the proof's, the values are right, but the
     // openings' Fiat-Shamir starts from the wrong context.
     let (field, l) = (r.ctx.field(), &r.ctx.layout);
     let private = &r.outs[0].sumcheck;
@@ -437,14 +437,18 @@ fn tampered_hachi_items_are_rejected() {
     let mut coeffs = private.w_table.clone();
     mobius(field.zq(), &mut coeffs).unwrap();
     let other = [0x5au8; 32];
+    let mut party = PrgRandomness::new(seed("party/hachi-base", &[n as u64, 3, 1]));
     for poly in ClaimedPoly::ORDER {
+        let mut draw =
+            |opening| PartyRandomness::<K>::base_pcs(&mut party, poly.seed_index(opening)).unwrap();
+        let (commit_seed, open_seed) = (draw(false), draw(true));
         let (com, opening) = match poly {
             ClaimedPoly::W => {
-                let (com, st) = r.pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+                let (com, st) = r.pcs.commit_multilinear(&coeffs, &commit_seed).unwrap();
                 (
                     com,
                     r.pcs
-                        .prove_multilinear(&st, point, &other, &SEED)
+                        .prove_multilinear(&st, point, &other, &open_seed)
                         .unwrap()
                         .1,
                 )
@@ -456,13 +460,13 @@ fn tampered_hachi_items_are_rejected() {
                 };
                 let (com, st) = r
                     .pcs
-                    .commit_vector(&blinder_coefficients(g), &SEED)
+                    .commit_vector(&blinder_coefficients(g), &commit_seed)
                     .unwrap();
                 let weights = blinder_weights(field, point, degree);
                 (
                     com,
                     r.pcs
-                        .prove_inner_product(&st, &weights, &other, &SEED)
+                        .prove_inner_product(&st, &weights, &other, &open_seed)
                         .unwrap()
                         .1,
                 )
@@ -493,11 +497,12 @@ fn timings_with_hachi() {
         let r = run(name, n, iterations, 4);
         check_honest(&r);
     }
-    // With randomized commitments (Gaussian, nu = 1), on the automatic schedule.
+    // With deterministic commitments, on the automatic schedule (the runs above use the default,
+    // randomized commitments).
     for (name, n) in [("toy-n8", 8), ("dev-l12", 1)] {
-        eprintln!("{name} with randomized commitments:");
+        eprintln!("{name} with deterministic commitments:");
         let ctx = fresh_context(name, 4);
-        let r = run_with(name, n, 4, |c| hiding_base(c, name, 4, GAUSS8, None), ctx);
+        let r = run_with(name, n, 4, |c| hiding_base(c, name, 4, None, None), ctx);
         check_honest(&r);
     }
 }

@@ -48,8 +48,9 @@
 //!   component and of the known forgery; they do not prove soundness.
 //! - **The base PCS.** The guarantee is only as good as the base PCS passed to [`verify`]:
 //!   `ClearPcs` is binding (SHA-256 collision resistance) and sound, but neither succinct nor
-//!   hiding. [`HachiBase`] is not hiding either (each opening sends its last witness in the
-//!   clear), and [`HachiBase::setup`] uses insecure test parameters.
+//!   hiding. [`HachiBase`] is not hiding either: its default choices randomize the commitments,
+//!   but each opening still sends its last witness in the clear. [`HachiBase::setup`] uses
+//!   insecure test parameters.
 //! - **Fiat-Shamir** is in the random-oracle model (a SHAKE128 transcript,
 //!   `hachi-co-transcript`), as accepted for the project (user, 2026-10-17). The digest of the
 //!   base PCS's parameters ([`BasePcs::params_digest`]) is part of the statement
@@ -120,7 +121,8 @@
 //!   ([`HACHI_BASE_DIGEST_DOMAIN`]).
 //! - Hachi's public matrices come from a seed derived from the setup seed
 //!   ([`base_pcs_seed`], domain [`SETUP_DOMAIN_BASE_PCS`]), and its default parameters are its
-//!   toy choices at Hachi-Co's ring degree ([`HachiBase::default_choices`]).
+//!   toy choices with randomized commitments at Hachi-Co's ring degree
+//!   ([`HachiBase::default_choices`]).
 //! - The statement's parameter words: the choices with $\omega$ and $q$ resolved and the two
 //!   enumerations as small integers ([`statement_words`]); $\mathbf A, \mathbf B, \mathbf D$ are
 //!   absorbed in full rather than as a digest.
