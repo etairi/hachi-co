@@ -51,9 +51,9 @@ use rand::Rng;
 /// domains of $\mathbf A$, $\mathbf B$, $\mathbf D$ in [`Context::setup`].
 pub const SETUP_DOMAIN_BASE_PCS: &[u8] = b"hachi-co/setup/base-pcs";
 
-/// The transcript domain of [`HachiBase`]'s parameter digest ([`BasePcs::params_digest`]).
-/// Version 2: Hachi's schedule minimises the proof's size and its encodings are packed
-/// ([`hachi::VERSION`]).
+/// The transcript domain of [`HachiBase`]'s parameter digest ([`BasePcs::params_digest`]). The
+/// digest itself absorbs [`hachi::VERSION`], so it tracks Hachi's encoding version; the `v2` in
+/// the domain string is only a fixed label and does not track that version.
 pub const HACHI_BASE_DIGEST_DOMAIN: &[u8] = b"hachi-co/base-pcs/hachi/v2";
 
 /// The seed of Hachi's public matrices for Hachi-Co's setup seed `seed`: the first 32 bytes of

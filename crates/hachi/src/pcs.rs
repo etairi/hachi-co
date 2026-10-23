@@ -4,12 +4,20 @@
 //! - **Multilinear polynomials** $f \in \mathbb Z_q^{\le 1}\[X_1, \dots, X_\ell\]$ given by
 //!   their $2^\ell$ monomial coefficients ([`HachiPcs::commit_multilinear`]); coefficient $i$
 //!   multiplies $X_1^{i_1} \cdots X_\ell^{i_\ell}$ with $\mathrm{bit}(i) = (i_1, \dots, i_\ell)$
-//!   most significant first. Openings reduce $f(\mathbf x) = y$ to a claim over $\mathcal R_q$
-//!   by the paper's Section 3.2 then Section 3.1: the prover sends the $K$ partial evaluations
-//!   $y_i = f_i(x_{\kappa+1}, \dots, x_\ell)$ over the first $\kappa$ variables, the packed
-//!   polynomial $f' = \sum_i f_i Z_i$ goes into ring elements by $\psi$, and the prover sends
-//!   $Y = F(\mathbf x_{\mathrm{high}})$, checked by $E(Y) = (K/d)\,\mathrm{Tr}\_H(Y \sigma_{-1}(v))
-//!   = f'(\mathbf x')$ (Theorem 2).
+//!   most significant first. The commitment holds the packed polynomial $f' = \sum_i f_i Z_i$
+//!   of the paper's Section 3.2, in ring elements by $\psi$. An opening reduces $f(\mathbf x) =
+//!   y$ to a claim over $\mathcal R_q$:
+//!   1. the prover sends the $K$ partial evaluations $y_i = f_i(\mathbf x')$ over the first
+//!      $\kappa$ variables, $\mathbf x' = (x_{\kappa+1}, \dots, x_\ell)$, and the verifier
+//!      checks $y = \sum_i \mathrm{mono}\_i(x_1, \dots, x_\kappa) y_i$ (Section 3.2);
+//!   2. a sumcheck binds the $y_i$ to $f'$ ([`crate::partials`]) and leaves the claim
+//!      $f'(\mathbf r) = v_{\mathbf r}$ at the point $\mathbf r$ of its challenges. This
+//!      deviates from Section 3.2, which proves $f'(\mathbf x') = \sum_i y_i Z_i$ only: that
+//!      sum does not determine the $y_i \in \mathbb F_{q^K}$, and a prover could move them,
+//!      and $y$ with them, along its kernel;
+//!   3. the prover sends $Y = F(\mathbf r_{\mathrm{high}})$, checked by $E(Y) =
+//!      (K/d)\,\mathrm{Tr}\_H(Y \sigma_{-1}(v)) = v_{\mathbf r}$ with $v = \psi$ of the
+//!      monomials of $\mathbf r_{\mathrm{low}}$ (Section 3.1, Theorem 2).
 //! - **Vectors** $\mathbf s \in \mathbb F_{q^K}^N$ ([`HachiPcs::commit_vector`]), opened as an
 //!   inner product $\langle \mathbf s, \mathbf e \rangle$ with any public weights: by Theorem 2,
 //!   $\langle \mathbf s, \mathbf e \rangle = (K/d)\,\mathrm{Tr}\_H(\sum_t \psi(\mathbf s_t)
@@ -52,20 +60,24 @@
 //! is the input, sent as residues. The decoders know the parameters, so a header holds only
 //! what they do not fix:
 //! - commitment: `[VERSION]`, then the $n_B d$ coefficients of $\mathbf u$;
-//! - proof: `[VERSION, #partials, k, L_1, …, L_k, N]` for $k$ iterations of $L_i$ sumcheck
-//!   rounds and a final message of $N$ ring elements, then the partial evaluations, $Y$, per
-//!   iteration $\mathbf v$, $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$,
-//!   the $K$ partial evaluations and $p'$, and the final message. With hiding the header ends
-//!   with the number $R$ of ring elements of the final randomness, which follows the final
-//!   message, each coefficient $x$ as $x - \mathrm{lo}$ in
-//!   $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1) \rceil$ bits for the support
-//!   $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$. Without hiding the encodings are those of the
-//!   non-hiding scheme, unchanged.
+//! - proof: `[VERSION, P, B, k, L_1, …, L_k, N]` for $P$ partial evaluations and $B$ rounds of
+//!   the input batching sumcheck ($K$ and $\ell - \kappa$ for a multilinear opening, 0 and 0 for
+//!   an inner product), $k$ iterations of $L_i$ sumcheck rounds and a final message of $N$ ring
+//!   elements. Then the input reduction's partial evaluations, its batching rounds (3 field
+//!   elements each) and $f'(\mathbf r)$ (if $P = K$); $Y$; per iteration $\mathbf v$,
+//!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K$ partial
+//!   evaluations, the $L_i - \kappa$ batching rounds (3 field elements each), the packed value
+//!   $\hat w(\mathbf r)$ and $p'$; and the final message. The per-iteration batching-round count
+//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with the number $R$
+//!   of ring elements of the final randomness, which follows the final message, each coefficient
+//!   $x$ as $x - \mathrm{lo}$ in $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1) \rceil$ bits for
+//!   the support $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$. Without hiding the encodings are those
+//!   of the non-hiding scheme, unchanged.
 //!
 //! Every value has a single encoding: the decoders reject residues not below $q$, digit indices
 //! outside the digit set, randomness outside the support of $\chi$, non-zero padding, and any
-//! length other than the one the header and the parameters imply. The counts in a header are
-//! checked against the schedule by the verifier.
+//! length other than the one the header and the parameters imply. The verifier checks the
+//! counts of a header: $B$ against $\ell - \kappa$, the others against the schedule.
 
 use crate::commit::{Committed, Ctx, commit};
 use crate::error::VerifyError;
@@ -74,16 +86,19 @@ use crate::iteration::{
     self, Claim, IterationProof, check_exts, check_polys, commitment_randomness, evaluate_claim,
 };
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
+use crate::partials::{self, RoundValues};
 use crate::sumcheck::RoundMessage;
 use crate::{Error, Result};
 use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
-/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 2 since values are packed
-/// and the schedule minimises the proof's size (version 1 had a 64-bit word per value and
-/// stopped at the first iteration that did not shrink the witness).
-pub const VERSION: u64 = 2;
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 3 since a multilinear
+/// opening binds its partial evaluations by a sumcheck ([`crate::partials`]). Version 2 did not,
+/// and accepted false values; it packed the values and chose the schedule that minimises the
+/// proof's size (version 1 had a 64-bit word per value and stopped at the first iteration that
+/// did not shrink the witness).
+pub const VERSION: u64 = 3;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +126,12 @@ pub struct State<const K: usize> {
 pub struct Proof<const K: usize> {
     /// The $K$ partial evaluations of a multilinear opening (empty for an inner product).
     pub partials: Vec<Ext<K>>,
+    /// The rounds of the sumcheck that binds the partial evaluations to $f'$
+    /// ([`crate::partials`]): $\ell - \kappa$ for a multilinear opening, none for an inner
+    /// product.
+    pub batch_rounds: Vec<RoundValues<K>>,
+    /// $f'(\mathbf r)$ at the point of those rounds; `None` for an inner product.
+    pub batch_eval: Option<Ext<K>>,
     /// The ring element $Y$ of the reduction to $\mathcal R_q$.
     pub ring_value: Poly,
     /// The iterations.
@@ -120,6 +141,47 @@ pub struct Proof<const K: usize> {
     /// With hiding, the final witness's commitment randomness, chunk after chunk ($\nu + n_A$
     /// ring elements per chunk); empty without.
     pub final_randomness: Vec<Poly>,
+}
+
+/// What a proof carries ahead of its iterations besides $Y$, by the kind of opening; the choice
+/// of the schedule counts it (module documentation, "Schedule" and "Encodings").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reduction {
+    /// A multilinear opening: $K$ partial evaluations, the rounds of the batching sumcheck and
+    /// $f'(\mathbf r)$.
+    Multilinear {
+        /// The rounds, $\ell - \kappa$.
+        rounds: usize,
+    },
+    /// An inner product: none of these.
+    InnerProduct,
+}
+
+impl Reduction {
+    /// The number of partial evaluations: $K$ for a multilinear opening, else 0.
+    fn partials(self, k: usize) -> usize {
+        match self {
+            Self::Multilinear { .. } => k,
+            Self::InnerProduct => 0,
+        }
+    }
+
+    /// The number of rounds of the batching sumcheck.
+    fn rounds(self) -> usize {
+        match self {
+            Self::Multilinear { rounds } => rounds,
+            Self::InnerProduct => 0,
+        }
+    }
+
+    /// The residues ahead of the iterations, $Y$ included: $K^2 + 3K(\ell - \kappa) + K + d$
+    /// for a multilinear opening, $d$ for an inner product; `None` on overflow.
+    fn residues(self, k: usize, d: usize) -> Option<usize> {
+        match self {
+            Self::Multilinear { rounds } => rounds.checked_mul(3 * k)?.checked_add(k * k + k + d),
+            Self::InnerProduct => Some(d),
+        }
+    }
 }
 
 /// Hachi with fixed parameters.
@@ -201,7 +263,10 @@ impl<const K: usize> HachiPcs<K> {
     /// As [`HachiPcs::multilinear_layout`]; [`Error::Parameter`] if the fixed number of
     /// iterations cannot be parametrised.
     pub fn multilinear_schedule(&self, vars: usize) -> Result<Schedule> {
-        self.schedule(self.multilinear_layout(vars)?, K)
+        self.schedule(
+            self.multilinear_layout(vars)?,
+            self.multilinear_reduction(vars),
+        )
     }
 
     /// The schedule of an inner-product opening of a vector of `len` elements (module
@@ -211,21 +276,29 @@ impl<const K: usize> HachiPcs<K> {
     /// As [`HachiPcs::vector_layout`]; [`Error::Parameter`] if the fixed number of iterations
     /// cannot be parametrised.
     pub fn vector_schedule(&self, len: usize) -> Result<Schedule> {
-        self.schedule(self.vector_layout(len)?, 0)
+        self.schedule(self.vector_layout(len)?, Reduction::InnerProduct)
+    }
+
+    /// The reduction of a multilinear opening in `vars` variables: $\ell - \kappa$ batching
+    /// rounds.
+    fn multilinear_reduction(&self, vars: usize) -> Reduction {
+        Reduction::Multilinear {
+            rounds: vars.saturating_sub(self.ctx.kappa()),
+        }
     }
 
     /// The schedule of an opening of a first witness of layout `first` whose proof carries
-    /// `partials` partial evaluations: [`HachiChoices::fixed_iterations`] iterations if set,
-    /// otherwise the candidate of [`Schedule::candidates`] whose proof has the fewest words, the
-    /// one with fewer iterations on a tie.
-    fn schedule(&self, first: Layout, partials: usize) -> Result<Schedule> {
+    /// `reduction` ahead of its iterations: [`HachiChoices::fixed_iterations`] iterations if
+    /// set, otherwise the candidate of [`Schedule::candidates`] whose proof has the fewest
+    /// words, the one with fewer iterations on a tie.
+    fn schedule(&self, first: Layout, reduction: Reduction) -> Result<Schedule> {
         let (c, q) = (&self.ctx.choices, self.ctx.q);
         if let Some(n) = c.fixed_iterations {
             return Schedule::fixed(c, q, first, n);
         }
         let mut best: Option<(usize, Schedule)> = None;
         for schedule in Schedule::candidates(c, q, first) {
-            let words = self.proof_words(&schedule, partials);
+            let words = self.proof_words(&schedule, reduction)?;
             if best.as_ref().is_none_or(|(least, _)| words < *least) {
                 best = Some((words, schedule));
             }
@@ -268,7 +341,10 @@ impl<const K: usize> HachiPcs<K> {
     /// # Errors
     /// As [`HachiPcs::multilinear_schedule`].
     pub fn multilinear_proof_words(&self, vars: usize) -> Result<usize> {
-        Ok(self.proof_words(&self.multilinear_schedule(vars)?, K))
+        self.proof_words(
+            &self.multilinear_schedule(vars)?,
+            self.multilinear_reduction(vars),
+        )
     }
 
     /// The number of words of [`HachiPcs::proof_to_words`] for an inner-product opening of a
@@ -277,24 +353,34 @@ impl<const K: usize> HachiPcs<K> {
     /// # Errors
     /// As [`HachiPcs::vector_schedule`].
     pub fn vector_proof_words(&self, len: usize) -> Result<usize> {
-        Ok(self.proof_words(&self.vector_schedule(len)?, 0))
+        self.proof_words(&self.vector_schedule(len)?, Reduction::InnerProduct)
     }
 
-    /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and `partials`
-    /// partial evaluations (module documentation, "Encodings"): the header ($4 + k$ words for
-    /// $k$ iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue:
-    /// the partial evaluations ($K$ residues each), $Y$ ($d$), per iteration $\mathbf v$
-    /// ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field
-    /// elements), $y'$ ($K$), the partial evaluations ($K^2$) and $p'$ ($d$); the final message,
-    /// $2^{r+m} d$ residues without iterations, else as many digits of
+    /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and the reduction
+    /// `reduction` (module documentation, "Encodings"): the header ($5 + k$ words for $k$
+    /// iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue: for a
+    /// multilinear opening the partial evaluations ($K$ residues each), the $\ell - \kappa$
+    /// batching rounds ($3K$ each) and $f'(\mathbf r)$ ($K$); $Y$ ($d$); per iteration
+    /// $\mathbf v$ ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3
+    /// field elements), $y'$ ($K$), the partial evaluations ($K^2$) and $p'$ ($d$); the final
+    /// message, $2^{r+m} d$ residues without iterations, else as many digits of
     /// $\lceil \log_2 b \rceil$ bits; and with hiding the final randomness,
     /// $2^r (\nu + n_A) d$ coefficients of the bits of [`Noise`](crate::params::Noise)'s support.
-    fn proof_words(&self, schedule: &Schedule, partials: usize) -> usize {
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] if the count of the reduction's residues overflows.
+    fn proof_words(&self, schedule: &Schedule, reduction: Reduction) -> Result<usize> {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
-        let mut residues = K * partials + d;
+        let kappa = self.ctx.kappa();
+        let mut residues = reduction
+            .residues(K, d)
+            .ok_or_else(|| Error::Parameter("the size of the proof overflows".into()))?;
         for it in &schedule.iterations {
+            // Per iteration: v, u', the L sumcheck rounds, y', the K partial evaluations, p',
+            // then the L - kappa batching rounds (3K each) and the packed evaluation (K).
             residues += (c.n_d + c.n_b) * d + it.table_vars * round + K + K * K + d;
+            residues += (it.table_vars - kappa) * 3 * K + K;
         }
         let last = schedule.final_layout;
         let entries = last.chunks() * last.chunk_len() * d;
@@ -304,12 +390,12 @@ impl<const K: usize> HachiPcs<K> {
             self.digit_bits()
         };
         let mut bits = residues * self.residue_bits() + entries * entry_bits;
-        let mut header = 4 + schedule.iterations.len();
+        let mut header = 5 + schedule.iterations.len();
         if let Some((_, _, noise_bits)) = self.noise_field() {
             header += 1;
             bits += last.chunks() * self.ctx.rand_len(c.n_a) * d * noise_bits;
         }
-        header + bits.div_ceil(64)
+        Ok(header + bits.div_ceil(64))
     }
 
     /// Commits to the multilinear polynomial with monomial coefficients `coeffs` ($2^\ell$
@@ -347,8 +433,18 @@ impl<const K: usize> HachiPcs<K> {
         ))
     }
 
-    /// The message chunks of a multilinear polynomial: $f'_j = \sum_i f_{i \Vert j} Z_i$, then
-    /// $\psi$ of $d/K$ consecutive $f'_j$.
+    /// The monomial coefficients $f'\_j = \sum_i f_{i \Vert j} Z_i$ of $f' = \sum_i f_i Z_i$,
+    /// $j \in \lbrace 0, 1 \rbrace^{\ell - \kappa}$, of a polynomial in `vars` $\ge \kappa$
+    /// variables.
+    fn packed(&self, vars: usize, coeffs: &[u64]) -> Vec<Ext<K>> {
+        let inner = 1usize << (vars - self.ctx.kappa());
+        (0..inner)
+            .map(|j| Ext(core::array::from_fn(|i| coeffs[i * inner + j])))
+            .collect()
+    }
+
+    /// The message chunks of a multilinear polynomial: the coefficients $f'\_j$
+    /// ([`HachiPcs::packed`]), then $\psi$ of $d/K$ consecutive $f'\_j$.
     fn multilinear_message(
         &self,
         layout: &Layout,
@@ -356,11 +452,8 @@ impl<const K: usize> HachiPcs<K> {
         coeffs: &[u64],
     ) -> Result<Vec<Vec<Poly>>> {
         let ctx = &self.ctx;
-        let inner = 1usize << (vars - ctx.kappa());
-        let packed: Vec<Ext<K>> = (0..inner)
-            .map(|j| Ext(core::array::from_fn(|i| coeffs[i * inner + j])))
-            .collect();
-        let elements = packed
+        let elements = self
+            .packed(vars, coeffs)
             .chunks_exact(ctx.d_over_k())
             .map(|block| ctx.sub.psi(block))
             .collect::<hachi_co_math::Result<Vec<_>>>()?;
@@ -456,54 +549,66 @@ impl<const K: usize> HachiPcs<K> {
         fs
     }
 
-    /// The claim of the first iteration of a multilinear opening and the checks of the
-    /// reduction: the value from the partial evaluations, and $E(Y) = f'(\mathbf x')$.
-    fn multilinear_claim(
-        &self,
-        layout: &Layout,
-        point: &[Ext<K>],
-        partials: &[Ext<K>],
-        ring_value: &Poly,
-    ) -> Result<(Claim, Ext<K>, bool)> {
-        let ctx = &self.ctx;
-        let field = ctx.field();
-        let kappa = ctx.kappa();
-        let vars = point.len();
-        let mono_hi = ctx.sub.monomials(&point[..kappa])?;
-        let mut value = field.zero();
-        let mut packed = field.zero();
-        for (i, y) in partials.iter().enumerate() {
-            value = field.add(&value, &field.mul(&mono_hi[i], y));
-            let mut z = Ext([0u64; K]);
-            z.0[i] = 1;
-            packed = field.add(&packed, &field.mul(y, &z));
+    /// The value $\sum_i \mathrm{mono}\_i(x_1, \dots, x_\kappa) y_i$ of the partial evaluations
+    /// `partials` at `point` (paper, Section 3.2).
+    fn value_of_partials(&self, point: &[Ext<K>], partials: &[Ext<K>]) -> Result<Ext<K>> {
+        let field = self.ctx.field();
+        let mono = self.ctx.sub.monomials(&point[..self.ctx.kappa()])?;
+        Ok(mono.iter().zip(partials).fold(field.zero(), |acc, (m, y)| {
+            field.add(&acc, &field.mul(m, y))
+        }))
+    }
+
+    /// The weights of the reduction of $f'(\mathbf r)$ to $\mathcal R_q$ (paper, Section 3.1)
+    /// at a point $\mathbf r \in \mathbb F_{q^K}^{\ell - \kappa}$ of a multilinear opening in
+    /// `layout`, split into $\mathbf r_{\mathrm{high}}$ and its last $\alpha - \kappa$
+    /// coordinates $\mathbf r_{\mathrm{low}}$: $\mathbf b$ and $\mathbf a$, the embedded
+    /// monomials of the first $r$ and of the other coordinates of $\mathbf r_{\mathrm{high}}$,
+    /// and $v = \psi$ of the monomials of $\mathbf r_{\mathrm{low}}$.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless $\mathbf r$ has $r + m + \alpha - \kappa$ coordinates.
+    fn ring_weights(&self, layout: &Layout, r: &[Ext<K>]) -> Result<(Vec<Poly>, Vec<Poly>, Poly)> {
+        let sub = &self.ctx.sub;
+        let low = self.ctx.alpha() - self.ctx.kappa();
+        if r.len() != layout.r + layout.m + low {
+            return Err(Error::Shape(format!(
+                "a point of {} coordinates is expected",
+                layout.r + layout.m + low
+            )));
         }
-        let ring_vars = vars - ctx.alpha();
-        let x_high = &point[kappa..kappa + ring_vars];
-        let x_low = &point[kappa + ring_vars..];
-        let v_low = ctx.sub.psi(&ctx.sub.monomials(x_low)?)?;
-        let traced = ctx.sub.extract(&ctx.sub.e_map(ring_value, &v_low)?)?;
-        let b = ctx
-            .sub
-            .monomials(&x_high[..layout.r])?
-            .iter()
-            .map(|e| ctx.sub.embed(e))
-            .collect();
-        let a = ctx
-            .sub
-            .monomials(&x_high[layout.r..])?
-            .iter()
-            .map(|e| ctx.sub.embed(e))
-            .collect();
+        let (high, low) = r.split_at(layout.r + layout.m);
+        let embedded = |x: &[Ext<K>]| -> Result<Vec<Poly>> {
+            Ok(sub.monomials(x)?.iter().map(|e| sub.embed(e)).collect())
+        };
         Ok((
-            Claim {
-                b,
-                a,
-                target: ring_value.clone(),
-            },
-            value,
-            traced == packed,
+            embedded(&high[..layout.r])?,
+            embedded(&high[layout.r..])?,
+            sub.psi(&sub.monomials(low)?)?,
         ))
+    }
+
+    /// $E(Y) = (K/d)\,\mathrm{Tr}\_H(Y \sigma_{-1}(v))$ as a field element (Theorem 2).
+    fn traced(&self, ring_value: &Poly, v: &Poly) -> Result<Ext<K>> {
+        Ok(self.ctx.sub.extract(&self.ctx.sub.e_map(ring_value, v)?)?)
+    }
+
+    /// The claim that the iterations prove for a multilinear opening: $Y = \sum_i b_i \mathbf
+    /// a^\top \mathbf f_i$ with the weights of [`HachiPcs::ring_weights`] at the batching
+    /// sumcheck's point $\mathbf r$, once the honest prover checked $E(Y) = f'(\mathbf r)$ =
+    /// `at_r`.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if that check fails; as [`HachiPcs::ring_weights`].
+    fn ring_claim(&self, state: &State<K>, r: &[Ext<K>], at_r: &Ext<K>) -> Result<Claim> {
+        let (b, a, v) = self.ring_weights(&state.committed.layout, r)?;
+        let target = evaluate_claim(&self.ctx, &b, &a, &state.committed.message)?;
+        if self.traced(&target, &v)? != *at_r {
+            return Err(Error::Protocol(
+                "the trace check of the input reduction fails".into(),
+            ));
+        }
+        Ok(Claim { b, a, target })
     }
 
     /// The weights $\sigma_{-1}(\psi(\mathbf e_t))$ of an inner product, zero-padded.
@@ -514,19 +619,19 @@ impl<const K: usize> HachiPcs<K> {
             .collect()
     }
 
-    /// Runs the iterations and the final step for the prover; `partials` is the number of
-    /// partial evaluations the proof carries (it enters the choice of the schedule). Returns the
-    /// iterations, the final message and the final randomness.
+    /// Runs the iterations and the final step for the prover; `reduction` is what the proof
+    /// carries ahead of them (it enters the choice of the schedule). Returns the iterations, the
+    /// final message and the final randomness.
     fn prove_rest(
         &self,
         layout: Layout,
-        partials: usize,
+        reduction: Reduction,
         committed: &Committed,
         claim: Claim,
         fs: &mut Fs,
         seed: &[u8; 32],
     ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>, Vec<Poly>)> {
-        let schedule = self.schedule(layout, partials)?;
+        let schedule = self.schedule(layout, reduction)?;
         let mut witness = committed.clone();
         let mut claim = claim;
         let mut proofs = Vec::with_capacity(schedule.iterations.len());
@@ -543,6 +648,10 @@ impl<const K: usize> HachiPcs<K> {
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
     /// proof. `context` binds the proof to the caller's transcript; `seed` is the opening's
     /// fresh secret seed (module documentation, "Randomness").
+    ///
+    /// The transcript absorbs the statement with the value, the partial evaluations, the
+    /// batching sumcheck ($\gamma$, each round's values then its challenge, $f'(\mathbf r)$;
+    /// [`crate::partials`]), $Y$, then the iterations.
     ///
     /// # Errors
     /// [`Error::Shape`] for a point of the wrong length or a state of a vector; prover errors.
@@ -568,7 +677,8 @@ impl<const K: usize> HachiPcs<K> {
         let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
         let kappa = ctx.kappa();
         let inner = 1usize << (vars - kappa);
-        let mono = ctx.sub.monomials(&point[kappa..])?;
+        let x = &point[kappa..];
+        let mono = ctx.sub.monomials(x)?;
         let partials: Vec<Ext<K>> = (0..K)
             .map(|i| {
                 coeffs[i * inner..(i + 1) * inner]
@@ -579,37 +689,28 @@ impl<const K: usize> HachiPcs<K> {
                     })
             })
             .collect();
-        let layout = state.committed.layout;
-        let ring_value = evaluate_claim(
-            ctx,
-            &ctx.sub
-                .monomials(&point[kappa..kappa + layout.r])?
-                .iter()
-                .map(|e| ctx.sub.embed(e))
-                .collect::<Vec<_>>(),
-            &ctx.sub
-                .monomials(&point[kappa + layout.r..kappa + vars - ctx.alpha()])?
-                .iter()
-                .map(|e| ctx.sub.embed(e))
-                .collect::<Vec<_>>(),
-            &state.committed.message,
-        )?;
-        let (claim, value, traced) =
-            self.multilinear_claim(&layout, &point, &partials, &ring_value)?;
-        if !traced {
-            return Err(Error::Protocol(
-                "the trace check of the input reduction fails".into(),
-            ));
-        }
+        let value = self.value_of_partials(&point, &partials)?;
         let mut fs = self.statement(context, 1, *vars, &state.committed.u, &point, &value);
         fs.exts(LABEL_PARTIALS, &partials);
+        let (batch_rounds, r, at_r) =
+            partials::prove(field, &self.packed(*vars, coeffs), x, &partials, &mut fs)?;
+        let claim = self.ring_claim(state, &r, &at_r)?;
+        let ring_value = claim.target.clone();
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let (iterations, final_message, final_randomness) =
-            self.prove_rest(layout, K, &state.committed, claim, &mut fs, seed)?;
+        let (iterations, final_message, final_randomness) = self.prove_rest(
+            state.committed.layout,
+            self.multilinear_reduction(*vars),
+            &state.committed,
+            claim,
+            &mut fs,
+            seed,
+        )?;
         Ok((
             value,
             Proof {
                 partials,
+                batch_rounds,
+                batch_eval: Some(at_r),
                 ring_value,
                 iterations,
                 final_message,
@@ -674,12 +775,20 @@ impl<const K: usize> HachiPcs<K> {
             a,
             target: ring_value.clone(),
         };
-        let (iterations, final_message, final_randomness) =
-            self.prove_rest(layout, 0, &state.committed, claim, &mut fs, seed)?;
+        let (iterations, final_message, final_randomness) = self.prove_rest(
+            layout,
+            Reduction::InnerProduct,
+            &state.committed,
+            claim,
+            &mut fs,
+            seed,
+        )?;
         Ok((
             value,
             Proof {
                 partials: Vec::new(),
+                batch_rounds: Vec::new(),
+                batch_eval: None,
                 ring_value,
                 iterations,
                 final_message,
@@ -688,19 +797,19 @@ impl<const K: usize> HachiPcs<K> {
         ))
     }
 
-    /// Runs the iterations' verifiers and the final step; `partials` as for
+    /// Runs the iterations' verifiers and the final step; `reduction` as for
     /// [`HachiPcs::prove_rest`].
     fn verify_rest(
         &self,
         layout: Layout,
-        partials: usize,
+        reduction: Reduction,
         commitment: &[Poly],
         claim: Claim,
         proof: &Proof<K>,
         fs: &mut Fs,
     ) -> core::result::Result<(), VerifyError> {
         let ctx = &self.ctx;
-        let schedule = self.schedule(layout, partials)?;
+        let schedule = self.schedule(layout, reduction)?;
         if proof.iterations.len() != schedule.iterations.len() {
             return Err(VerifyError::Malformed(format!(
                 "{} iterations, {} expected",
@@ -803,29 +912,72 @@ impl<const K: usize> HachiPcs<K> {
         check_exts(ctx, "point", point, vars)?;
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
         check_exts(ctx, "partial evaluations", &proof.partials, K)?;
+        // The layout exists only for vars >= alpha > kappa.
+        let layout = self.multilinear_layout(vars)?;
+        let x = &point[ctx.kappa()..];
+        if proof.batch_rounds.len() != x.len() {
+            return Err(VerifyError::Malformed(format!(
+                "{} rounds of the batching sumcheck, {} expected",
+                proof.batch_rounds.len(),
+                x.len()
+            )));
+        }
+        for round in &proof.batch_rounds {
+            check_exts(ctx, "batching sumcheck", round, 3)?;
+        }
+        let Some(at_r) = &proof.batch_eval else {
+            return Err(VerifyError::Malformed(
+                "the batching sumcheck's final value is missing".into(),
+            ));
+        };
+        check_exts(
+            ctx,
+            "batching sumcheck's final value",
+            core::slice::from_ref(at_r),
+            1,
+        )?;
         check_polys(
             ctx,
             "ring value",
             core::slice::from_ref(&proof.ring_value),
             1,
         )?;
-        let layout = self.multilinear_layout(vars)?;
-        let (claim, from_partials, traced) =
-            self.multilinear_claim(&layout, point, &proof.partials, &proof.ring_value)?;
-        if from_partials != *value {
+        if self.value_of_partials(point, &proof.partials)? != *value {
             return Err(VerifyError::Check(
                 "the partial evaluations of the input".into(),
             ));
         }
-        if !traced {
+        let mut fs = self.statement(context, 1, vars, &commitment.u, point, value);
+        fs.exts(LABEL_PARTIALS, &proof.partials);
+        let r = partials::verify(
+            ctx.field(),
+            x,
+            &proof.partials,
+            &proof.batch_rounds,
+            at_r,
+            &partials::INPUT_LABELS,
+            &mut fs,
+        )?;
+        let (b, a, v) = self.ring_weights(&layout, &r)?;
+        if self.traced(&proof.ring_value, &v)? != *at_r {
             return Err(VerifyError::Check(
                 "the trace of the input reduction".into(),
             ));
         }
-        let mut fs = self.statement(context, 1, vars, &commitment.u, point, value);
-        fs.exts(LABEL_PARTIALS, &proof.partials);
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
-        self.verify_rest(layout, K, &commitment.u, claim, proof, &mut fs)
+        let claim = Claim {
+            b,
+            a,
+            target: proof.ring_value.clone(),
+        };
+        self.verify_rest(
+            layout,
+            self.multilinear_reduction(vars),
+            &commitment.u,
+            claim,
+            proof,
+            &mut fs,
+        )
     }
 
     /// Verifies an inner-product opening: $\langle \mathbf s, \mathbf e \rangle = $ `value` for
@@ -846,9 +998,12 @@ impl<const K: usize> HachiPcs<K> {
         self.check_commitment(commitment)?;
         check_exts(ctx, "weights", weights, len)?;
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
-        if !proof.partials.is_empty() {
+        if !proof.partials.is_empty()
+            || !proof.batch_rounds.is_empty()
+            || proof.batch_eval.is_some()
+        {
             return Err(VerifyError::Malformed(
-                "an inner product has no partial evaluations".into(),
+                "an inner product has no partial evaluations and no batching sumcheck".into(),
             ));
         }
         check_polys(
@@ -869,7 +1024,14 @@ impl<const K: usize> HachiPcs<K> {
             a: self.vector_weights(&layout, weights)?,
             target: proof.ring_value.clone(),
         };
-        self.verify_rest(layout, 0, &commitment.u, claim, proof, &mut fs)
+        self.verify_rest(
+            layout,
+            Reduction::InnerProduct,
+            &commitment.u,
+            claim,
+            proof,
+            &mut fs,
+        )
     }
 }
 
@@ -1071,6 +1233,7 @@ impl<const K: usize> HachiPcs<K> {
         let mut out = vec![
             VERSION,
             proof.partials.len() as u64,
+            proof.batch_rounds.len() as u64,
             proof.iterations.len() as u64,
         ];
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
@@ -1081,6 +1244,12 @@ impl<const K: usize> HachiPcs<K> {
         }
         let mut w = BitWriter::default();
         self.put_exts(&mut w, &proof.partials);
+        for round in &proof.batch_rounds {
+            self.put_exts(&mut w, round);
+        }
+        if let Some(at_r) = &proof.batch_eval {
+            self.put_exts(&mut w, core::slice::from_ref(at_r));
+        }
         self.put_polys(&mut w, core::slice::from_ref(&proof.ring_value));
         for it in &proof.iterations {
             self.put_polys(&mut w, &it.v);
@@ -1091,6 +1260,10 @@ impl<const K: usize> HachiPcs<K> {
             }
             self.put_exts(&mut w, core::slice::from_ref(&it.final_eval));
             self.put_exts(&mut w, &it.partials);
+            for round in &it.batch_rounds {
+                self.put_exts(&mut w, round);
+            }
+            self.put_exts(&mut w, core::slice::from_ref(&it.packed_eval));
             self.put_polys(&mut w, core::slice::from_ref(&it.next_target));
         }
         if proof.iterations.is_empty() {
@@ -1120,27 +1293,31 @@ impl<const K: usize> HachiPcs<K> {
         out
     }
 
-    /// The inverse of [`HachiPcs::proof_to_words`]. The counts of the header (iterations,
-    /// rounds, final ring elements, and with hiding the final randomness) are checked against
-    /// the schedule by the verifier.
+    /// The inverse of [`HachiPcs::proof_to_words`]. The counts of the header (batching rounds,
+    /// iterations, rounds, final ring elements, and with hiding the final randomness) are
+    /// checked by the verifier, against $\ell - \kappa$ and the schedule.
     ///
     /// # Errors
     /// [`Error::Shape`] for any input that [`HachiPcs::proof_to_words`] does not produce from a
     /// proof of this scheme's shape: another version, a number of partial evaluations other
-    /// than 0 and $K$, a length other than the one the header implies, a residue not below
-    /// $q$, a digit index outside the digit set, a randomness coefficient outside the support
-    /// of $\chi$, or non-zero padding.
+    /// than 0 and $K$, batching rounds without partial evaluations, a length other than the one
+    /// the header implies, a residue not below $q$, a digit index outside the digit set, a
+    /// randomness coefficient outside the support of $\chi$, or non-zero padding.
     pub fn proof_from_words(&self, words: &[u64]) -> Result<Proof<K>> {
         let shape = |what: &str| Error::Shape(what.into());
-        let [version, partials, count, rest @ ..] = words else {
+        let too_large = || shape("a count in the header is too large");
+        let [version, partials, batch_rounds, count, rest @ ..] = words else {
             return Err(shape("the encoding ends early"));
         };
         if *version != VERSION {
             return Err(shape("unknown proof version"));
         }
-        let partials = match *partials {
-            0 => 0,
-            p if p == K as u64 => K,
+        let reduction = match (*partials, *batch_rounds) {
+            (0, 0) => Reduction::InnerProduct,
+            (0, _) => return Err(shape("batching rounds without partial evaluations")),
+            (p, rounds) if p == K as u64 => Reduction::Multilinear {
+                rounds: usize::try_from(rounds).map_err(|_| too_large())?,
+            },
             _ => return Err(shape("a proof has 0 or K partial evaluations")),
         };
         // The header: k round counts and the final count.
@@ -1162,7 +1339,6 @@ impl<const K: usize> HachiPcs<K> {
                 (r, stream)
             }
         };
-        let too_large = || shape("a count in the header is too large");
         let round_counts = round_counts
             .iter()
             .map(|l| usize::try_from(*l).map_err(|_| too_large()))
@@ -1172,11 +1348,20 @@ impl<const K: usize> HachiPcs<K> {
         // The length the header implies, checked before anything is allocated.
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
+        let kappa = self.ctx.kappa();
         let fixed = (c.n_d + c.n_b) * d + K + K * K + d;
-        let mut residues = Some(K * partials + d);
+        let mut residues = reduction.residues(K, d);
         for l in &round_counts {
-            residues =
-                residues.and_then(|r| l.checked_mul(round)?.checked_add(fixed)?.checked_add(r));
+            // Per iteration: l sumcheck rounds + fixed, then l - kappa batching rounds (3K)
+            // and the packed evaluation (K). l < kappa is a malformed header.
+            residues = residues.and_then(|r| {
+                let batch = l.checked_sub(kappa)?;
+                l.checked_mul(round)?
+                    .checked_add(fixed)?
+                    .checked_add(batch.checked_mul(3 * K)?)?
+                    .checked_add(K)?
+                    .checked_add(r)
+            });
         }
         let entry_bits = if count == 0 {
             self.residue_bits()
@@ -1206,7 +1391,20 @@ impl<const K: usize> HachiPcs<K> {
             words: stream,
             bit: 0,
         };
-        let partials = self.take_exts(&mut r, partials)?;
+        let partials = self.take_exts(&mut r, reduction.partials(K))?;
+        let batch_rounds = (0..reduction.rounds())
+            .map(|_| {
+                Ok([
+                    self.take_ext(&mut r)?,
+                    self.take_ext(&mut r)?,
+                    self.take_ext(&mut r)?,
+                ])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let batch_eval = match reduction {
+            Reduction::Multilinear { .. } => Some(self.take_ext(&mut r)?),
+            Reduction::InnerProduct => None,
+        };
         let ring_value = self.take_poly(&mut r)?;
         let mut iterations = Vec::with_capacity(count);
         for l in round_counts {
@@ -1220,12 +1418,26 @@ impl<const K: usize> HachiPcs<K> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let final_eval = self.take_ext(&mut r)?;
+            let partials = self.take_exts(&mut r, K)?;
+            // The batching sumcheck: l - kappa rounds of 3 field elements, then the packed value.
+            let batch_rounds = (0..l - kappa)
+                .map(|_| {
+                    Ok([
+                        self.take_ext(&mut r)?,
+                        self.take_ext(&mut r)?,
+                        self.take_ext(&mut r)?,
+                    ])
+                })
+                .collect::<Result<Vec<_>>>()?;
             iterations.push(IterationProof {
                 v,
                 next_commitment,
                 rounds,
-                final_eval: self.take_ext(&mut r)?,
-                partials: self.take_exts(&mut r, K)?,
+                final_eval,
+                partials,
+                batch_rounds,
+                packed_eval: self.take_ext(&mut r)?,
                 next_target: self.take_poly(&mut r)?,
             });
         }
@@ -1262,6 +1474,8 @@ impl<const K: usize> HachiPcs<K> {
         r.finish()?;
         Ok(Proof {
             partials,
+            batch_rounds,
+            batch_eval,
             ring_value,
             iterations,
             final_message,
@@ -1272,7 +1486,295 @@ impl<const K: usize> HachiPcs<K> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BitReader, BitWriter};
+    use super::{
+        BitReader, BitWriter, Commitment, HachiPcs, LABEL_PARTIALS, LABEL_RING_VALUE, Proof, State,
+    };
+    use crate::error::VerifyError;
+    use crate::fs::Fs;
+    use crate::iteration::{Claim, basis, evaluate_claim};
+    use crate::mle::mle_eval;
+    use crate::params::HachiChoices;
+    use crate::partials::{self, RoundValues};
+    use hachi_co_math::Ext;
+
+    const K: usize = 4;
+    /// The modulus of Hachi-Co's toy-n1 preset (24 bits).
+    const Q: u64 = 8_388_637;
+    const VARS: usize = 11;
+    const CONTEXT: [u8; 32] = [9u8; 32];
+    const SEED: [u8; 32] = [3u8; 32];
+
+    /// An honest multilinear opening at the toy choices with a fixed number of iterations: a
+    /// polynomial in 11 variables, a point of $\mathbb F_{q^4}$, the value and the proof.
+    struct Opening {
+        pcs: HachiPcs<K>,
+        coeffs: Vec<u64>,
+        com: Commitment,
+        state: State<K>,
+        point: Vec<Ext<K>>,
+        value: Ext<K>,
+        proof: Proof<K>,
+    }
+
+    impl Opening {
+        fn new(iterations: usize) -> Self {
+            let choices = HachiChoices {
+                fixed_iterations: Some(iterations),
+                ..HachiChoices::toy(16)
+            };
+            let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+            let field = pcs.ctx().field();
+            let coeffs: Vec<u64> = (0..1u64 << VARS)
+                .map(|i| (i.wrapping_mul(2_654_435_761) + 12_345) % Q)
+                .collect();
+            let (com, state) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+            let point: Vec<Ext<K>> = (0..VARS as u64)
+                .map(|i| field.reduce(&Ext([7 * i + 1, 13 * i + 5, 17 + i, 19 + 3 * i])))
+                .collect();
+            let (value, proof) = pcs
+                .prove_multilinear(&state, &point, &CONTEXT, &SEED)
+                .unwrap();
+            pcs.verify_multilinear(&com, VARS, &point, &value, &proof, &CONTEXT)
+                .unwrap();
+            Self {
+                pcs,
+                coeffs,
+                com,
+                state,
+                point,
+                value,
+                proof,
+            }
+        }
+
+        /// The verifier's verdict on `proof` for `value`.
+        fn verify(&self, value: &Ext<K>, proof: &Proof<K>) -> Result<(), VerifyError> {
+            self.pcs
+                .verify_multilinear(&self.com, VARS, &self.point, value, proof, &CONTEXT)
+        }
+
+        /// $\mathbf x'$.
+        fn x(&self) -> &[Ext<K>] {
+            &self.point[self.pcs.ctx().kappa()..]
+        }
+
+        /// The monomial coefficients of $f'$.
+        fn packed(&self) -> Vec<Ext<K>> {
+            self.pcs.packed(VARS, &self.coeffs)
+        }
+
+        /// The transcript after the statement with `value` and the partial evaluations `sent`.
+        fn transcript(&self, value: &Ext<K>, sent: &[Ext<K>]) -> Fs {
+            let mut fs = self.pcs.statement(
+                &CONTEXT,
+                1,
+                VARS,
+                &self.state.committed.u,
+                &self.point,
+                value,
+            );
+            fs.exts(LABEL_PARTIALS, sent);
+            fs
+        }
+
+        /// The proof with the partial evaluations `sent` and the batching sumcheck `batch`
+        /// (rounds, point $\mathbf r$, final value), whose transcript `fs` absorbed them: $Y$
+        /// at $\mathbf r$ plus `shift` (embedded in $\mathcal R_q^H$), then the iterations and
+        /// the final step of the honest prover.
+        fn complete(
+            &self,
+            mut fs: Fs,
+            sent: &[Ext<K>],
+            batch: (Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>),
+            shift: &Ext<K>,
+        ) -> Proof<K> {
+            let (pcs, ctx) = (&self.pcs, self.pcs.ctx());
+            let committed = &self.state.committed;
+            let (batch_rounds, r, at_r) = batch;
+            let (b, a, _) = pcs.ring_weights(&committed.layout, &r).unwrap();
+            let y = evaluate_claim(ctx, &b, &a, &committed.message).unwrap();
+            let ring_value = ctx.ring.add(&y, &ctx.sub.embed(shift)).unwrap();
+            fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
+            let claim = Claim {
+                b,
+                a,
+                target: ring_value.clone(),
+            };
+            let (iterations, final_message, final_randomness) = pcs
+                .prove_rest(
+                    committed.layout,
+                    pcs.multilinear_reduction(VARS),
+                    committed,
+                    claim,
+                    &mut fs,
+                    &SEED,
+                )
+                .unwrap();
+            Proof {
+                partials: sent.to_vec(),
+                batch_rounds,
+                batch_eval: Some(at_r),
+                ring_value,
+                iterations,
+                final_message,
+                final_randomness,
+            }
+        }
+
+        /// The proof of a prover that claims `value` and sends the partial evaluations `sent`,
+        /// then runs the honest prover's steps: the batching sumcheck on the true tables (its
+        /// invariant checked against the true partial evaluations), $Y$ and the rest.
+        fn honest_after(&self, value: &Ext<K>, sent: &[Ext<K>]) -> Proof<K> {
+            let field = self.pcs.ctx().field();
+            let mut fs = self.transcript(value, sent);
+            let batch = partials::prove(
+                field,
+                &self.packed(),
+                self.x(),
+                &self.proof.partials,
+                &mut fs,
+            )
+            .unwrap();
+            self.complete(fs, sent, batch, &field.zero())
+        }
+
+        /// The partial evaluations moved by $\boldsymbol\delta$ with $\sum_i \delta_i Z_i = 0$
+        /// and $\sum_i \mathrm{mono}\_i \delta_i = 1$ ($\delta_2 = \delta_3 = 0$), and the
+        /// value they give, $f(\mathbf x) + 1$. They pass the paper's check: $\sum_i y_i Z_i$
+        /// is unchanged.
+        fn kernel_forgery(&self) -> (Vec<Ext<K>>, Ext<K>) {
+            let ctx = self.pcs.ctx();
+            let field = ctx.field();
+            let mono = ctx.sub.monomials(&self.point[..ctx.kappa()]).unwrap();
+            let ratio = field.mul(&basis::<K>(1), &field.inv(&basis::<K>(0)).unwrap());
+            let denom = field.sub(&mono[1], &field.mul(&mono[0], &ratio));
+            let d1 = field.inv(&denom).unwrap();
+            let d0 = field.neg(&field.mul(&d1, &ratio));
+            let mut moved = self.proof.partials.clone();
+            moved[0] = field.add(&moved[0], &d0);
+            moved[1] = field.add(&moved[1], &d1);
+            let packed = |ys: &[Ext<K>]| {
+                ys.iter().enumerate().fold(field.zero(), |acc, (i, y)| {
+                    field.add(&acc, &field.mul(y, &basis::<K>(i)))
+                })
+            };
+            assert_eq!(packed(&moved), packed(&self.proof.partials));
+            let forged = self.pcs.value_of_partials(&self.point, &moved).unwrap();
+            assert_eq!(forged, field.add(&self.value, &field.one()));
+            (moved, forged)
+        }
+    }
+
+    /// Asserts that `verdict` is the rejection by the check `check`.
+    fn rejected_by(verdict: &Result<(), VerifyError>, check: &str, what: &str) {
+        assert!(
+            matches!(verdict, Err(VerifyError::Check(m)) if m == check),
+            "{what}: {verdict:?}, expected the check \"{check}\""
+        );
+    }
+
+    #[test]
+    fn partials_moved_along_the_trace_kernel_are_rejected() {
+        // The forgery that version 2 accepted with 0, 1 and 2 iterations: partial evaluations
+        // moved along the kernel of the paper's check sum_i y_i Z_i = f'(x'), the value moved
+        // with them, and the rest of the proof made honestly. The batching sumcheck, run
+        // honestly from there, sums to the batched conjugates of the true partial evaluations,
+        // not of the moved ones: its first round is rejected.
+        for iterations in [0usize, 1, 2] {
+            let o = Opening::new(iterations);
+            assert_eq!(o.honest_after(&o.value, &o.proof.partials), o.proof);
+            let (moved, forged) = o.kernel_forgery();
+            let verdict = o.verify(&forged, &o.honest_after(&forged, &moved));
+            let what = format!("{iterations} iterations");
+            rejected_by(&verdict, "batching sumcheck, round 1", &what);
+        }
+    }
+
+    #[test]
+    fn a_single_partial_or_the_value_alone_moved_is_rejected() {
+        for iterations in [0usize, 1, 2] {
+            let o = Opening::new(iterations);
+            let ctx = o.pcs.ctx();
+            let field = ctx.field();
+            let mono = ctx.sub.monomials(&o.point[..ctx.kappa()]).unwrap();
+            for i in 0..K {
+                let what = format!("{iterations} iterations, partial evaluation {i}");
+                let mut moved = o.proof.partials.clone();
+                moved[i] = field.add(&moved[i], &field.one());
+                // With the value unchanged, the partial evaluations do not give it.
+                let proof = Proof {
+                    partials: moved.clone(),
+                    ..o.proof.clone()
+                };
+                let verdict = o.verify(&o.value, &proof);
+                rejected_by(&verdict, "the partial evaluations of the input", &what);
+                // With the value moved by mono_i, and the rest made honestly from there.
+                let value = field.add(&o.value, &mono[i]);
+                let verdict = o.verify(&value, &o.honest_after(&value, &moved));
+                rejected_by(&verdict, "batching sumcheck, round 1", &what);
+            }
+            // The value alone, with the honest proof and with a proof made for it.
+            let what = format!("{iterations} iterations, the value");
+            let value = field.add(&o.value, &field.one());
+            let verdict = o.verify(&value, &o.proof);
+            rejected_by(&verdict, "the partial evaluations of the input", &what);
+            let verdict = o.verify(&value, &o.honest_after(&value, &o.proof.partials));
+            rejected_by(&verdict, "the partial evaluations of the input", &what);
+        }
+    }
+
+    #[test]
+    fn partials_fitted_by_the_rounds_are_rejected() {
+        // From the kernel forgery, a prover that makes every batching round add up to its
+        // running claim and fits f'(r) to the last one passes the batching sumcheck
+        // (`partials::prove_fitted`), with a value that is not f'(r). With Y at r the trace
+        // check rejects; with the true f'(r) instead, the sumcheck's final check rejects; and
+        // without iterations, with Y moved so that its trace is the fitted value, the final
+        // witness does not satisfy the claim. (With iterations, that last case is a false claim
+        // for the iterations to refute.)
+        for iterations in [0usize, 1, 2] {
+            let what = format!("{iterations} iterations");
+            let o = Opening::new(iterations);
+            let field = o.pcs.ctx().field();
+            let (moved, forged) = o.kernel_forgery();
+            let fitted = |fs: &mut Fs| {
+                partials::prove_fitted(
+                    field,
+                    &o.packed(),
+                    o.x(),
+                    &moved,
+                    &partials::INPUT_LABELS,
+                    fs,
+                )
+            };
+            let mut fs = o.transcript(&forged, &moved);
+            let batch = fitted(&mut fs);
+            let table = partials::hypercube_values(field, &o.packed()).unwrap();
+            let true_at_r = mle_eval(field, &table, &batch.1);
+            assert_ne!(batch.2, true_at_r, "{what}");
+            let shift = field.sub(&batch.2, &true_at_r);
+            let proof = o.complete(fs, &moved, batch, &field.zero());
+            let verdict = o.verify(&forged, &proof);
+            rejected_by(&verdict, "the trace of the input reduction", &what);
+            let proof = Proof {
+                batch_eval: Some(true_at_r),
+                ..proof
+            };
+            let verdict = o.verify(&forged, &proof);
+            rejected_by(&verdict, "the batching sumcheck's final value", &what);
+            if iterations == 0 {
+                let mut fs = o.transcript(&forged, &moved);
+                let batch = fitted(&mut fs);
+                let proof = o.complete(fs, &moved, batch, &shift);
+                let verdict = o.verify(&forged, &proof);
+                rejected_by(
+                    &verdict,
+                    "the final witness does not satisfy the claim",
+                    &what,
+                );
+            }
+        }
+    }
 
     /// The low `width` bits.
     fn low(value: u64, width: usize) -> u64 {

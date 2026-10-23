@@ -92,16 +92,19 @@ fn support(noise: Noise, b: u64) -> (i64, i64) {
 }
 
 /// The words of a proof's encoding, recomputed from its parts (module documentation of
-/// `hachi::pcs`, "Encodings"): $5 + k$ header words with hiding, then the packed fields.
+/// `hachi::pcs`, "Encodings"): $6 + k$ header words with hiding, then the packed fields.
 fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise) -> usize {
     let (c, d) = (&pcs.ctx().choices, pcs.ctx().d());
     let bits_of = |x: u64| (u64::BITS - x.leading_zeros()) as usize;
     let residue = bits_of(pcs.ctx().q - 1);
     let digit = bits_of(c.b - 1);
     let mut residues = K * proof.partials.len() + d;
+    residues += 3 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
         residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * K + d;
+        // The per-iteration batching sumcheck: its rounds (3K each) and the packed value (K).
+        residues += it.batch_rounds.len() * 3 * K + K;
     }
     let entry = if proof.iterations.is_empty() {
         residue
@@ -112,7 +115,7 @@ fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise) -> usize {
     let bits = residues * residue
         + proof.final_message.len() * d * entry
         + proof.final_randomness.len() * d * bits_of((hi - lo) as u64);
-    5 + proof.iterations.len() + bits.div_ceil(64)
+    6 + proof.iterations.len() + bits.div_ceil(64)
 }
 
 /// The checks of an honest proof's final randomness: its length and its support.
@@ -415,14 +418,19 @@ fn malformed_randomness_is_rejected() {
         let mut long = proof.clone();
         long.final_randomness.push(long.final_randomness[0].clone());
         assert!(matches!(verify(&long), Err(VerifyError::Malformed(_))));
-        // A header count R off by one is a length mismatch for the decoder.
+        // A header count R off by one is rejected: by the decoder if the length changes or a
+        // ring element is left in the padding, else by the verifier. The digits' ring elements
+        // take 32 bits, so one more of zero fields can fit in the last word's padding.
         let words = pcs.proof_to_words(&proof);
-        let header_r = 5 + proof.iterations.len() - 1;
+        let header_r = 6 + proof.iterations.len() - 1;
         assert_eq!(words[header_r], proof.final_randomness.len() as u64);
         for delta in [1u64, u64::MAX] {
             let mut w = words.clone();
             w[header_r] = w[header_r].wrapping_add(delta);
-            assert!(pcs.proof_from_words(&w).is_err(), "{noise:?}: R off by one");
+            assert!(
+                !pcs.proof_from_words(&w).is_ok_and(|p| verify(&p).is_ok()),
+                "{noise:?}: R off by one"
+            );
         }
         // Other randomness inside the support does not open the commitment.
         let mut other = proof.clone();
@@ -470,7 +478,7 @@ fn whatever_decodes_reencodes_to_the_same_words_with_hiding() {
                 1 => w[i] ^= (1 << (next() % 64)) | (1 << (next() % 64)),
                 2 => w[i] = next(),
                 _ => {
-                    let j = (next() % 6) as usize;
+                    let j = (next() % 7) as usize;
                     w[j] = if next().is_multiple_of(2) {
                         w[j].wrapping_add(1)
                     } else {
@@ -614,7 +622,9 @@ fn hiding_outputs_are_pinned() {
     // Regression values computed by this implementation (not independent known answers): the
     // SHA-256 of the commitment's and the proof's words at fixed inputs and seeds, for a
     // multilinear opening (Gaussian, one iteration) and an inner product (digits, nu = 2, one
-    // iteration). Pinned on 2026-10-21 with the randomized commitments.
+    // iteration). Pinned on 2026-10-21 with the randomized commitments; updated on 2026-10-23
+    // for version 3, the input and per-iteration batching sumchecks (the commitments differ
+    // only in their version word; both opened proofs carry one iteration).
     let ml = HachiPcs::<K>::new(Q, hiding(1, GAUSS8, Some(1))).unwrap();
     let vars = 8;
     let (com, state) = ml
@@ -647,10 +657,10 @@ fn hiding_outputs_are_pinned() {
         sha256_hex(&ip.proof_to_words(&vproof)),
     ];
     let pinned = [
-        "5f389978c64d4b4525911c64d818cfd26338d21e995df0f69366d8230e7e467c",
-        "bee768ec34fc590df0dfe51d7324aa4057605bfe264244f47562d7ec0ea12665",
-        "87288946ab5c3f3976259dc824b914d4822e806ea9b3b7d6fc24771e300b9c43",
-        "fdeb6fb8834ad311da4d3a2f954bb1bab9fa034785b7c6c16aef290418cb1dec",
+        "add7900e6a5568ddcb3aff60425f21b5cf07f9be785f36b5515d7f64924e09c0",
+        "90fed68d9e5909700417a9b5a06e1d5cfc2f60bb6d7d319b6803564cb31fc932",
+        "68e24942df1f73be14bc4399c88f31841ca7df126d843a8b59e26052ea01824d",
+        "0b169644c4549d2d2e3f1111a7039bac27e5e69602cfb5ca61af57bec5fda6cc",
     ];
     for (i, (g, p)) in got.iter().zip(pinned).enumerate() {
         assert_eq!(g, p, "output {i}");

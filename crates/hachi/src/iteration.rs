@@ -22,26 +22,36 @@
 //!
 //! **Reduction to the next claim** (Section 4.5, with $\kappa = \log_2 K$). Write a table index as
 //! $J \Vert i$, $i$ the last $\kappa$ bits, and $\mathbf a = (\mathbf a_0, \mathbf a_1)$
-//! accordingly.
+//! accordingly. The packed next witness is $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i \in
+//! \mathbb F_{q^K}$, with $Z_i$ the basis of Hachi's Eq. (7) (coordinates of `Ext`); $d/K$
+//! consecutive $\hat w_J$ go into one ring element by $\psi$, and these form the next message
+//! chunks (`pack`). In hypercube form $\hat w$ is `packed_hypercube`.
 //! 1. The prover sends the $K$ partial evaluations $y_i = \sum_J \tilde w_{J \Vert i}
 //!    \widetilde{eq}(J, \mathbf a_0)$; the verifier checks $y' = \sum_i \widetilde{eq}(i, \mathbf
-//!    a_1) y_i$.
-//! 2. Packing: $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i \in \mathbb F_{q^K}$, with $Z_i$ the
-//!    basis of Hachi's Eq. (7) (coordinates of `Ext`). Then $d/K$ consecutive $\hat w_J$ go into
-//!    one ring element by $\psi$, and these form the next message chunks.
-//! 3. Split $\mathbf a_0 = (\mathbf a_r, \mathbf a_m, \mathbf a_e)$ along (chunk, element,
+//!    a_1) y_i$ (`combined_value`, Eq. (24)).
+//! 2. A batching sumcheck over the $L - \kappa$ variables of $\hat w$ ([`crate::partials`],
+//!    `reduce_prove`) binds the $y_i$ to the committed next witness: it proves
+//!    $\hat w(\varphi^{-t}(\mathbf a_0)) = \sum_i Z_i \varphi^{-t}(y_i)$ for $t = 0, \dots, K-1$,
+//!    and leaves $\hat w(\mathbf r) =$ `packed_eval` at its point $\mathbf r$.
+//!    **This deviates from Section 4.5**, which proves only $(K/d)\,\mathrm{Tr}\_H(p') = \sum_i
+//!    y_i Z_i$ (step 4 below at $\mathbf a_0$). That single $\mathbb F_{q^K}$ equation does not
+//!    determine the $y_i$: a prover could shift them along its kernel and, with the l-trick on
+//!    the last sumcheck round, move $y'$ with them (`crate::partials` and the reduction tests).
+//!    The batching binds every $y_i$ instead (the Moore matrix $[\varphi^t(Z_i)]$ is invertible).
+//! 3. Split $\mathbf r = (\mathbf a_r, \mathbf a_m, \mathbf a_e)$ along (chunk, element,
 //!    position in $\psi$). Then $b'_i = \widetilde{eq}(i, \mathbf a_r)$ and $a'_j =
-//!    \widetilde{eq}(j, \mathbf a_m) \cdot \sigma_{-1}(\psi(\widetilde{eq}(\cdot, \mathbf a_e)))$.
+//!    \widetilde{eq}(j, \mathbf a_m) \cdot \sigma_{-1}(\psi(\widetilde{eq}(\cdot, \mathbf a_e)))$
+//!    (`next_weights`).
 //! 4. The prover sends $p' = \sum_i b'_i \mathbf a'^\top \mathbf f'_i$. By Theorem 2,
-//!    $(K/d)\,\mathrm{Tr}\_H(p') = \sum_J \hat w_J \widetilde{eq}(J, \mathbf a_0) = \sum_i y_i Z_i$,
-//!    which the verifier checks with `Subfield::e_map`. The next claim is
-//!    $(\mathbf b', \mathbf a', p')$.
+//!    $(K/d)\,\mathrm{Tr}\_H(p') = \hat w(\mathbf r) =$ `packed_eval`, which the verifier checks
+//!    with `Subfield::e_map`. The next claim is $(\mathbf b', \mathbf a', p')$ at $\mathbf r$.
 
 use crate::commit::{Committed, Ctx, commit};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::mle::{eq_eval, eq_table, mle_eval, powers};
 use crate::params::IterParams;
+use crate::partials::{self, RoundValues};
 use crate::relation::{Public, mstar, next_table, quotients};
 use crate::sumcheck::{self, RoundMessage, range_poly};
 use crate::{Error, Result};
@@ -123,7 +133,13 @@ pub struct IterationProof<const K: usize> {
     pub final_eval: Ext<K>,
     /// The $K$ partial evaluations $y_i$.
     pub partials: Vec<Ext<K>>,
-    /// $p'$, the next claim's value.
+    /// The rounds of the batching sumcheck that binds the partial evaluations to the packed
+    /// next witness ([`crate::partials`], the reduction's deviation from Section 4.5):
+    /// $L - \kappa$ of them.
+    pub batch_rounds: Vec<RoundValues<K>>,
+    /// $\hat w(\mathbf r)$, the packed next witness at the batching sumcheck's point.
+    pub packed_eval: Ext<K>,
+    /// $p'$, the next claim's value (at the batching sumcheck's point).
     pub next_target: Poly,
 }
 
@@ -139,24 +155,24 @@ fn log_rows(rows: usize) -> usize {
 }
 
 /// The basis element $Z_i$ of $\mathbb F_{q^K}$ (unit coordinate vector).
-fn basis<const K: usize>(i: usize) -> Ext<K> {
+pub(crate) fn basis<const K: usize>(i: usize) -> Ext<K> {
     let mut e = Ext([0u64; K]);
     e.0[i] = 1;
     e
 }
 
-/// The next claim's $\mathbf b'$ and $\mathbf a'$ from the point $\mathbf a$ (module
-/// documentation, step 3), for the next layout's $r'$ and $m'$.
+/// The next claim's $\mathbf b'$ and $\mathbf a'$ from the batching sumcheck's point
+/// $\mathbf r$ (module documentation, step 3), for the next layout's $r'$ and $m'$. $\mathbf r$
+/// has $L - \kappa$ coordinates, split into $(\mathbf a_r, \mathbf a_m, \mathbf a_e)$ along
+/// (chunk, element, position in $\psi$).
 fn next_weights<const K: usize>(
     ctx: &Ctx<K>,
     params: &IterParams,
-    point: &[Ext<K>],
+    r_point: &[Ext<K>],
 ) -> Result<(Vec<Poly>, Vec<Poly>)> {
     let field = ctx.field();
-    let kappa = ctx.kappa();
     let (r, m) = (params.next.r, params.next.m);
-    let a0 = &point[..point.len() - kappa];
-    let (a_r, rest) = a0.split_at(r);
+    let (a_r, rest) = r_point.split_at(r);
     let (a_m, a_e) = rest.split_at(m);
     let b: Vec<Poly> = eq_table(field, a_r)
         .iter()
@@ -220,17 +236,23 @@ fn partials<const K: usize>(ctx: &Ctx<K>, table: &[u64], a0: &[Ext<K>]) -> Vec<E
         .collect()
 }
 
-/// $\sum_i \widetilde{eq}(i, \mathbf a_1) y_i$ and $\sum_i y_i Z_i$.
-fn combine<const K: usize>(ctx: &Ctx<K>, ys: &[Ext<K>], a1: &[Ext<K>]) -> (Ext<K>, Ext<K>) {
+/// $\sum_i \widetilde{eq}(i, \mathbf a_1) y_i = \tilde w(\mathbf a_0, \mathbf a_1)$ (paper, Eq.
+/// (24)): the value the partial evaluations `ys` must reconstruct.
+fn combined_value<const K: usize>(ctx: &Ctx<K>, ys: &[Ext<K>], a1: &[Ext<K>]) -> Ext<K> {
     let field = ctx.field();
-    let eq = eq_table(field, a1);
-    let mut value = field.zero();
-    let mut packed = field.zero();
-    for (i, y) in ys.iter().enumerate() {
-        value = field.add(&value, &field.mul(&eq[i], y));
-        packed = field.add(&packed, &field.mul(y, &basis::<K>(i)));
-    }
-    (value, packed)
+    eq_table(field, a1)
+        .iter()
+        .zip(ys)
+        .fold(field.zero(), |acc, (e, y)| {
+            field.add(&acc, &field.mul(e, y))
+        })
+}
+
+/// The packed next witness $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i$ on the hypercube, from
+/// the table of residues: $Z_i$ puts $\tilde w_{J \Vert i}$ in coordinate $i$, so $\hat w_J$ is
+/// the $K$-tuple `table[JK .. JK + K]`.
+fn packed_hypercube<const K: usize>(table: &[u64]) -> Vec<Ext<K>> {
+    table.as_chunks::<K>().0.iter().map(|c| Ext(*c)).collect()
 }
 
 /// $(K/d)\,\mathrm{Tr}\_H(p)$ as a field element.
@@ -391,33 +413,86 @@ pub fn prove<const K: usize>(
     let (rounds, point, final_eval) =
         sumcheck::prove(field, &digits, w_tab, eq_table(field, tau0), g, fs)?;
     fs.exts(LABEL_FINAL, &[final_eval]);
-    // The reduction to the next claim.
-    let split = point.len() - ctx.kappa();
-    let ys = partials(ctx, &table, &point[..split]);
-    fs.exts(LABEL_PARTIALS, &ys);
-    let (b_next, a_next) = next_weights(ctx, params, &point)?;
-    let target = evaluate_claim(ctx, &b_next, &a_next, &next.message)?;
-    fs.polys(LABEL_TARGET, core::slice::from_ref(&target));
-    let (value, packed) = combine(ctx, &ys, &point[split..]);
-    if value != final_eval || scaled_trace(ctx, &target)? != packed {
-        return Err(Error::Protocol(
-            "the reduction to the next claim is inconsistent".into(),
-        ));
-    }
+    let (ys, batch_rounds, packed_eval, claim) =
+        reduce_prove(ctx, params, &table, &point, final_eval, &next, fs)?;
     let proof = IterationProof {
         v,
         next_commitment: next.u.clone(),
         rounds,
         final_eval,
         partials: ys,
-        next_target: target.clone(),
-    };
-    let claim = Claim {
-        b: b_next,
-        a: a_next,
-        target,
+        batch_rounds,
+        packed_eval,
+        next_target: claim.target.clone(),
     };
     Ok((proof, next, claim))
+}
+
+/// The transcript labels of the batching sumcheck that binds an iteration's partial evaluations
+/// to its committed next witness ([`crate::partials`]).
+const BATCH_LABELS: crate::partials::Labels = crate::partials::Labels {
+    gamma: b"hachi/iter/batch-gamma",
+    round_poly: b"hachi/iter/batch-h",
+    challenge: b"hachi/iter/batch-round",
+    eval: b"hachi/iter/batch-eval",
+};
+
+/// The reduction of the sumcheck's output to the next claim (paper, Section 4.5, with the
+/// deviation of [`crate::partials`]). The sumcheck leaves $\tilde w(\mathbf a) =$ `final_eval` at
+/// the point $\mathbf a =$ `point`; write $\mathbf a = (\mathbf a_0, \mathbf a_1)$ with
+/// $\mathbf a_1$ the last $\kappa$ coordinates. The prover sends the $K$ partial evaluations
+/// $y_i = \sum_J \tilde w_{J \Vert i} \widetilde{eq}(J, \mathbf a_0)$ (the verifier checks
+/// $\sum_i \widetilde{eq}(i, \mathbf a_1) y_i =$ `final_eval`); a batching sumcheck over the
+/// packed table $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i$ ([`crate::partials`], hypercube
+/// form) binds the $y_i$ to it and leaves $\hat w(\mathbf r) =$ `packed_eval` at its point
+/// $\mathbf r$. The next claim $(\mathbf b', \mathbf a', p')$ is built at $\mathbf r$, with
+/// $p' = \sum_i b'_i \mathbf a'^\top \mathbf f'_i$ and the trace check
+/// $(K/d)\,\mathrm{Tr}\_H(p') =$ `packed_eval`. Returns $(y_i)$, the batching rounds,
+/// `packed_eval` and the next claim.
+///
+/// # Errors
+/// [`Error::Protocol`] if an honest-prover invariant fails (`final_eval`, the batching's first
+/// round, or the trace); arithmetic errors.
+fn reduce_prove<const K: usize>(
+    ctx: &Ctx<K>,
+    params: &IterParams,
+    table: &[u64],
+    point: &[Ext<K>],
+    final_eval: Ext<K>,
+    next: &Committed,
+    fs: &mut Fs,
+) -> Result<(Vec<Ext<K>>, Vec<RoundValues<K>>, Ext<K>, Claim)> {
+    let field = ctx.field();
+    let split = point.len() - ctx.kappa();
+    let (a0, a1) = (&point[..split], &point[split..]);
+    let ys = partials(ctx, table, a0);
+    fs.exts(LABEL_PARTIALS, &ys);
+    if combined_value(ctx, &ys, a1) != final_eval {
+        return Err(Error::Protocol(
+            "the partial evaluations do not give the sumcheck's value".into(),
+        ));
+    }
+    let packed_table = packed_hypercube(table);
+    let (batch_rounds, r, packed_eval) =
+        partials::prove_table(field, &packed_table, a0, &ys, &BATCH_LABELS, fs)?;
+    let (b_next, a_next) = next_weights(ctx, params, &r)?;
+    let target = evaluate_claim(ctx, &b_next, &a_next, &next.message)?;
+    fs.polys(LABEL_TARGET, core::slice::from_ref(&target));
+    if scaled_trace(ctx, &target)? != packed_eval {
+        return Err(Error::Protocol(
+            "the trace of the next claim's value disagrees with the packed table".into(),
+        ));
+    }
+    Ok((
+        ys,
+        batch_rounds,
+        packed_eval,
+        Claim {
+            b: b_next,
+            a: a_next,
+            target,
+        },
+    ))
 }
 
 /// Checks that `polys` are `count` ring elements of degree $d$ with canonical coefficients.
@@ -470,9 +545,6 @@ pub fn verify<const K: usize>(
     proof: &IterationProof<K>,
     fs: &mut Fs,
 ) -> core::result::Result<Claim, VerifyError> {
-    let (ring, field, d) = (&ctx.ring, ctx.field(), ctx.d());
-    let layout = &params.layout;
-    let delta = params.delta;
     check_polys(ctx, "v", &proof.v, ctx.choices.n_d)?;
     check_polys(
         ctx,
@@ -493,11 +565,44 @@ pub fn verify<const K: usize>(
         1,
     )?;
     check_exts(ctx, "partial evaluations", &proof.partials, K)?;
+    check_exts(
+        ctx,
+        "packed evaluation",
+        core::slice::from_ref(&proof.packed_eval),
+        1,
+    )?;
     for (i, round) in proof.rounds.iter().enumerate() {
         let what = format!("round {}", i + 1);
         check_exts(ctx, &what, &round.h0, round.h0.len())?;
         check_exts(ctx, &what, &round.h_alpha, round.h_alpha.len())?;
     }
+    for (i, round) in proof.batch_rounds.iter().enumerate() {
+        check_exts(ctx, &format!("batching round {}", i + 1), round, 3)?;
+    }
+    let (point, y) = verify_sumcheck(ctx, index, params, commitment, claim, proof, fs)?;
+    reduce_verify(ctx, params, proof, &point, y, fs)
+}
+
+/// The range and linear sumchecks of one iteration (paper, Section 4.3): absorbs $\mathbf v$,
+/// draws the challenges, absorbs $\mathbf u'$, draws the coins, and runs the two sumchecks with
+/// common challenges. Returns their point $\mathbf a$ and $y = \tilde w(\mathbf a) =$
+/// `proof.final_eval`, which it checks against both final claims and then absorbs. Shared by
+/// [`verify`] and the reduction tests.
+///
+/// # Errors
+/// [`VerifyError::Check`] if a sumcheck's final value is wrong; arithmetic errors.
+fn verify_sumcheck<const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    commitment: &[Poly],
+    claim: &Claim,
+    proof: &IterationProof<K>,
+    fs: &mut Fs,
+) -> core::result::Result<(Vec<Ext<K>>, Ext<K>), VerifyError> {
+    let (ring, field, d) = (&ctx.ring, ctx.field(), ctx.d());
+    let layout = &params.layout;
+    let delta = params.delta;
     fs.polys(LABEL_V, &proof.v);
     let c: Vec<Poly> = fs
         .challenges(LABEL_C, layout.chunks(), d, ctx.choices.omega)?
@@ -546,10 +651,10 @@ pub fn verify<const K: usize>(
         sum,
         fs,
     )?;
-    let point = &reduced.point;
+    let point = reduced.point;
     let y = proof.final_eval;
     let expected0 = field.mul(
-        &eq_eval(field, tau0, point),
+        &eq_eval(field, tau0, &point),
         &range_poly(field, &digits, &y),
     );
     if reduced.claim0 != expected0 {
@@ -568,15 +673,44 @@ pub fn verify<const K: usize>(
         ));
     }
     fs.exts(LABEL_FINAL, &[y]);
-    fs.exts(LABEL_PARTIALS, &proof.partials);
+    Ok((point, y))
+}
+
+/// The verifier's reduction to the next claim (the mirror of [`reduce_prove`], paper Section
+/// 4.5 with the deviation of [`crate::partials`]): checks that the partial evaluations
+/// reconstruct $y =$ `final_eval`, runs the batching sumcheck's verifier to bind them to the
+/// packed next witness, and checks the next claim's trace against `proof.packed_eval` at the
+/// batching point.
+///
+/// # Errors
+/// [`VerifyError::Check`] if the partial evaluations, the batching sumcheck or the trace fail.
+fn reduce_verify<const K: usize>(
+    ctx: &Ctx<K>,
+    params: &IterParams,
+    proof: &IterationProof<K>,
+    point: &[Ext<K>],
+    y: Ext<K>,
+    fs: &mut Fs,
+) -> core::result::Result<Claim, VerifyError> {
+    let field = ctx.field();
     let split = point.len() - ctx.kappa();
-    let (value, packed) = combine(ctx, &proof.partials, &point[split..]);
-    if value != y {
+    let (a0, a1) = (&point[..split], &point[split..]);
+    fs.exts(LABEL_PARTIALS, &proof.partials);
+    if combined_value(ctx, &proof.partials, a1) != y {
         return Err(VerifyError::Check("the partial evaluations".into()));
     }
-    let (b_next, a_next) = next_weights(ctx, params, point)?;
+    let r = partials::verify(
+        field,
+        a0,
+        &proof.partials,
+        &proof.batch_rounds,
+        &proof.packed_eval,
+        &BATCH_LABELS,
+        fs,
+    )?;
+    let (b_next, a_next) = next_weights(ctx, params, &r)?;
     fs.polys(LABEL_TARGET, core::slice::from_ref(&proof.next_target));
-    if scaled_trace(ctx, &proof.next_target)? != packed {
+    if scaled_trace(ctx, &proof.next_target)? != proof.packed_eval {
         return Err(VerifyError::Check(
             "the trace of the next claim's value".into(),
         ));
@@ -586,4 +720,169 @@ pub fn verify<const K: usize>(
         a: a_next,
         target: proof.next_target.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::{Ctx, commit};
+    use crate::params::{HachiChoices, Layout, Schedule};
+    use hachi_co_sampling::ShakePrg;
+    use hachi_co_sampling::uniform::uniform_mod_q;
+
+    const K: usize = 4;
+    /// The modulus of Hachi-Co's toy-n1 preset (24 bits).
+    const Q: u64 = 8_388_637;
+    const CONTEXT: [u8; 32] = [3u8; 32];
+    const SEED: [u8; 32] = [1u8; 32];
+
+    /// `n` pseudorandom ring elements of degree `d`.
+    fn polys(tag: &str, n: usize, d: usize) -> Vec<Poly> {
+        uniform_mod_q(&mut ShakePrg::new(&[5u8; 32], tag.as_bytes(), 0), Q, n * d)
+            .unwrap()
+            .chunks_exact(d)
+            .map(|c| Poly(c.to_vec()))
+            .collect()
+    }
+
+    /// An honest one-iteration instance (no hiding): the context, the iteration's parameters, a
+    /// committed first witness and a valid claim on it.
+    fn honest_instance() -> (Ctx<K>, IterParams, Committed, Claim) {
+        let choices = HachiChoices {
+            fixed_iterations: Some(1),
+            ..HachiChoices::toy(16)
+        };
+        let ctx = Ctx::<K>::new(Q, choices.clone()).unwrap();
+        let d = ctx.d();
+        let layout = Layout {
+            r: 2,
+            m: 2,
+            decomposed: true,
+            beta_s: 2,
+        };
+        let params = Schedule::fixed(&choices, Q, layout, 1).unwrap().iterations[0];
+        let chunks = layout.chunks();
+        let message: Vec<Vec<Poly>> = (0..chunks)
+            .map(|i| polys(&format!("f{i}"), layout.chunk_len(), d))
+            .collect();
+        let r = commitment_randomness(&ctx, &layout, &SEED, b"test/r", 0).unwrap();
+        let witness = commit(&ctx, 0, layout, message.clone(), r).unwrap();
+        let a = polys("a", layout.chunk_len(), d);
+        let b = polys("b", chunks, d);
+        let target = evaluate_claim(&ctx, &b, &a, &message).unwrap();
+        (ctx, params, witness, Claim { b, a, target })
+    }
+
+    #[test]
+    fn honest_iterations_prove_and_verify() {
+        let (ctx, params, witness, claim) = honest_instance();
+        let mut fs_p = Fs::new(&CONTEXT);
+        let (proof, _next, _next_claim) =
+            prove(&ctx, 0, &params, &witness, &claim, &mut fs_p, &SEED).unwrap();
+        assert_eq!(proof.batch_rounds.len(), params.table_vars - ctx.kappa());
+        let mut fs_v = Fs::new(&CONTEXT);
+        verify(&ctx, 0, &params, &witness.u, &claim, &proof, &mut fs_v).unwrap();
+        assert_eq!(fs_p.digest(), fs_v.digest(), "the transcripts agree");
+    }
+
+    #[test]
+    fn partials_shifted_along_the_reduction_kernel_are_rejected() {
+        // The Section 4.5 forgery that the pre-fix reduction accepted: shift the K partial
+        // evaluations by a delta in the joint kernel of the two old checks -- sum_i delta_i Z_i
+        // = 0 (the packed value f''(a0) at the sumcheck point) and sum_i eq(i, a1) delta_i = 0
+        // (the value, Eq. (24)) -- keeping the honest batching rounds, packed value and next
+        // target. The old verifier checked only those two combinations and accepted. The fixed
+        // verifier runs the batching sumcheck on the shifted partials, whose conjugate values
+        // (hence the challenge gamma and the round-1 claim) differ, and rejects.
+        let (ctx, params, witness, claim) = honest_instance();
+        let field = ctx.field();
+        let (proof, _next, _next_claim) = prove(
+            &ctx,
+            0,
+            &params,
+            &witness,
+            &claim,
+            &mut Fs::new(&CONTEXT),
+            &SEED,
+        )
+        .unwrap();
+        // The sumcheck point, as the verifier derives it; a1 = its last kappa coordinates.
+        let (point, _y) = verify_sumcheck(
+            &ctx,
+            0,
+            &params,
+            &witness.u,
+            &claim,
+            &proof,
+            &mut Fs::new(&CONTEXT),
+        )
+        .unwrap();
+        let a1 = &point[point.len() - ctx.kappa()..];
+        let eq = eq_table(field, a1);
+        // delta = (d0, d1, 1, 0) solving sum_i delta_i Z_i = 0 and sum_i eq(i,a1) delta_i = 0.
+        let (e1, e2) = (basis::<K>(1), basis::<K>(2));
+        let det = field.sub(&eq[1], &field.mul(&eq[0], &e1));
+        assert!(
+            !field.is_zero(&det),
+            "degenerate point; choose other inputs"
+        );
+        let inv = field.inv(&det).unwrap();
+        let d1 = field.mul(&field.sub(&field.mul(&eq[0], &e2), &eq[2]), &inv);
+        let d0 = field.neg(&field.add(&field.mul(&d1, &e1), &e2));
+        let delta = [d0, d1, field.one(), field.zero()];
+        assert!(delta.iter().any(|x| !field.is_zero(x)), "delta is zero");
+        // The packed value f''(a0) = sum_i p_i Z_i.
+        let packed = |p: &[Ext<K>]| {
+            (0..K).fold(field.zero(), |acc, i| {
+                field.add(&acc, &field.mul(&p[i], &basis::<K>(i)))
+            })
+        };
+        let mut forged = proof.clone();
+        for (y, d) in forged.partials.iter_mut().zip(delta) {
+            *y = field.add(y, &d);
+        }
+        assert_ne!(forged.partials, proof.partials, "the shift is nontrivial");
+        // The old reduction's two checks are blind to the shift: the value Eq. (24) and the
+        // packed value f''(a0) are both unchanged.
+        assert_eq!(
+            combined_value(&ctx, &forged.partials, a1),
+            proof.final_eval,
+            "the value Eq. (24) is preserved"
+        );
+        assert_eq!(
+            packed(&forged.partials),
+            packed(&proof.partials),
+            "the packed value is preserved"
+        );
+        // The fixed verifier rejects: the batching sumcheck binds every partial evaluation.
+        let verdict = verify(
+            &ctx,
+            0,
+            &params,
+            &witness.u,
+            &claim,
+            &forged,
+            &mut Fs::new(&CONTEXT),
+        );
+        assert!(
+            matches!(&verdict, Err(VerifyError::Check(m)) if m == "batching sumcheck, round 1"),
+            "the shifted partials were accepted or rejected elsewhere: {verdict:?}"
+        );
+        // A shift of a single partial evaluation alone breaks the value check first.
+        let mut one = proof.clone();
+        one.partials[0] = field.add(&one.partials[0], &field.one());
+        let verdict = verify(
+            &ctx,
+            0,
+            &params,
+            &witness.u,
+            &claim,
+            &one,
+            &mut Fs::new(&CONTEXT),
+        );
+        assert!(
+            matches!(&verdict, Err(VerifyError::Check(m)) if m == "the partial evaluations"),
+            "a single shifted partial evaluation was not rejected: {verdict:?}"
+        );
+    }
 }

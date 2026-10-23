@@ -591,9 +591,12 @@ fn stream_bits(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     let rho = (u64::BITS - (pcs.ctx().q - 1).leading_zeros()) as usize;
     let digit = (u64::BITS - (c.b - 1).leading_zeros()) as usize;
     let mut residues = K * proof.partials.len() + d;
+    residues += 3 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
         residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * K + d;
+        // The per-iteration batching sumcheck: its rounds (3K each) and the packed value (K).
+        residues += it.batch_rounds.len() * 3 * K + K;
     }
     let entries = proof.final_message.len() * d;
     let entry = if proof.iterations.is_empty() {
@@ -633,7 +636,7 @@ fn malformed_encodings_are_rejected() {
         .expect("a case with padding");
     let words = pcs.proof_to_words(&proof);
     let com_words = pcs.commitment_to_words(&com);
-    let header = 4 + proof.iterations.len();
+    let header = 5 + proof.iterations.len();
     let bits = stream_bits(&pcs, &proof);
     assert_eq!(
         words.len(),
@@ -660,28 +663,39 @@ fn malformed_encodings_are_rejected() {
     assert!(proof_err(&[words.clone(), vec![0]].concat()).is_some());
     assert!(com_err(&[com_words.clone(), vec![0]].concat()).is_some());
     // The version.
-    for version in [0u64, 1, 3] {
+    for version in [0u64, 1, 2, 4] {
         assert!(proof_err(&edited(&words, 0, version)).is_some());
         assert!(com_err(&edited(&com_words, 0, version)).is_some());
     }
-    // The number of partial evaluations: 0 or K only, and K for this proof's length.
+    // The number of partial evaluations: 0 or K only, and K for this proof's length; 0 with
+    // batching rounds is refused.
     for partials in [0u64, 1, 3, 5, 8, u64::MAX] {
         assert!(
             proof_err(&edited(&words, 1, partials)).is_some(),
             "{partials}"
         );
     }
-    // The counts of the header (iterations, the rounds of the iteration, the final ring
-    // elements), including huge ones: errors, without allocating for them.
+    let err = proof_err(&edited(&words, 1, 0)).unwrap();
+    assert!(
+        err.contains("batching rounds without partial evaluations"),
+        "{err}"
+    );
+    // The counts of the header (batching rounds, iterations, the rounds of the iteration, the
+    // final ring elements), including huge ones: errors, without allocating for them.
+    assert_eq!(words[2], vars as u64 - 2, "l - kappa batching rounds");
     for (i, value) in [
         (2, words[2] + 1),
         (2, words[2] - 1),
+        (2, 0),
         (2, u64::MAX),
         (3, words[3] + 1),
         (3, words[3] - 1),
-        (3, 1 << 62),
+        (3, u64::MAX),
         (4, words[4] + 1),
-        (4, u64::MAX),
+        (4, words[4] - 1),
+        (4, 1 << 62),
+        (5, words[5] + 1),
+        (5, u64::MAX),
     ] {
         assert!(
             proof_err(&edited(&words, i, value)).is_some(),
@@ -770,7 +784,7 @@ fn whatever_decodes_reencodes_to_the_same_words() {
                 1 => w[i] ^= (1 << (rng.next() % 64)) | (1 << (rng.next() % 64)),
                 2 => w[i] = rng.next(),
                 _ => {
-                    let j = (rng.next() % 5) as usize;
+                    let j = (rng.next() % 6) as usize;
                     w[j] = if rng.next().is_multiple_of(2) {
                         w[j].wrapping_add(1)
                     } else {
@@ -807,31 +821,35 @@ fn outputs_are_pinned() {
     // opening and an inner product, with 0 and 1 iterations. A change of the transcript, the
     // expansion of the matrices, the encoding or the arithmetic changes them; it must then be
     // deliberate, and the values updated with it. Updated on 2026-10-21 for the packed
-    // encodings (version 2).
+    // encodings (version 2), and on 2026-10-23 for version 3, whose multilinear openings carry
+    // the input batching sumcheck and every iteration carries its own batching sumcheck: the
+    // commitments differ only in their version word, the iteration-free proofs in their version
+    // (header and statement) and the input batching, and the iterated proofs also in the
+    // per-iteration batching fields.
     let pinned: [(&str, usize, &str, &str); 4] = [
         (
             "multilinear",
             0,
-            "eb9031220da297512c61355e7ca29b39f952282ee3b236bb13826256da6dcc59",
-            "d142c668892b82588b22ac6d3e4382bae4489fa4495da3059338cbc12a8f456b",
+            "cd94318c21f0cab0b1ce588cf17cd19e912d3bf28e826d50466fe0acbe952e64",
+            "a60e5074d14a1e31e385c1d3a0dae1560ddb5151f508c379f3a61f04c2f7d84a",
         ),
         (
             "multilinear",
             1,
-            "eb9031220da297512c61355e7ca29b39f952282ee3b236bb13826256da6dcc59",
-            "0d83e0b5fe4eaab74a56a9f330026d9ddf4b45d9e0e2d48c4a17280e57969b55",
+            "cd94318c21f0cab0b1ce588cf17cd19e912d3bf28e826d50466fe0acbe952e64",
+            "2f28791d3baee0a0556459026af029f93f8d2f81568c1598af76806ca80c6501",
         ),
         (
             "vector",
             0,
-            "4216c22b622198addd24bdc176e21e3c43ac838801e0a1319178fc5f0b70d32a",
-            "c56109f5f239d36e64b1aec81d3014d2f696323dd9d3cf7f811d18b24dbeb17d",
+            "94222f9c05ab92984e006193c42b1e0d692e16664856256500405c4d8b7ace0b",
+            "ab952abf3e192b103884f9f18b3affdee0809922ca12673adba3ded5443c28b0",
         ),
         (
             "vector",
             1,
-            "4216c22b622198addd24bdc176e21e3c43ac838801e0a1319178fc5f0b70d32a",
-            "6a5da686fb462aee1276bf69c4437278bb16da90790ff114696a36bbf112cd4d",
+            "94222f9c05ab92984e006193c42b1e0d692e16664856256500405c4d8b7ace0b",
+            "2baf3d4ef7d8711d5e6efb4e6c3bbdeb4e17aa9adc9e84e147926a90ffef4c0b",
         ),
     ];
     let mut failures = Vec::new();
