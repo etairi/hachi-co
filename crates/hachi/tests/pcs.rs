@@ -1,6 +1,7 @@
-//! Completeness and first soundness checks of [`HachiPcs`]: multilinear openings and inner
-//! products at toy parameters, with and without iterations, against direct evaluations; false
-//! values and altered proofs are rejected. The automatic schedule runs the number of iterations
+//! Completeness and first soundness checks of [`HachiPcs`]: multilinear openings over
+//! $\mathbb Z_q$ and over $\mathbb F_{q^K}$ and inner products at toy parameters, with and
+//! without iterations, against direct evaluations; false values and altered proofs are rejected.
+//! The automatic schedule runs the number of iterations
 //! whose proof is smallest. The packed encodings round-trip and have the sizes of the formulas
 //! at moduli of 24, 34 and 63 bits and bases 4, 6 and 16; whatever decodes re-encodes to the same
 //! words, and malformed encodings are rejected. Pinned outputs guard against unintended changes.
@@ -61,6 +62,17 @@ fn evaluate(field: &Fqk<K>, coeffs: &[u64], x: &[Ext<K>]) -> Ext<K> {
     }
     coeffs.iter().zip(&mono).fold(field.zero(), |acc, (c, m)| {
         field.add(&acc, &field.scale(m, *c))
+    })
+}
+
+/// $f(\mathbf x)$ for coefficients over the field, $i_1$ the most significant bit.
+fn evaluate_ext(field: &Fqk<K>, coeffs: &[Ext<K>], x: &[Ext<K>]) -> Ext<K> {
+    let mut mono = vec![field.one()];
+    for xj in x {
+        mono = mono.iter().flat_map(|m| [*m, field.mul(m, xj)]).collect();
+    }
+    coeffs.iter().zip(&mono).fold(field.zero(), |acc, (c, m)| {
+        field.add(&acc, &field.mul(m, c))
     })
 }
 
@@ -138,6 +150,102 @@ fn multilinear_openings_verify_with_and_without_iterations() {
         assert_eq!(com_words.len(), pcs.commitment_words());
         assert_eq!(pcs.commitment_from_words(&com_words).unwrap(), com);
     }
+}
+
+#[test]
+fn field_multilinear_openings_verify_with_and_without_iterations() {
+    let field = Fqk::<K>::new(Q).unwrap();
+    let cases = [(2usize, 0), (6, 0), (4, 1), (6, 1), (8, 2), (10, 1)];
+    for ((vars, iterations), hiding) in cases.into_iter().zip([false, true].into_iter().cycle()) {
+        let choices = HachiChoices {
+            fixed_iterations: Some(iterations),
+            ..if hiding {
+                HachiChoices::toy_hiding(16)
+            } else {
+                HachiChoices::toy(16)
+            }
+        };
+        let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+        let coeffs = exts("f ext", vars as u64, 1 << vars);
+        let point = exts("x", vars as u64, vars);
+        let (com, state) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let context = [vars as u8; 32];
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!(value, evaluate_ext(&field, &coeffs, &point), "vars {vars}");
+        let schedule = pcs.multilinear_ext_schedule(vars).unwrap();
+        assert_eq!(proof.iterations.len(), schedule.iterations.len());
+        assert_eq!(proof.iterations.len(), iterations);
+        pcs.verify_multilinear_ext(&com, vars, &point, &value, &proof, &context)
+            .unwrap_or_else(|e| panic!("vars {vars}: {e}"));
+        // A false value, another point, and another context once Fiat-Shamir is used.
+        let wrong = field.add(&value, &field.one());
+        assert!(
+            pcs.verify_multilinear_ext(&com, vars, &point, &wrong, &proof, &context)
+                .is_err()
+        );
+        let mut other = point.clone();
+        other[0] = field.add(&other[0], &field.one());
+        assert!(
+            pcs.verify_multilinear_ext(&com, vars, &other, &value, &proof, &context)
+                .is_err()
+        );
+        if iterations > 0 {
+            assert!(
+                pcs.verify_multilinear_ext(&com, vars, &point, &value, &proof, &[99u8; 32])
+                    .is_err()
+            );
+        }
+        // The proof is about a polynomial over the field, in `vars` variables: the verifiers of
+        // the other kinds and of other sizes refuse it.
+        assert!(
+            pcs.verify_multilinear(&com, vars, &point, &value, &proof, &context)
+                .is_err()
+        );
+        assert!(
+            pcs.verify_multilinear_ext(&com, vars + 1, &point, &value, &proof, &context)
+                .is_err()
+        );
+        // The encodings round-trip, with the sizes of the formulas.
+        let words = pcs.proof_to_words(&proof);
+        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof);
+        assert_eq!(
+            words.len(),
+            pcs.multilinear_ext_proof_words(vars).unwrap(),
+            "vars {vars}"
+        );
+    }
+}
+
+/// A polynomial over $\mathbb Z_q$ except for one coefficient, as with the pad of Hachi-Co: the
+/// value of the opening is in $\mathbb F_{q^K}$, and it moves with that one coefficient.
+#[test]
+fn one_field_coefficient_is_opened_like_the_rest() {
+    let field = Fqk::<K>::new(Q).unwrap();
+    let vars = 6;
+    let pcs = HachiPcs::<K>::new(Q, choices(1)).unwrap();
+    let mut coeffs: Vec<Ext<K>> = residues("f", 11, 1 << vars)
+        .iter()
+        .map(|c| field.from_base(*c))
+        .collect();
+    let point = exts("x", 11, vars);
+    let context = [7u8; 32];
+    let at_point = |coeffs: &[Ext<K>]| {
+        let (com, state) = pcs.commit_multilinear_ext(coeffs, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        pcs.verify_multilinear_ext(&com, vars, &point, &value, &proof, &context)
+            .unwrap();
+        value
+    };
+    let plain = at_point(&coeffs);
+    assert_eq!(plain, evaluate_ext(&field, &coeffs, &point));
+    coeffs[9] = exts("pad", 11, 1)[0];
+    let padded = at_point(&coeffs);
+    assert_eq!(padded, evaluate_ext(&field, &coeffs, &point));
+    assert_ne!(padded, plain);
 }
 
 #[test]
@@ -224,6 +332,39 @@ fn every_altered_word_of_a_proof_is_rejected() {
             }
         }
         eprintln!("{iterations} iterations: {tried} altered proofs rejected");
+    }
+}
+
+#[test]
+fn every_altered_word_of_a_field_opening_is_rejected() {
+    for iterations in [0usize, 2] {
+        let pcs = HachiPcs::<K>::new(Q, choices(iterations)).unwrap();
+        let vars = 6;
+        let coeffs = exts("f ext", 78, 1 << vars);
+        let point = exts("x", 78, vars);
+        let (com, state) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let context = [1u8; 32];
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!(proof.iterations.len(), iterations);
+        let words = pcs.proof_to_words(&proof);
+        let step = (words.len() / 150).max(1);
+        for i in (0..words.len()).step_by(step) {
+            for altered_word in [words[i] ^ (1 << (i % 64)), words[i].wrapping_add(1)] {
+                let mut altered = words.clone();
+                altered[i] = altered_word;
+                let ok = pcs.proof_from_words(&altered).is_ok_and(|p| {
+                    pcs.verify_multilinear_ext(&com, vars, &point, &value, &p, &context)
+                        .is_ok()
+                });
+                assert!(
+                    !ok,
+                    "{iterations} iterations: word {i} of {} altered and still accepted",
+                    words.len()
+                );
+            }
+        }
     }
 }
 
@@ -345,6 +486,21 @@ fn a_proof_about_another_witness_is_rejected() {
             pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
                 .is_err(),
             "{iterations} iterations: a proof about f' passed for f"
+        );
+        let vars_ext = 6;
+        let coeffs = exts("f ext", 5, 1 << vars_ext);
+        let mut other = coeffs.clone();
+        other[17].0[2] = (other[17].0[2] + 1) % Q;
+        let point_ext = exts("x", 5, vars_ext);
+        let (com, _) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let (_, cheat) = pcs.commit_multilinear_ext(&other, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&cheat, &point_ext, &[0u8; 32], &OPEN_SEED)
+            .unwrap();
+        assert!(
+            pcs.verify_multilinear_ext(&com, vars_ext, &point_ext, &value, &proof, &[0u8; 32])
+                .is_err(),
+            "{iterations} iterations: a proof about another polynomial passed"
         );
         let len = 21;
         let values = exts("s", 6, len);

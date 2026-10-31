@@ -1,6 +1,6 @@
 //! The polynomial commitment scheme: [`HachiPcs`].
 //!
-//! Two kinds of committed objects, both with evaluation points in $\mathbb F_{q^K}$:
+//! Three kinds of committed objects, all with evaluation points in $\mathbb F_{q^K}$:
 //! - **Multilinear polynomials** $f \in \mathbb Z_q^{\le 1}\[X_1, \dots, X_\ell\]$ given by
 //!   their $2^\ell$ monomial coefficients ([`HachiPcs::commit_multilinear`]); coefficient $i$
 //!   multiplies $X_1^{i_1} \cdots X_\ell^{i_\ell}$ with $\mathrm{bit}(i) = (i_1, \dots, i_\ell)$
@@ -23,6 +23,11 @@
 //!   $\langle \mathbf s, \mathbf e \rangle = (K/d)\,\mathrm{Tr}\_H(\sum_t \psi(\mathbf s_t)
 //!   \sigma_{-1}(\psi(\mathbf e_t)))$ over blocks of $d/K$. The prover sends that sum $Y$; the
 //!   weights are not a tensor, so the claim has a single chunk ($r = 0$).
+//! - **Multilinear polynomials over the field** $f \in \mathbb F_{q^K}^{\le 1}\[X_1, \dots,
+//!   X_\ell\]$ ([`HachiPcs::commit_multilinear_ext`]), with the same order of coefficients. The
+//!   commitment holds $\psi$ of $d/K$ consecutive coefficients. An opening is the paper's Section
+//!   3.1 directly: no partial evaluations and no batching sumcheck, only $Y$. Such a polynomial
+//!   has $K$ times the residues of one over $\mathbb Z_q$ in as many variables.
 //!
 //! Then the iterations of the [`Schedule`] ([`crate::iteration`]) and the final step, which
 //! sends the last witness in the clear (paper, Section 4.4): the verifier recomputes its
@@ -30,7 +35,7 @@
 //!
 //! **Hiding.** With [`HachiChoices::hiding`] every commitment is randomized
 //! ([`Hiding`](crate::params::Hiding), `docs/hachi-hiding.md` §6; the draft's item (i),
-//! 4_preliminaries.tex:334).
+//! 4_preliminaries.tex:362).
 //! - Under MLWE the inner commitments $\mathbf t_i$ are pseudorandom, so $\mathbf u$ is
 //!   indistinguishable from the commitment of uniform $\mathbf t_i$, which does not depend on
 //!   the committed object: the commitment hides it. This holds at an MLWE rank $\nu$ of real
@@ -111,6 +116,7 @@ pub struct Commitment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Input<const K: usize> {
     Multilinear { vars: usize, coeffs: Vec<u64> },
+    MultilinearExt { vars: usize },
     Vector { values: Vec<Ext<K>> },
 }
 
@@ -153,8 +159,8 @@ enum Reduction {
         /// The rounds, $\ell - \kappa$.
         rounds: usize,
     },
-    /// An inner product: none of these.
-    InnerProduct,
+    /// An inner product, or a polynomial over $\mathbb F_{q^K}$: none of these.
+    Direct,
 }
 
 impl Reduction {
@@ -162,7 +168,7 @@ impl Reduction {
     fn partials(self, k: usize) -> usize {
         match self {
             Self::Multilinear { .. } => k,
-            Self::InnerProduct => 0,
+            Self::Direct => 0,
         }
     }
 
@@ -170,16 +176,16 @@ impl Reduction {
     fn rounds(self) -> usize {
         match self {
             Self::Multilinear { rounds } => rounds,
-            Self::InnerProduct => 0,
+            Self::Direct => 0,
         }
     }
 
     /// The residues ahead of the iterations, $Y$ included: $K^2 + 3K(\ell - \kappa) + K + d$
-    /// for a multilinear opening, $d$ for an inner product; `None` on overflow.
+    /// for a multilinear opening, $d$ otherwise; `None` on overflow.
     fn residues(self, k: usize, d: usize) -> Option<usize> {
         match self {
             Self::Multilinear { rounds } => rounds.checked_mul(3 * k)?.checked_add(k * k + k + d),
-            Self::InnerProduct => Some(d),
+            Self::Direct => Some(d),
         }
     }
 }
@@ -276,7 +282,27 @@ impl<const K: usize> HachiPcs<K> {
     /// As [`HachiPcs::vector_layout`]; [`Error::Parameter`] if the fixed number of iterations
     /// cannot be parametrised.
     pub fn vector_schedule(&self, len: usize) -> Result<Schedule> {
-        self.schedule(self.vector_layout(len)?, Reduction::InnerProduct)
+        self.schedule(self.vector_layout(len)?, Reduction::Direct)
+    }
+
+    /// The layout of a multilinear polynomial over $\mathbb F_{q^K}$ in `vars` $\ge \alpha -
+    /// \kappa$ variables: $2^{\ell - \alpha + \kappa}$ ring elements (paper, Section 3.1),
+    /// decomposed, split as [`HachiPcs::multilinear_layout`] splits them.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] if `vars` $< \alpha - \kappa$.
+    pub fn multilinear_ext_layout(&self, vars: usize) -> Result<Layout> {
+        self.multilinear_layout(vars + self.ctx.kappa())
+    }
+
+    /// The schedule of an opening of a multilinear polynomial over $\mathbb F_{q^K}$ in `vars`
+    /// variables (module documentation, "Schedule").
+    ///
+    /// # Errors
+    /// As [`HachiPcs::multilinear_ext_layout`]; [`Error::Parameter`] if the fixed number of
+    /// iterations cannot be parametrised.
+    pub fn multilinear_ext_schedule(&self, vars: usize) -> Result<Schedule> {
+        self.schedule(self.multilinear_ext_layout(vars)?, Reduction::Direct)
     }
 
     /// The reduction of a multilinear opening in `vars` variables: $\ell - \kappa$ batching
@@ -353,7 +379,17 @@ impl<const K: usize> HachiPcs<K> {
     /// # Errors
     /// As [`HachiPcs::vector_schedule`].
     pub fn vector_proof_words(&self, len: usize) -> Result<usize> {
-        self.proof_words(&self.vector_schedule(len)?, Reduction::InnerProduct)
+        self.proof_words(&self.vector_schedule(len)?, Reduction::Direct)
+    }
+
+    /// The number of words of [`HachiPcs::proof_to_words`] for an opening of a multilinear
+    /// polynomial over $\mathbb F_{q^K}$ in `vars` variables. It depends only on `vars` and the
+    /// parameters.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::multilinear_ext_schedule`].
+    pub fn multilinear_ext_proof_words(&self, vars: usize) -> Result<usize> {
+        self.proof_words(&self.multilinear_ext_schedule(vars)?, Reduction::Direct)
     }
 
     /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and the reduction
@@ -461,6 +497,48 @@ impl<const K: usize> HachiPcs<K> {
             .chunks_exact(layout.chunk_len())
             .map(<[Poly]>::to_vec)
             .collect())
+    }
+
+    /// Commits to the multilinear polynomial over $\mathbb F_{q^K}$ with monomial coefficients
+    /// `coeffs` ($2^\ell$ field elements, $\ell \ge \alpha - \kappa$; module documentation for
+    /// the order), with randomness from the secret `seed` if the choices hide.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless the length is a power of two of at least $d/K$; arithmetic errors.
+    pub fn commit_multilinear_ext(
+        &self,
+        coeffs: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
+        let ctx = &self.ctx;
+        if !coeffs.len().is_power_of_two() || coeffs.len() < ctx.d_over_k() {
+            return Err(Error::Shape(format!(
+                "2^l coefficients with l >= alpha - kappa = {} are expected",
+                ctx.alpha() - ctx.kappa()
+            )));
+        }
+        let vars = coeffs.len().trailing_zeros() as usize;
+        let layout = self.multilinear_ext_layout(vars)?;
+        let coeffs: Vec<Ext<K>> = coeffs.iter().map(|c| ctx.field().reduce(c)).collect();
+        let elements = coeffs
+            .chunks_exact(ctx.d_over_k())
+            .map(|block| ctx.sub.psi(block))
+            .collect::<hachi_co_math::Result<Vec<_>>>()?;
+        let message: Vec<Vec<Poly>> = elements
+            .chunks_exact(layout.chunk_len())
+            .map(<[Poly]>::to_vec)
+            .collect();
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
+        let committed = commit(ctx, 0, layout, message, r)?;
+        Ok((
+            Commitment {
+                u: committed.u.clone(),
+            },
+            State {
+                input: Input::MultilinearExt { vars },
+                committed,
+            },
+        ))
     }
 
     /// Commits to the vector `values` ($N \ge 1$ field elements), with randomness from the
@@ -719,6 +797,69 @@ impl<const K: usize> HachiPcs<K> {
         ))
     }
 
+    /// Proves $f(\mathbf x)$ for a committed multilinear polynomial over $\mathbb F_{q^K}$;
+    /// returns the value and the proof. `context` and `seed` as for
+    /// [`HachiPcs::prove_multilinear`]. The paper's Section 3.1: the weights at $\mathbf x$ give
+    /// $Y$, and $f(\mathbf x) = E(Y)$.
+    ///
+    /// The transcript absorbs the statement with the value, $Y$, then the iterations.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for a point of the wrong length or a state of another kind; prover
+    /// errors.
+    pub fn prove_multilinear_ext(
+        &self,
+        state: &State<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Proof<K>)> {
+        let ctx = &self.ctx;
+        let field = ctx.field();
+        let Input::MultilinearExt { vars } = &state.input else {
+            return Err(Error::Shape(
+                "this state is not a polynomial over the field".into(),
+            ));
+        };
+        if point.len() != *vars {
+            return Err(Error::Shape(format!(
+                "a point of {vars} coordinates is expected"
+            )));
+        }
+        let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
+        let layout = state.committed.layout;
+        let (b, a, v) = self.ring_weights(&layout, &point)?;
+        let ring_value = evaluate_claim(ctx, &b, &a, &state.committed.message)?;
+        let value = self.traced(&ring_value, &v)?;
+        let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
+        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
+        let claim = Claim {
+            b,
+            a,
+            target: ring_value.clone(),
+        };
+        let (iterations, final_message, final_randomness) = self.prove_rest(
+            layout,
+            Reduction::Direct,
+            &state.committed,
+            claim,
+            &mut fs,
+            seed,
+        )?;
+        Ok((
+            value,
+            Proof {
+                partials: Vec::new(),
+                batch_rounds: Vec::new(),
+                batch_eval: None,
+                ring_value,
+                iterations,
+                final_message,
+                final_randomness,
+            },
+        ))
+    }
+
     /// Proves $\langle \mathbf s, \mathbf e \rangle$ for a committed vector $\mathbf s$ and
     /// public weights $\mathbf e$ of the same length; returns the value and the proof. `seed` as
     /// for [`HachiPcs::prove_multilinear`].
@@ -777,7 +918,7 @@ impl<const K: usize> HachiPcs<K> {
         };
         let (iterations, final_message, final_randomness) = self.prove_rest(
             layout,
-            Reduction::InnerProduct,
+            Reduction::Direct,
             &state.committed,
             claim,
             &mut fs,
@@ -980,6 +1121,68 @@ impl<const K: usize> HachiPcs<K> {
         )
     }
 
+    /// Verifies an opening of a multilinear polynomial over $\mathbb F_{q^K}$: $f(\mathbf x) = $
+    /// `value` for the polynomial in `vars` variables committed in `commitment`.
+    ///
+    /// # Errors
+    /// [`VerifyError`] for a malformed or rejected proof.
+    pub fn verify_multilinear_ext(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), VerifyError> {
+        let ctx = &self.ctx;
+        self.check_commitment(commitment)?;
+        if point.len() != vars {
+            return Err(VerifyError::Malformed(format!(
+                "a point of {vars} coordinates is expected"
+            )));
+        }
+        check_exts(ctx, "point", point, vars)?;
+        check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
+        if !proof.partials.is_empty()
+            || !proof.batch_rounds.is_empty()
+            || proof.batch_eval.is_some()
+        {
+            return Err(VerifyError::Malformed(
+                "a polynomial over the field has no partial evaluations and no batching sumcheck"
+                    .into(),
+            ));
+        }
+        check_polys(
+            ctx,
+            "ring value",
+            core::slice::from_ref(&proof.ring_value),
+            1,
+        )?;
+        let layout = self.multilinear_ext_layout(vars)?;
+        let (b, a, v) = self.ring_weights(&layout, point)?;
+        if self.traced(&proof.ring_value, &v)? != *value {
+            return Err(VerifyError::Check(
+                "the trace of the input reduction".into(),
+            ));
+        }
+        let mut fs = self.statement(context, 3, vars, &commitment.u, point, value);
+        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
+        let claim = Claim {
+            b,
+            a,
+            target: proof.ring_value.clone(),
+        };
+        self.verify_rest(
+            layout,
+            Reduction::Direct,
+            &commitment.u,
+            claim,
+            proof,
+            &mut fs,
+        )
+    }
+
     /// Verifies an inner-product opening: $\langle \mathbf s, \mathbf e \rangle = $ `value` for
     /// the vector of length `len` committed in `commitment`.
     ///
@@ -1026,7 +1229,7 @@ impl<const K: usize> HachiPcs<K> {
         };
         self.verify_rest(
             layout,
-            Reduction::InnerProduct,
+            Reduction::Direct,
             &commitment.u,
             claim,
             proof,
@@ -1313,7 +1516,7 @@ impl<const K: usize> HachiPcs<K> {
             return Err(shape("unknown proof version"));
         }
         let reduction = match (*partials, *batch_rounds) {
-            (0, 0) => Reduction::InnerProduct,
+            (0, 0) => Reduction::Direct,
             (0, _) => return Err(shape("batching rounds without partial evaluations")),
             (p, rounds) if p == K as u64 => Reduction::Multilinear {
                 rounds: usize::try_from(rounds).map_err(|_| too_large())?,
@@ -1403,7 +1606,7 @@ impl<const K: usize> HachiPcs<K> {
             .collect::<Result<Vec<_>>>()?;
         let batch_eval = match reduction {
             Reduction::Multilinear { .. } => Some(self.take_ext(&mut r)?),
-            Reduction::InnerProduct => None,
+            Reduction::Direct => None,
         };
         let ring_value = self.take_poly(&mut r)?;
         let mut iterations = Vec::with_capacity(count);
