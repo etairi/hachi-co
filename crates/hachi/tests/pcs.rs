@@ -775,12 +775,12 @@ fn stream_bits(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     let rho = (u64::BITS - (pcs.ctx().q - 1).leading_zeros()) as usize;
     let digit = (u64::BITS - (c.b - 1).leading_zeros()) as usize;
     let mut residues = K * proof.partials.len() + d;
-    residues += 3 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
+    residues += 2 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
-        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * K + d;
-        // The per-iteration batching sumcheck: its rounds (3K each) and the packed value (K).
-        residues += it.batch_rounds.len() * 3 * K + K;
+        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
+        // The per-iteration batching sumcheck: its rounds (2K each) and the packed value (K).
+        residues += it.batch_rounds.len() * 2 * K + K;
     }
     let entries = proof.final_message.len() * d;
     let entry = if proof.iterations.is_empty() {
@@ -847,13 +847,13 @@ fn malformed_encodings_are_rejected() {
     assert!(proof_err(&[words.clone(), vec![0]].concat()).is_some());
     assert!(com_err(&[com_words.clone(), vec![0]].concat()).is_some());
     // The version.
-    for version in [0u64, 1, 2, 4] {
+    for version in [0u64, 1, 2, 3, 5] {
         assert!(proof_err(&edited(&words, 0, version)).is_some());
         assert!(com_err(&edited(&com_words, 0, version)).is_some());
     }
-    // The number of partial evaluations: 0 or K only, and K for this proof's length; 0 with
-    // batching rounds is refused.
-    for partials in [0u64, 1, 3, 5, 8, u64::MAX] {
+    // The number of partial evaluations: 0 or K - 1 only, and K - 1 for this proof's length; 0
+    // with batching rounds is refused.
+    for partials in [0u64, 1, 2, 4, 5, 8, u64::MAX] {
         assert!(
             proof_err(&edited(&words, 1, partials)).is_some(),
             "{partials}"
@@ -878,12 +878,20 @@ fn malformed_encodings_are_rejected() {
         (4, words[4] + 1),
         (4, words[4] - 1),
         (4, 1 << 62),
-        (5, words[5] + 1),
+        (5, words[5] + 32),
         (5, u64::MAX),
     ] {
         assert!(
             proof_err(&edited(&words, i, value)).is_some(),
             "header {i} = {value}"
+        );
+    }
+    // One more final ring element may fit the padding of the last word: the decoder then reads
+    // zero digits, and that count is for the verifier to refuse.
+    if let Ok(longer) = pcs.proof_from_words(&edited(&words, 5, words[5] + 1)) {
+        assert!(
+            pcs.verify_multilinear(&com, vars, &point, &value, &longer, &[5u8; 32])
+                .is_err()
         );
     }
     // A residue not below q: the first field (34 bits) set to all ones.
@@ -1009,31 +1017,33 @@ fn outputs_are_pinned() {
     // the input batching sumcheck and every iteration carries its own batching sumcheck: the
     // commitments differ only in their version word, the iteration-free proofs in their version
     // (header and statement) and the input batching, and the iterated proofs also in the
-    // per-iteration batching fields.
+    // per-iteration batching fields. Updated on 2026-10-31 for version 4 (ring-switching with 2
+    // field elements per round, K - 1 partial evaluations): again the commitments differ only
+    // in their version word.
     let pinned: [(&str, usize, &str, &str); 4] = [
         (
             "multilinear",
             0,
-            "cd94318c21f0cab0b1ce588cf17cd19e912d3bf28e826d50466fe0acbe952e64",
-            "a60e5074d14a1e31e385c1d3a0dae1560ddb5151f508c379f3a61f04c2f7d84a",
+            "bfca2c0106cdeff677adc2ea05aaa8d702985d440777b1596ddb0f52a7acfea9",
+            "3314bbcddf60b01a9492f6a6e1aff375df9c1c75e541623bf785d488acb07d74",
         ),
         (
             "multilinear",
             1,
-            "cd94318c21f0cab0b1ce588cf17cd19e912d3bf28e826d50466fe0acbe952e64",
-            "2f28791d3baee0a0556459026af029f93f8d2f81568c1598af76806ca80c6501",
+            "bfca2c0106cdeff677adc2ea05aaa8d702985d440777b1596ddb0f52a7acfea9",
+            "050d1bcbfd30b3e50a61a6d6ca98d51d0e8c777ec20d57143845023c86f4a084",
         ),
         (
             "vector",
             0,
-            "94222f9c05ab92984e006193c42b1e0d692e16664856256500405c4d8b7ace0b",
-            "ab952abf3e192b103884f9f18b3affdee0809922ca12673adba3ded5443c28b0",
+            "e7807f80b88a0a8ff8667b482993e2bae0d86966840b3c5b63a37d41a70aeac4",
+            "824a438db4f3b13f1dd4cc6aeb55ed36bf0a68e07c50c67740d86a472643d5dc",
         ),
         (
             "vector",
             1,
-            "94222f9c05ab92984e006193c42b1e0d692e16664856256500405c4d8b7ace0b",
-            "2baf3d4ef7d8711d5e6efb4e6c3bbdeb4e17aa9adc9e84e147926a90ffef4c0b",
+            "e7807f80b88a0a8ff8667b482993e2bae0d86966840b3c5b63a37d41a70aeac4",
+            "73f75d2123d3e78678ed85bed3fcd24351d506a65685349354f34c13138f5894",
         ),
     ];
     let mut failures = Vec::new();

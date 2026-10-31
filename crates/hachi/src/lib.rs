@@ -16,16 +16,16 @@
 //!   - $q$ is any prime $\equiv 5 \pmod 8$ below $2^{63}$, and $\mathbb F_{q^K} =
 //!     \mathcal R_q^H$ (Lemma 5).
 //! - **Openings at points in $\mathbb F_{q^K}$:**
-//!   - multilinear evaluations, reduced to $\mathcal R_q$ by Sections 3.2 and 3.1. A sumcheck
-//!     over the Frobenius conjugates binds the partial evaluations of Section 3.2 to the
-//!     committed polynomial ([`partials`]). This deviates from the paper, whose check leaves
-//!     them free, so that a prover could claim any value;
+//!   - multilinear evaluations, reduced to $\mathcal R_q$ by Sections 3.2 and 3.1. A
+//!     ring-switching sumcheck binds the partial evaluations of Section 3.2 to the committed
+//!     polynomial ([`partials`]). This deviates from the paper, whose check leaves them free,
+//!     so that a prover could claim any value;
 //!   - inner products with arbitrary public weights, by Theorem 2.
 //! - **The complete protocol** (Section 4.4):
 //!   - iterations of Sections 4.2-4.3 (fold, ring switching, the range and linear sumchecks),
 //!     each followed by the reduction of Section 4.5. That reduction also binds its partial
-//!     evaluations by a batching sumcheck over the Frobenius conjugates ([`partials`],
-//!     [`iteration`]), a deviation from Section 4.5 for the same reason as the input reduction;
+//!     evaluations by a ring-switching sumcheck ([`partials`], [`iteration`]), a deviation from
+//!     Section 4.5 for the same reason as the input reduction;
 //!   - every later witness is committed without re-decomposition;
 //!   - the last witness is sent in the clear.
 //! - **Fiat-Shamir** on a framed transcript that absorbs the parameters, the commitment, the

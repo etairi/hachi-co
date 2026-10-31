@@ -99,12 +99,12 @@ fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise) -> usize {
     let residue = bits_of(pcs.ctx().q - 1);
     let digit = bits_of(c.b - 1);
     let mut residues = K * proof.partials.len() + d;
-    residues += 3 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
+    residues += 2 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
-        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * K + d;
-        // The per-iteration batching sumcheck: its rounds (3K each) and the packed value (K).
-        residues += it.batch_rounds.len() * 3 * K + K;
+        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
+        // The per-iteration batching sumcheck: its rounds (2K each) and the packed value (K).
+        residues += it.batch_rounds.len() * 2 * K + K;
     }
     let entry = if proof.iterations.is_empty() {
         residue
@@ -624,7 +624,8 @@ fn hiding_outputs_are_pinned() {
     // multilinear opening (Gaussian, one iteration) and an inner product (digits, nu = 2, one
     // iteration). Pinned on 2026-10-21 with the randomized commitments; updated on 2026-10-23
     // for version 3, the input and per-iteration batching sumchecks (the commitments differ
-    // only in their version word; both opened proofs carry one iteration).
+    // only in their version word; both opened proofs carry one iteration), and on 2026-10-31
+    // for version 4 (ring-switching with 2 field elements per round, K - 1 partial evaluations).
     let ml = HachiPcs::<K>::new(Q, hiding(1, GAUSS8, Some(1))).unwrap();
     let vars = 8;
     let (com, state) = ml
@@ -657,12 +658,10 @@ fn hiding_outputs_are_pinned() {
         sha256_hex(&ip.proof_to_words(&vproof)),
     ];
     let pinned = [
-        "add7900e6a5568ddcb3aff60425f21b5cf07f9be785f36b5515d7f64924e09c0",
-        "90fed68d9e5909700417a9b5a06e1d5cfc2f60bb6d7d319b6803564cb31fc932",
-        "68e24942df1f73be14bc4399c88f31841ca7df126d843a8b59e26052ea01824d",
-        "0b169644c4549d2d2e3f1111a7039bac27e5e69602cfb5ca61af57bec5fda6cc",
+        "eff7ac5d7377768159bc2ef2b77a6119c596043f3d9eaeef37e2f2d466370cee",
+        "7f95d8a48b3fde0ec5b788f5cda6bd96dcc63a9e48f260770a6476c5e0976fa6",
+        "9df4d18ceae2b0c2fd9cd878f295379aa414dc4684ae07ab77f6a25c3edd0ec3",
+        "4e7df5386f6e81d44fb1c64db9739cd4fa93a4f7ad9673e75a4647da4d7de54e",
     ];
-    for (i, (g, p)) in got.iter().zip(pinned).enumerate() {
-        assert_eq!(g, p, "output {i}");
-    }
+    assert_eq!(got, pinned, "the outputs changed");
 }

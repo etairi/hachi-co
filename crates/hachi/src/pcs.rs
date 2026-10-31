@@ -7,9 +7,10 @@
 //!   most significant first. The commitment holds the packed polynomial $f' = \sum_i f_i Z_i$
 //!   of the paper's Section 3.2, in ring elements by $\psi$. An opening reduces $f(\mathbf x) =
 //!   y$ to a claim over $\mathcal R_q$:
-//!   1. the prover sends the $K$ partial evaluations $y_i = f_i(\mathbf x')$ over the first
-//!      $\kappa$ variables, $\mathbf x' = (x_{\kappa+1}, \dots, x_\ell)$, and the verifier
-//!      checks $y = \sum_i \mathrm{mono}\_i(x_1, \dots, x_\kappa) y_i$ (Section 3.2);
+//!   1. the prover sends $K - 1$ of the partial evaluations $y_i = f_i(\mathbf x')$ over the
+//!      first $\kappa$ variables, $\mathbf x' = (x_{\kappa+1}, \dots, x_\ell)$, and the verifier
+//!      derives the other from $y = \sum_i \mathrm{mono}\_i(x_1, \dots, x_\kappa) y_i$
+//!      (Section 3.2 and footnote 5);
 //!   2. a sumcheck binds the $y_i$ to $f'$ ([`crate::partials`]) and leaves the claim
 //!      $f'(\mathbf r) = v_{\mathbf r}$ at the point $\mathbf r$ of its challenges. This
 //!      deviates from Section 3.2, which proves $f'(\mathbf x') = \sum_i y_i Z_i$ only: that
@@ -66,12 +67,12 @@
 //! what they do not fix:
 //! - commitment: `[VERSION]`, then the $n_B d$ coefficients of $\mathbf u$;
 //! - proof: `[VERSION, P, B, k, L_1, …, L_k, N]` for $P$ partial evaluations and $B$ rounds of
-//!   the input batching sumcheck ($K$ and $\ell - \kappa$ for a multilinear opening, 0 and 0 for
-//!   an inner product), $k$ iterations of $L_i$ sumcheck rounds and a final message of $N$ ring
-//!   elements. Then the input reduction's partial evaluations, its batching rounds (3 field
-//!   elements each) and $f'(\mathbf r)$ (if $P = K$); $Y$; per iteration $\mathbf v$,
-//!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K$ partial
-//!   evaluations, the $L_i - \kappa$ batching rounds (3 field elements each), the packed value
+//!   the input batching sumcheck ($K - 1$ and $\ell - \kappa$ for a multilinear opening, 0 and 0
+//!   for an inner product), $k$ iterations of $L_i$ sumcheck rounds and a final message of $N$
+//!   ring elements. Then the input reduction's partial evaluations, its batching rounds (2 field
+//!   elements each) and $f'(\mathbf r)$ (if $B > 0$); $Y$; per iteration $\mathbf v$,
+//!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K - 1$ partial
+//!   evaluations, the $L_i - \kappa$ batching rounds (2 field elements each), the packed value
 //!   $\hat w(\mathbf r)$ and $p'$; and the final message. The per-iteration batching-round count
 //!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with the number $R$
 //!   of ring elements of the final randomness, which follows the final message, each coefficient
@@ -98,12 +99,14 @@ use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
-/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 3 since a multilinear
-/// opening binds its partial evaluations by a sumcheck ([`crate::partials`]). Version 2 did not,
-/// and accepted false values; it packed the values and chose the schedule that minimises the
-/// proof's size (version 1 had a 64-bit word per value and stopped at the first iteration that
-/// did not shrink the witness).
-pub const VERSION: u64 = 3;
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 4 since the sumcheck that
+/// binds the partial evaluations is ring-switching, with 2 field elements per round, and a proof
+/// sends $K - 1$ partial evaluations ([`crate::partials`]). Version 3 batched the same claims on
+/// the orbit of the point, with 3 field elements per round and $K$ partial evaluations. Version
+/// 2 had no such sumcheck, and accepted false values; it packed the values and chose the
+/// schedule that minimises the proof's size (version 1 had a 64-bit word per value and stopped at
+/// the first iteration that did not shrink the witness).
+pub const VERSION: u64 = 4;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,7 +133,8 @@ pub struct State<const K: usize> {
 /// An evaluation proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Proof<const K: usize> {
-    /// The $K$ partial evaluations of a multilinear opening (empty for an inner product).
+    /// The $K - 1$ partial evaluations of a multilinear opening that the verifier does not
+    /// derive from the value ([`partials::complete`]); empty for an inner product.
     pub partials: Vec<Ext<K>>,
     /// The rounds of the sumcheck that binds the partial evaluations to $f'$
     /// ([`crate::partials`]): $\ell - \kappa$ for a multilinear opening, none for an inner
@@ -153,8 +157,8 @@ pub struct Proof<const K: usize> {
 /// of the schedule counts it (module documentation, "Schedule" and "Encodings").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reduction {
-    /// A multilinear opening: $K$ partial evaluations, the rounds of the batching sumcheck and
-    /// $f'(\mathbf r)$.
+    /// A multilinear opening: $K - 1$ partial evaluations, the rounds of the batching sumcheck
+    /// and $f'(\mathbf r)$.
     Multilinear {
         /// The rounds, $\ell - \kappa$.
         rounds: usize,
@@ -164,10 +168,10 @@ enum Reduction {
 }
 
 impl Reduction {
-    /// The number of partial evaluations: $K$ for a multilinear opening, else 0.
+    /// The number of partial evaluations sent: $K - 1$ for a multilinear opening, else 0.
     fn partials(self, k: usize) -> usize {
         match self {
-            Self::Multilinear { .. } => k,
+            Self::Multilinear { .. } => k - 1,
             Self::Direct => 0,
         }
     }
@@ -180,11 +184,13 @@ impl Reduction {
         }
     }
 
-    /// The residues ahead of the iterations, $Y$ included: $K^2 + 3K(\ell - \kappa) + K + d$
-    /// for a multilinear opening, $d$ otherwise; `None` on overflow.
+    /// The residues ahead of the iterations, $Y$ included: $K(K - 1) + 2K(\ell - \kappa) + K +
+    /// d$ for a multilinear opening, $d$ otherwise; `None` on overflow.
     fn residues(self, k: usize, d: usize) -> Option<usize> {
         match self {
-            Self::Multilinear { rounds } => rounds.checked_mul(3 * k)?.checked_add(k * k + k + d),
+            Self::Multilinear { rounds } => {
+                rounds.checked_mul(2 * k)?.checked_add(k * (k - 1) + k + d)
+            }
             Self::Direct => Some(d),
         }
     }
@@ -395,10 +401,11 @@ impl<const K: usize> HachiPcs<K> {
     /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and the reduction
     /// `reduction` (module documentation, "Encodings"): the header ($5 + k$ words for $k$
     /// iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue: for a
-    /// multilinear opening the partial evaluations ($K$ residues each), the $\ell - \kappa$
-    /// batching rounds ($3K$ each) and $f'(\mathbf r)$ ($K$); $Y$ ($d$); per iteration
+    /// multilinear opening the $K - 1$ partial evaluations ($K$ residues each), the $\ell -
+    /// \kappa$ batching rounds ($2K$ each) and $f'(\mathbf r)$ ($K$); $Y$ ($d$); per iteration
     /// $\mathbf v$ ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3
-    /// field elements), $y'$ ($K$), the partial evaluations ($K^2$) and $p'$ ($d$); the final
+    /// field elements), $y'$ ($K$), the partial evaluations ($K(K - 1)$), the $L - \kappa$
+    /// batching rounds ($2K$ each), $\hat w(\mathbf r)$ ($K$) and $p'$ ($d$); the final
     /// message, $2^{r+m} d$ residues without iterations, else as many digits of
     /// $\lceil \log_2 b \rceil$ bits; and with hiding the final randomness,
     /// $2^r (\nu + n_A) d$ coefficients of the bits of [`Noise`](crate::params::Noise)'s support.
@@ -413,10 +420,10 @@ impl<const K: usize> HachiPcs<K> {
             .residues(K, d)
             .ok_or_else(|| Error::Parameter("the size of the proof overflows".into()))?;
         for it in &schedule.iterations {
-            // Per iteration: v, u', the L sumcheck rounds, y', the K partial evaluations, p',
-            // then the L - kappa batching rounds (3K each) and the packed evaluation (K).
-            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K + K * K + d;
-            residues += (it.table_vars - kappa) * 3 * K + K;
+            // Per iteration: v, u', the L sumcheck rounds, y', the K - 1 partial evaluations,
+            // p', then the L - kappa batching rounds (2K each) and the packed evaluation (K).
+            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K + K * (K - 1) + d;
+            residues += (it.table_vars - kappa) * 2 * K + K;
         }
         let last = schedule.final_layout;
         let entries = last.chunks() * last.chunk_len() * d;
@@ -735,9 +742,9 @@ impl<const K: usize> HachiPcs<K> {
     /// proof. `context` binds the proof to the caller's transcript; `seed` is the opening's
     /// fresh secret seed (module documentation, "Randomness").
     ///
-    /// The transcript absorbs the statement with the value, the partial evaluations, the
-    /// batching sumcheck ($\gamma$, each round's values then its challenge, $f'(\mathbf r)$;
-    /// [`crate::partials`]), $Y$, then the iterations.
+    /// The transcript absorbs the statement with the value, the partial evaluations sent, the
+    /// batching sumcheck ($\boldsymbol\eta$, each round's values then its challenge,
+    /// $f'(\mathbf r)$; [`crate::partials`]), $Y$, then the iterations.
     ///
     /// # Errors
     /// [`Error::Shape`] for a point of the wrong length or a state of a vector; prover errors.
@@ -776,8 +783,9 @@ impl<const K: usize> HachiPcs<K> {
             })
             .collect();
         let value = self.value_of_partials(&point, &partials)?;
+        let sent = partials::omit(field, &ctx.sub.monomials(&point[..kappa])?, &partials)?;
         let mut fs = self.statement(context, 1, *vars, &state.committed.u, &point, &value);
-        fs.exts(LABEL_PARTIALS, &partials);
+        fs.exts(LABEL_PARTIALS, &sent);
         let (batch_rounds, r, at_r) =
             partials::prove(field, &self.packed(*vars, coeffs), x, &partials, &mut fs)?;
         let claim = self.ring_claim(state, &r, &at_r)?;
@@ -794,7 +802,7 @@ impl<const K: usize> HachiPcs<K> {
         Ok((
             value,
             Proof {
-                partials,
+                partials: sent,
                 batch_rounds,
                 batch_eval: Some(at_r),
                 ring_value,
@@ -1060,7 +1068,7 @@ impl<const K: usize> HachiPcs<K> {
         }
         check_exts(ctx, "point", point, vars)?;
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
-        check_exts(ctx, "partial evaluations", &proof.partials, K)?;
+        check_exts(ctx, "partial evaluations", &proof.partials, K - 1)?;
         // The layout exists only for vars >= alpha > kappa.
         let layout = self.multilinear_layout(vars)?;
         let x = &point[ctx.kappa()..];
@@ -1072,7 +1080,7 @@ impl<const K: usize> HachiPcs<K> {
             )));
         }
         for round in &proof.batch_rounds {
-            check_exts(ctx, "batching sumcheck", round, 3)?;
+            check_exts(ctx, "batching sumcheck", round, 2)?;
         }
         let Some(at_r) = &proof.batch_eval else {
             return Err(VerifyError::Malformed(
@@ -1091,17 +1099,14 @@ impl<const K: usize> HachiPcs<K> {
             core::slice::from_ref(&proof.ring_value),
             1,
         )?;
-        if self.value_of_partials(point, &proof.partials)? != *value {
-            return Err(VerifyError::Check(
-                "the partial evaluations of the input".into(),
-            ));
-        }
+        let mono = ctx.sub.monomials(&point[..ctx.kappa()])?;
+        let ys = partials::complete(ctx.field(), &mono, value, &proof.partials)?;
         let mut fs = self.statement(context, 1, vars, &commitment.u, point, value);
         fs.exts(LABEL_PARTIALS, &proof.partials);
         let r = partials::verify(
             ctx.field(),
             x,
-            &proof.partials,
+            &ys,
             &proof.batch_rounds,
             at_r,
             &partials::INPUT_LABELS,
@@ -1511,8 +1516,8 @@ impl<const K: usize> HachiPcs<K> {
     /// # Errors
     /// [`Error::Shape`] for any input that [`HachiPcs::proof_to_words`] does not produce from a
     /// proof of this scheme's shape: another version, a number of partial evaluations other
-    /// than 0 and $K$, batching rounds without partial evaluations, a length other than the one
-    /// the header implies, a residue not below $q$, a digit index outside the digit set, a
+    /// than 0 and $K - 1$, batching rounds without partial evaluations, a length other than the
+    /// one the header implies, a residue not below $q$, a digit index outside the digit set, a
     /// randomness coefficient outside the support of $\chi$, or non-zero padding.
     pub fn proof_from_words(&self, words: &[u64]) -> Result<Proof<K>> {
         let shape = |what: &str| Error::Shape(what.into());
@@ -1525,11 +1530,11 @@ impl<const K: usize> HachiPcs<K> {
         }
         let reduction = match (*partials, *batch_rounds) {
             (0, 0) => Reduction::Direct,
-            (0, _) => return Err(shape("batching rounds without partial evaluations")),
-            (p, rounds) if p == K as u64 => Reduction::Multilinear {
+            (p, rounds) if p == K as u64 - 1 => Reduction::Multilinear {
                 rounds: usize::try_from(rounds).map_err(|_| too_large())?,
             },
-            _ => return Err(shape("a proof has 0 or K partial evaluations")),
+            (0, _) => return Err(shape("batching rounds without partial evaluations")),
+            _ => return Err(shape("a proof has 0 or K - 1 partial evaluations")),
         };
         // The header: k round counts and the final count.
         let count = usize::try_from(*count)
@@ -1560,16 +1565,16 @@ impl<const K: usize> HachiPcs<K> {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
         let kappa = self.ctx.kappa();
-        let fixed = (c.n_d + c.n_b) * d + K + K * K + d;
+        let fixed = (c.n_d + c.n_b) * d + K + K * (K - 1) + d;
         let mut residues = reduction.residues(K, d);
         for l in &round_counts {
-            // Per iteration: l sumcheck rounds + fixed, then l - kappa batching rounds (3K)
+            // Per iteration: l sumcheck rounds + fixed, then l - kappa batching rounds (2K)
             // and the packed evaluation (K). l < kappa is a malformed header.
             residues = residues.and_then(|r| {
                 let batch = l.checked_sub(kappa)?;
                 l.checked_mul(round)?
                     .checked_add(fixed)?
-                    .checked_add(batch.checked_mul(3 * K)?)?
+                    .checked_add(batch.checked_mul(2 * K)?)?
                     .checked_add(K)?
                     .checked_add(r)
             });
@@ -1604,13 +1609,7 @@ impl<const K: usize> HachiPcs<K> {
         };
         let partials = self.take_exts(&mut r, reduction.partials(K))?;
         let batch_rounds = (0..reduction.rounds())
-            .map(|_| {
-                Ok([
-                    self.take_ext(&mut r)?,
-                    self.take_ext(&mut r)?,
-                    self.take_ext(&mut r)?,
-                ])
-            })
+            .map(|_| Ok([self.take_ext(&mut r)?, self.take_ext(&mut r)?]))
             .collect::<Result<Vec<_>>>()?;
         let batch_eval = match reduction {
             Reduction::Multilinear { .. } => Some(self.take_ext(&mut r)?),
@@ -1630,16 +1629,10 @@ impl<const K: usize> HachiPcs<K> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let final_eval = self.take_ext(&mut r)?;
-            let partials = self.take_exts(&mut r, K)?;
-            // The batching sumcheck: l - kappa rounds of 3 field elements, then the packed value.
+            let partials = self.take_exts(&mut r, K - 1)?;
+            // The batching sumcheck: l - kappa rounds of 2 field elements, then the packed value.
             let batch_rounds = (0..l - kappa)
-                .map(|_| {
-                    Ok([
-                        self.take_ext(&mut r)?,
-                        self.take_ext(&mut r)?,
-                        self.take_ext(&mut r)?,
-                    ])
-                })
+                .map(|_| Ok([self.take_ext(&mut r)?, self.take_ext(&mut r)?]))
                 .collect::<Result<Vec<_>>>()?;
             iterations.push(IterationProof {
                 v,
@@ -1774,6 +1767,18 @@ mod tests {
             self.pcs.packed(VARS, &self.coeffs)
         }
 
+        /// $\mathrm{mono}\_i(x_1, \dots, x_\kappa)$.
+        fn mono(&self) -> Vec<Ext<K>> {
+            let ctx = self.pcs.ctx();
+            ctx.sub.monomials(&self.point[..ctx.kappa()]).unwrap()
+        }
+
+        /// The $K$ true partial evaluations.
+        fn true_partials(&self) -> Vec<Ext<K>> {
+            let field = self.pcs.ctx().field();
+            partials::complete(field, &self.mono(), &self.value, &self.proof.partials).unwrap()
+        }
+
         /// The transcript after the statement with `value` and the partial evaluations `sent`.
         fn transcript(&self, value: &Ext<K>, sent: &[Ext<K>]) -> Fs {
             let mut fs = self.pcs.statement(
@@ -1842,7 +1847,7 @@ mod tests {
                 field,
                 &self.packed(),
                 self.x(),
-                &self.proof.partials,
+                &self.true_partials(),
                 &mut fs,
             )
             .unwrap();
@@ -1852,16 +1857,16 @@ mod tests {
         /// The partial evaluations moved by $\boldsymbol\delta$ with $\sum_i \delta_i Z_i = 0$
         /// and $\sum_i \mathrm{mono}\_i \delta_i = 1$ ($\delta_2 = \delta_3 = 0$), and the
         /// value they give, $f(\mathbf x) + 1$. They pass the paper's check: $\sum_i y_i Z_i$
-        /// is unchanged.
+        /// is unchanged. All $K$ of them; a proof sends the last $K - 1$.
         fn kernel_forgery(&self) -> (Vec<Ext<K>>, Ext<K>) {
-            let ctx = self.pcs.ctx();
-            let field = ctx.field();
-            let mono = ctx.sub.monomials(&self.point[..ctx.kappa()]).unwrap();
+            let field = self.pcs.ctx().field();
+            let mono = self.mono();
             let ratio = field.mul(&basis::<K>(1), &field.inv(&basis::<K>(0)).unwrap());
             let denom = field.sub(&mono[1], &field.mul(&mono[0], &ratio));
             let d1 = field.inv(&denom).unwrap();
             let d0 = field.neg(&field.mul(&d1, &ratio));
-            let mut moved = self.proof.partials.clone();
+            let honest = self.true_partials();
+            let mut moved = honest.clone();
             moved[0] = field.add(&moved[0], &d0);
             moved[1] = field.add(&moved[1], &d1);
             let packed = |ys: &[Ext<K>]| {
@@ -1869,7 +1874,7 @@ mod tests {
                     field.add(&acc, &field.mul(y, &basis::<K>(i)))
                 })
             };
-            assert_eq!(packed(&moved), packed(&self.proof.partials));
+            assert_eq!(packed(&moved), packed(&honest));
             let forged = self.pcs.value_of_partials(&self.point, &moved).unwrap();
             assert_eq!(forged, field.add(&self.value, &field.one()));
             (moved, forged)
@@ -1884,20 +1889,22 @@ mod tests {
         );
     }
 
+    /// The verifier's message when the batching sumcheck ends on a false claim.
+    const BATCH_CHECK: &str = "the batching sumcheck's final value";
+
     #[test]
     fn partials_moved_along_the_trace_kernel_are_rejected() {
         // The forgery that version 2 accepted with 0, 1 and 2 iterations: partial evaluations
         // moved along the kernel of the paper's check sum_i y_i Z_i = f'(x'), the value moved
         // with them, and the rest of the proof made honestly. The batching sumcheck, run
-        // honestly from there, sums to the batched conjugates of the true partial evaluations,
-        // not of the moved ones: its first round is rejected.
+        // honestly from there, sums to the batched rows of the true partial evaluations, not
+        // of the moved ones, so the verifier ends on a false claim.
         for iterations in [0usize, 1, 2] {
             let o = Opening::new(iterations);
             assert_eq!(o.honest_after(&o.value, &o.proof.partials), o.proof);
             let (moved, forged) = o.kernel_forgery();
-            let verdict = o.verify(&forged, &o.honest_after(&forged, &moved));
-            let what = format!("{iterations} iterations");
-            rejected_by(&verdict, "batching sumcheck, round 1", &what);
+            let verdict = o.verify(&forged, &o.honest_after(&forged, &moved[1..]));
+            rejected_by(&verdict, BATCH_CHECK, &format!("{iterations} iterations"));
         }
     }
 
@@ -1905,32 +1912,31 @@ mod tests {
     fn a_single_partial_or_the_value_alone_moved_is_rejected() {
         for iterations in [0usize, 1, 2] {
             let o = Opening::new(iterations);
-            let ctx = o.pcs.ctx();
-            let field = ctx.field();
-            let mono = ctx.sub.monomials(&o.point[..ctx.kappa()]).unwrap();
-            for i in 0..K {
+            let field = o.pcs.ctx().field();
+            let mono = o.mono();
+            for i in 0..K - 1 {
                 let what = format!("{iterations} iterations, partial evaluation {i}");
                 let mut moved = o.proof.partials.clone();
                 moved[i] = field.add(&moved[i], &field.one());
-                // With the value unchanged, the partial evaluations do not give it.
+                // With the value unchanged, the derived partial evaluation moves too.
                 let proof = Proof {
                     partials: moved.clone(),
                     ..o.proof.clone()
                 };
                 let verdict = o.verify(&o.value, &proof);
-                rejected_by(&verdict, "the partial evaluations of the input", &what);
-                // With the value moved by mono_i, and the rest made honestly from there.
-                let value = field.add(&o.value, &mono[i]);
+                rejected_by(&verdict, BATCH_CHECK, &what);
+                // With the value moved by mono_{i+1}, and the rest made honestly from there.
+                let value = field.add(&o.value, &mono[i + 1]);
                 let verdict = o.verify(&value, &o.honest_after(&value, &moved));
-                rejected_by(&verdict, "batching sumcheck, round 1", &what);
+                rejected_by(&verdict, BATCH_CHECK, &what);
             }
             // The value alone, with the honest proof and with a proof made for it.
             let what = format!("{iterations} iterations, the value");
             let value = field.add(&o.value, &field.one());
             let verdict = o.verify(&value, &o.proof);
-            rejected_by(&verdict, "the partial evaluations of the input", &what);
+            rejected_by(&verdict, BATCH_CHECK, &what);
             let verdict = o.verify(&value, &o.honest_after(&value, &o.proof.partials));
-            rejected_by(&verdict, "the partial evaluations of the input", &what);
+            rejected_by(&verdict, BATCH_CHECK, &what);
         }
     }
 
@@ -1958,13 +1964,13 @@ mod tests {
                     fs,
                 )
             };
-            let mut fs = o.transcript(&forged, &moved);
+            let mut fs = o.transcript(&forged, &moved[1..]);
             let batch = fitted(&mut fs);
             let table = partials::hypercube_values(field, &o.packed()).unwrap();
             let true_at_r = mle_eval(field, &table, &batch.1);
             assert_ne!(batch.2, true_at_r, "{what}");
             let shift = field.sub(&batch.2, &true_at_r);
-            let proof = o.complete(fs, &moved, batch, &field.zero());
+            let proof = o.complete(fs, &moved[1..], batch, &field.zero());
             let verdict = o.verify(&forged, &proof);
             rejected_by(&verdict, "the trace of the input reduction", &what);
             let proof = Proof {
@@ -1972,11 +1978,11 @@ mod tests {
                 ..proof
             };
             let verdict = o.verify(&forged, &proof);
-            rejected_by(&verdict, "the batching sumcheck's final value", &what);
+            rejected_by(&verdict, BATCH_CHECK, &what);
             if iterations == 0 {
-                let mut fs = o.transcript(&forged, &moved);
+                let mut fs = o.transcript(&forged, &moved[1..]);
                 let batch = fitted(&mut fs);
-                let proof = o.complete(fs, &moved, batch, &shift);
+                let proof = o.complete(fs, &moved[1..], batch, &shift);
                 let verdict = o.verify(&forged, &proof);
                 rejected_by(
                     &verdict,

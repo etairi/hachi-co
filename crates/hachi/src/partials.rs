@@ -23,52 +23,77 @@
 //! 2 of the scheme accepted such forgeries with 0, 1 and 2 iterations; the test
 //! `partials_moved_along_the_trace_kernel_are_rejected` of `pcs` builds one.
 //!
-//! **What is proved instead.** Let $\varphi : a \mapsto a^q$ be the Frobenius
-//! ([`Fqk::frobenius`]), of order $K$, applied to points coordinatewise. It fixes $\mathbb F_q$,
-//! hence the coefficients of the $f_i$, so
-//! $$f'(\varphi^{-t}(\mathbf x')) = \sum_i Z_i f_i(\varphi^{-t}(\mathbf x')) = \sum_i Z_i
-//! \varphi^{-t}(f_i(\mathbf x')).$$
-//! The prover proves the $K$ evaluations $f'(\mathbf p_t) = v_t$, $t = 0, \dots, K - 1$, at the
-//! points $\mathbf p_t = \varphi^{-t}(\mathbf x')$ ([`conjugate_points`]), with $v_t = \sum_i
-//! Z_i \varphi^{-t}(y_i)$ ([`conjugate_values`]), which the verifier computes from the partial
-//! evaluations. The case $t = 0$ is the paper's claim.
+//! **What is proved instead: ring-switching.** This is Construction 3.1 of Diamond and Posen
+//! (ePrint 2024/504), which holds for any extension of degree $2^\kappa$ in any characteristic;
+//! Akita (ePrint 2026/1983, Section 3.7) calls it the tensor reduction. Write
+//! $y_i = \sum_u y_{u,i} Z_u$ with $y_{u,i} \in \mathbb F_q$, and
+//! let the *rows* be $\hat y_u = \sum_i y_{u,i} Z_i$: the matrix of coordinates of the partial
+//! evaluations, transposed (`transpose`). Write also $\widetilde{eq}(\mathbf x', \mathbf b) =
+//! \sum_u A_u(\mathbf b) Z_u$ with $A_u(\mathbf b) \in \mathbb F_q$. As $f_i(\mathbf x') =
+//! \sum_{\mathbf b} f_i(\mathbf b) \widetilde{eq}(\mathbf x', \mathbf b)$ and the values
+//! $f_i(\mathbf b)$ lie in $\mathbb F_q$, the true partial evaluations have $y_{u,i} =
+//! \sum_{\mathbf b} f_i(\mathbf b) A_u(\mathbf b)$, so for every $u$
+//! $$\hat y_u = \sum_{\mathbf b} A_u(\mathbf b) T(\mathbf b), \qquad T = \sum_i f_i Z_i,$$
+//! with $T$ the values of $f'$ on $\lbrace 0, 1 \rbrace^n$, $n = \ell - \kappa$
+//! ([`hypercube_values`]). Unlike the paper's check, these $K$ claims hold only for the true
+//! partial evaluations: the $A_u(\mathbf b)$ lie in $\mathbb F_q$, so coordinate $i$ of the
+//! right-hand side is $\sum_{\mathbf b} A_u(\mathbf b) f_i(\mathbf b)$, and coordinate $i$ of
+//! claim $u$ fixes $y_{u,i}$. (The test `the_rows_determine_the_partials` checks the forgery's
+//! $\boldsymbol\delta$ against this.)
 //!
-//! They hold only for the true partial evaluations. Let $\delta_i = y_i - f_i(\mathbf x')$, so
-//! that $\sum_i Z_i \varphi^{-t}(\delta_i) = 0$ for every $t$. Apply $\varphi^t$, multiply by
-//! $\varphi^t(c)$ for some $c \in \mathbb F_{q^K}$ and add over $t$: $\sum_i
-//! \mathrm{Tr}(c Z_i) \delta_i = 0$, where $\mathrm{Tr} = \sum_t \varphi^t$ is the trace to
-//! $\mathbb F_q$. The trace form of a finite field is non-degenerate, so $(Z_i)\_i$ has a dual
-//! basis $(Z_j^\vee)\_j$, with $\mathrm{Tr}(Z_j^\vee Z_i) = 1$ if $i = j$ and 0 otherwise, and
-//! $c = Z_j^\vee$ gives $\delta_j = 0$. (Equivalently, the Moore matrix $(\varphi^t(Z_i))\_{t,
-//! i}$ is invertible.) The test `the_conjugates_determine_the_partials` checks the forgery's
-//! $\boldsymbol\delta$ against this.
+//! **Batching.** After the partial evaluations, the verifier draws $\boldsymbol\eta \in \mathbb
+//! F_{q^K}^\kappa$, and $\eta_u = \widetilde{eq}(\boldsymbol\eta, \mathrm{bit}(u))$. The $K$
+//! claims batch into
+//! $$V = \sum_u \eta_u \hat y_u = \sum_{\mathbf b} T(\mathbf b) W(\mathbf b), \qquad W(\mathbf b)
+//! = \sum_u \eta_u A_u(\mathbf b)$$
+//! (`weights`, one table of $\widetilde{eq}$ and its coordinates). A sumcheck of $n$ rounds
+//! ([`prove`], [`verify`]) reduces $V$ to a claim on $T(\mathbf r) W(\mathbf r)$ at the point
+//! $\mathbf r$ of its challenges. Each round sends its polynomial, of degree 2, at $0$ and $2$;
+//! the verifier takes its value at 1 from the running claim, absorbs the two values and draws
+//! the round's challenge. The prover then sends $f'(\mathbf r) = T(\mathbf r)$, and the verifier
+//! checks $f'(\mathbf r) W(\mathbf r)$ against the last claim. What is left is the evaluation
+//! $f'(\mathbf r)$, which the paper's Section 3.1 reduces to $\mathcal R_q$ as it did
+//! $f'(\mathbf x')$ (`pcs`).
 //!
-//! **Batching.** After the partial evaluations, the verifier draws $\gamma \in \mathbb F_{q^K}$.
-//! Let $n = \ell - \kappa$. As $f'$ is multilinear, $f'(\mathbf p) = \sum_{\mathbf b} T(\mathbf
-//! b) \widetilde{eq}(\mathbf b, \mathbf p)$ over $\mathbf b \in \lbrace 0, 1 \rbrace^n$, with
-//! $T$ the values of $f'$ on the hypercube ([`hypercube_values`]). So the $K$ claims batch into
-//! $$V = \sum_t \gamma^t v_t = \sum_{\mathbf b} T(\mathbf b) W(\mathbf b), \qquad W(\mathbf b)
-//! = \sum_t \gamma^t \widetilde{eq}(\mathbf b, \mathbf p_t).$$
-//! A sumcheck of $n$ rounds ([`prove`], [`verify`]) reduces $V$ to a claim on
-//! $T(\mathbf r) W(\mathbf r)$ at the point $\mathbf r$ of its challenges. Each round sends its
-//! polynomial, of degree 2, at $0, 1, 2$; the verifier checks that the values at 0 and 1 add up
-//! to the running claim, absorbs the three and draws the round's challenge. The prover then
-//! sends $f'(\mathbf r) = T(\mathbf r)$, and the verifier checks $f'(\mathbf r) \sum_t
-//! \gamma^t \widetilde{eq}(\mathbf r, \mathbf p_t)$ against the last claim. What is left is the
-//! evaluation $f'(\mathbf r)$, which the paper's Section 3.1 reduces to $\mathcal R_q$ as it
-//! did $f'(\mathbf x')$ (`pcs`).
+//! **The verifier's weight.** In the tensor algebra $\mathbb F_{q^K} \otimes_{\mathbb F_q}
+//! \mathbb F_{q^K}$, let
+//! $$\prod_j \bigl((1 - x_j) \otimes (1 - r_j) + x_j \otimes r_j\bigr) = \sum_u Z_u \otimes
+//! e_u.$$
+//! Then $W(\mathbf r) = \sum_u \eta_u e_u$ (`row_weights`): both sides are multilinear in
+//! $\mathbf r$, and on $\mathbf r = \mathbf b \in \lbrace 0, 1 \rbrace^n$ the product is
+//! $\widetilde{eq}(\mathbf x', \mathbf b) \otimes 1 = \sum_u Z_u \otimes A_u(\mathbf b)$.
+//! (Diamond and Posen's faster formula, their Remark 3.4, holds only in characteristic 2.)
+//!
+//! **The partial evaluation left out.** The verifier knows the value $v = \sum_i w_i y_i$ with
+//! public weights: $w_i = \mathrm{mono}\_i(x_1, \dots, x_\kappa)$ here,
+//! $\widetilde{eq}(i, \mathbf a_1)$ in an iteration. So the proof leaves out the first $y_i$
+//! with $w_i \neq 0$ ([`omit`]), and the verifier derives it from $v$ ([`complete`]): the
+//! check of $v$ holds by construction (Hachi, footnote 5).
+//!
+//! **Earlier versions.** Applying $\varphi : a \mapsto a^q$ ([`Fqk::frobenius`]), the claims
+//! above are, by the invertible Moore matrix $(\varphi^t(Z_u))\_{t,u}$, the claims
+//! $f'(\varphi^t(\mathbf x')) = \sum_u \varphi^t(Z_u) \hat y_u$ on the orbit of $\mathbf x'$.
+//! Version 3 of the encodings proved those, batched by the powers of one challenge. That is the
+//! reduction of Hashcaster (Soukhanov, 2024), which Diamond and Posen, Section 1.3, show to be
+//! ring-switching read through $\mathbb F_{q^K} \otimes_{\mathbb F_q} \mathbb F_{q^K} \cong
+//! \mathbb F_{q^K}^K$; only the batching coefficients differ. The test
+//! `the_rows_are_the_claims_on_the_orbit` checks the identity.
 //!
 //! **Soundness** (interactive bounds; the opening applies Fiat-Shamir to them as to the rest of
 //! the protocol). Let $f'$ be the polynomial the commitment binds. If a partial evaluation is
-//! false, $\sum_t \gamma^t (f'(\mathbf p_t) - v_t)$ is a non-zero polynomial in $\gamma$ of
-//! degree at most $K - 1$, which vanishes with probability at most $(K - 1)/q^K$. Otherwise the
-//! claim $V$ is false, and by the standard analysis of the sumcheck (Lund, Fortnow, Karloff and
-//! Nisan) the verifier ends on a true last claim with probability at most $2n/q^K$: two per
-//! round, for round polynomials of degree 2.
+//! false, $\sum_u \widetilde{eq}(\boldsymbol\eta, \mathrm{bit}(u)) (\hat y_u - \sum_{\mathbf b}
+//! A_u(\mathbf b) T(\mathbf b))$ is a non-zero multilinear polynomial in $\boldsymbol\eta$, which
+//! vanishes with probability at most $\kappa/q^K$ (Schwartz-Zippel). Otherwise the claim $V$ is
+//! false, and by the standard analysis of the sumcheck (Lund, Fortnow, Karloff and Nisan) the
+//! verifier ends on a true last claim with probability at most $2n/q^K$: two per round, for
+//! round polynomials of degree 2. This is the bound of Akita's Theorem 5.1 for one claim. That
+//! the commitment binds a single $f'$ across the extractor's forks is Akita's Lemma 10.28;
+//! the composition with Hachi's iterations is not proved here.
 //!
-//! **Cost.** The proof gains $3n + 1$ field elements. The prover adds $O(K 2^n)$ field
-//! operations for $W$ and $O(2^n)$ for $T$ and the rounds, small next to the iterations; the
-//! verifier adds $O(Kn)$ for the conjugates and $\widetilde{eq}(\mathbf r, \mathbf p_t)$.
+//! **Cost.** With the partial evaluation left out, the proof gains $2n + 1$ field elements over
+//! the paper's $K - 1$. The prover adds $2^n$ field multiplications for $\widetilde{eq}$, $K
+//! 2^n$ products of a field element by a coordinate for $W$, and $O(2^n)$ field multiplications
+//! for the rounds, small next to the iterations; the verifier adds $O(Kn)$.
 //!
 //! **Bit order.** As in [`crate::mle`]: a table index has the first variable as its most
 //! significant bit, the monomial coefficients of [`hypercube_values`] are ordered as those of
@@ -76,8 +101,7 @@
 
 use crate::error::VerifyError;
 use crate::fs::Fs;
-use crate::iteration::basis;
-use crate::mle::{eq_eval, eq_table, interpolate, powers};
+use crate::mle::{eq_table, interpolate};
 use crate::{Error, Result};
 use hachi_co_math::{Ext, Fqk};
 
@@ -85,9 +109,9 @@ use hachi_co_math::{Ext, Fqk};
 /// evaluations of a multilinear input ([`INPUT_LABELS`], `pcs`) and of every iteration's next
 /// claim (`iteration`); each caller passes its own labels so the two runs never share a frame.
 pub struct Labels {
-    /// The challenge $\gamma$ that batches the $K$ conjugate claims.
-    pub gamma: &'static [u8],
-    /// A round's polynomial at $0, 1, 2$.
+    /// The point $\boldsymbol\eta$ that batches the $K$ claims on the rows.
+    pub eta: &'static [u8],
+    /// A round's polynomial at $0$ and $2$.
     pub round_poly: &'static [u8],
     /// A round's challenge.
     pub challenge: &'static [u8],
@@ -97,41 +121,131 @@ pub struct Labels {
 
 /// The labels of the input reduction's batching sumcheck (`pcs`).
 pub const INPUT_LABELS: Labels = Labels {
-    gamma: b"hachi/input/gamma",
+    eta: b"hachi/input/eta",
     round_poly: b"hachi/input/h",
     challenge: b"hachi/input/round",
     eval: b"hachi/input/final",
 };
 
-/// One round of the batching sumcheck: its polynomial at $0, 1, 2$.
-pub type RoundValues<const K: usize> = [Ext<K>; 3];
+/// One round of the batching sumcheck: its polynomial at $0$ and $2$. The value at 1 is the
+/// running claim minus the value at 0.
+pub type RoundValues<const K: usize> = [Ext<K>; 2];
 
-/// $\varphi^{-t}(x) = \varphi^{K - t}(x)$ for $0 \le t < K$, by $K - t$ Frobenius maps.
-fn conjugate<const K: usize>(field: &Fqk<K>, x: &Ext<K>, t: usize) -> Ext<K> {
-    (0..(K - t % K) % K).fold(*x, |y, _| field.frobenius(&y))
+/// The $K \times K$ matrix of coordinates of `columns` ($K$ field elements) with its two indices
+/// swapped: coordinate $i$ of entry $u$ of the result is coordinate $u$ of `columns[i]`. Of the
+/// partial evaluations, these are the rows $\hat y_u$ (module documentation).
+fn transpose<const K: usize>(columns: &[Ext<K>]) -> [Ext<K>; K] {
+    core::array::from_fn(|u| Ext(core::array::from_fn(|i| columns[i].0[u])))
 }
 
-/// The points $\mathbf p_t = \varphi^{-t}(\mathbf x')$, $t = 0, \dots, K - 1$, of the point
-/// `x` $= \mathbf x'$ (module documentation).
-pub fn conjugate_points<const K: usize>(field: &Fqk<K>, x: &[Ext<K>]) -> Vec<Vec<Ext<K>>> {
-    (0..K)
-        .map(|t| x.iter().map(|xj| conjugate(field, xj, t)).collect())
-        .collect()
+/// The first index with a non-zero weight, whose partial evaluation a proof leaves out (module
+/// documentation). `None` only if every weight is zero, which neither kind of weights can be:
+/// $\mathrm{mono}\_0 = 1$, and the $\widetilde{eq}(i, \mathbf a_1)$ add up to 1.
+fn omitted<const K: usize>(field: &Fqk<K>, weights: &[Ext<K>]) -> Option<usize> {
+    weights.iter().position(|w| !field.is_zero(w))
 }
 
-/// The values $v_t = \sum_i Z_i \varphi^{-t}(y_i)$, $t = 0, \dots, K - 1$, of the partial
-/// evaluations `partials` $= (y_i)\_i$ (module documentation).
-pub fn conjugate_values<const K: usize>(field: &Fqk<K>, partials: &[Ext<K>]) -> Vec<Ext<K>> {
-    (0..K)
-        .map(|t| {
-            partials
-                .iter()
-                .enumerate()
-                .fold(field.zero(), |acc, (i, y)| {
-                    field.add(&acc, &field.mul(&conjugate(field, y, t), &basis::<K>(i)))
-                })
+/// What a proof sends of the $K$ partial evaluations `partials` for the public `weights`: all
+/// but the one the verifier derives (module documentation).
+///
+/// # Errors
+/// [`Error::Protocol`] if every weight is zero.
+pub fn omit<const K: usize>(
+    field: &Fqk<K>,
+    weights: &[Ext<K>],
+    partials: &[Ext<K>],
+) -> Result<Vec<Ext<K>>> {
+    let at = omitted(field, weights)
+        .ok_or_else(|| Error::Protocol("every weight of the partial evaluations is zero".into()))?;
+    Ok(partials
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != at)
+        .map(|(_, y)| *y)
+        .collect())
+}
+
+/// The $K$ partial evaluations from the $K - 1$ of `sent`: the one left out is the solution of
+/// $\sum_i w_i y_i =$ `value` for the public `weights` (module documentation).
+///
+/// # Errors
+/// [`VerifyError::Malformed`] unless there are $K$ weights, not all zero, and $K - 1$ values.
+pub fn complete<const K: usize>(
+    field: &Fqk<K>,
+    weights: &[Ext<K>],
+    value: &Ext<K>,
+    sent: &[Ext<K>],
+) -> core::result::Result<Vec<Ext<K>>, VerifyError> {
+    let at = omitted(field, weights)
+        .filter(|_| weights.len() == K && sent.len() + 1 == K)
+        .ok_or_else(|| {
+            VerifyError::Malformed(format!(
+                "{} partial evaluations for {} weights, {} and {K} expected",
+                sent.len(),
+                weights.len(),
+                K - 1
+            ))
+        })?;
+    let mut partials = sent.to_vec();
+    partials.insert(at, field.zero());
+    let rest = batched(field, weights, &partials);
+    let inverse = field
+        .inv(&weights[at])
+        .ok_or_else(|| VerifyError::Malformed("a zero weight was chosen".into()))?;
+    partials[at] = field.mul(&field.sub(value, &rest), &inverse);
+    Ok(partials)
+}
+
+/// The batching coefficients $\eta_u = \widetilde{eq}(\boldsymbol\eta, \mathrm{bit}(u))$ of the
+/// $\kappa$ coins drawn under `labels` (module documentation).
+///
+/// # Errors
+/// Sampling errors.
+fn batching_coefficients<const K: usize>(
+    field: &Fqk<K>,
+    labels: &Labels,
+    fs: &mut Fs,
+) -> Result<Vec<Ext<K>>> {
+    let kappa = K.trailing_zeros() as usize;
+    Ok(eq_table(
+        field,
+        &fs.field_coins::<K>(labels.eta, field.modulus(), kappa)?,
+    ))
+}
+
+/// The table of $W(\mathbf b) = \sum_u \eta_u A_u(\mathbf b)$ on $\lbrace 0, 1 \rbrace^n$ for
+/// `etas` $= (\eta_u)\_u$, with $A_u(\mathbf b)$ coordinate $u$ of
+/// $\widetilde{eq}(\mathbf x', \mathbf b)$ (module documentation).
+fn weights<const K: usize>(field: &Fqk<K>, etas: &[Ext<K>], x: &[Ext<K>]) -> Vec<Ext<K>> {
+    eq_table(field, x)
+        .iter()
+        .map(|e| {
+            etas.iter().zip(e.0).fold(field.zero(), |acc, (eta, a)| {
+                field.add(&acc, &field.scale(eta, a))
+            })
         })
         .collect()
+}
+
+/// The $(e_u)\_u$ of $\prod_j ((1 - x_j) \otimes (1 - r_j) + x_j \otimes r_j) = \sum_u Z_u \otimes
+/// e_u$ (module documentation), so that $W(\mathbf r) = \sum_u \eta_u e_u$. An element $\sum_u
+/// Z_u \otimes a_u$ of the tensor algebra is held by its rows $(a_u)\_u$, with $Z_0 = 1$. The
+/// transpose gives its columns: $x \otimes 1$ acts on the columns and $1 \otimes y$ on the rows,
+/// each by multiplication in $\mathbb F_{q^K}$.
+fn row_weights<const K: usize>(field: &Fqk<K>, x: &[Ext<K>], r: &[Ext<K>]) -> [Ext<K>; K] {
+    let mut rows = [field.zero(); K];
+    rows[0] = field.one();
+    for (xj, rj) in x.iter().zip(r) {
+        let columns = transpose(&rows);
+        let high = columns.map(|c| field.mul(xj, &c));
+        let low: [Ext<K>; K] = core::array::from_fn(|v| field.sub(&columns[v], &high[v]));
+        let (high, low) = (transpose(&high), transpose(&low));
+        let one_minus = field.sub(&field.one(), rj);
+        rows = core::array::from_fn(|u| {
+            field.add(&field.mul(&low[u], &one_minus), &field.mul(&high[u], rj))
+        });
+    }
+    rows
 }
 
 /// The values on $\lbrace 0, 1 \rbrace^n$ of the multilinear polynomial with the $2^n$
@@ -161,11 +275,14 @@ pub fn hypercube_values<const K: usize>(field: &Fqk<K>, coeffs: &[Ext<K>]) -> Re
     Ok(table)
 }
 
-/// $\sum_t \gamma^t v_t$.
-fn batched<const K: usize>(field: &Fqk<K>, gammas: &[Ext<K>], values: &[Ext<K>]) -> Ext<K> {
-    gammas.iter().zip(values).fold(field.zero(), |acc, (g, v)| {
-        field.add(&acc, &field.mul(g, v))
-    })
+/// $\sum_u c_u v_u$.
+fn batched<const K: usize>(field: &Fqk<K>, coefficients: &[Ext<K>], values: &[Ext<K>]) -> Ext<K> {
+    coefficients
+        .iter()
+        .zip(values)
+        .fold(field.zero(), |acc, (c, v)| {
+            field.add(&acc, &field.mul(c, v))
+        })
 }
 
 /// The prover on a polynomial given by its $2^n$ monomial `coeffs` ([`prove_table`] on the
@@ -183,7 +300,7 @@ pub fn prove<const K: usize>(
 ) -> Result<(Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>)> {
     prove_table(
         field,
-        &hypercube_values(field, coeffs)?,
+        hypercube_values(field, coeffs)?,
         x,
         partials,
         &INPUT_LABELS,
@@ -192,10 +309,11 @@ pub fn prove<const K: usize>(
 }
 
 /// The prover, run after the statement and the partial evaluations were absorbed: draws
-/// $\gamma$, runs the rounds on the table `t` of $f'$ on $\lbrace 0, 1 \rbrace^n$ (hypercube
-/// form, $2^n$ values), and absorbs $f'(\mathbf r)$. Returns the rounds, the point $\mathbf r$
-/// and $f'(\mathbf r)$. `x` is $\mathbf x'$; `partials` serve only to check the honest prover's
-/// invariant, the first round's sum $V$; `labels` frame the transcript.
+/// $\boldsymbol\eta$, runs the rounds on the table `t` of $f'$ on $\lbrace 0, 1 \rbrace^n$
+/// (hypercube form, $2^n$ values), and absorbs $f'(\mathbf r)$. Returns the rounds, the point
+/// $\mathbf r$ and $f'(\mathbf r)$. `x` is $\mathbf x'$; `partials`, all $K$ of them, serve only
+/// to check the honest prover's invariant, the first round's sum $V$; `labels` frame the
+/// transcript.
 ///
 /// # Errors
 /// [`Error::Shape`] unless `t` has $2^{|\mathbf x'|}$ values and there are $K$ partial
@@ -203,7 +321,7 @@ pub fn prove<const K: usize>(
 /// $\mathbf x'$; sampling errors.
 pub fn prove_table<const K: usize>(
     field: &Fqk<K>,
-    t: &[Ext<K>],
+    mut t: Vec<Ext<K>>,
     x: &[Ext<K>],
     partials: &[Ext<K>],
     labels: &Labels,
@@ -215,16 +333,9 @@ pub fn prove_table<const K: usize>(
             x.len()
         )));
     }
-    let gamma = fs.field_coins::<K>(labels.gamma, field.modulus(), 1)?[0];
-    let gammas = powers(field, &gamma, K);
-    let mut t = t.to_vec();
-    let mut w = vec![field.zero(); t.len()];
-    for (g, p) in gammas.iter().zip(conjugate_points(field, x)) {
-        for (wb, e) in w.iter_mut().zip(eq_table(field, &p)) {
-            *wb = field.add(wb, &field.mul(g, &e));
-        }
-    }
-    let sum = batched(field, &gammas, &conjugate_values(field, partials));
+    let etas = batching_coefficients(field, labels, fs)?;
+    let mut w = weights(field, &etas, x);
+    let sum = batched(field, &etas, &transpose(partials));
     let mut rounds = Vec::with_capacity(x.len());
     let mut point = Vec::with_capacity(x.len());
     for round in 0..x.len() {
@@ -243,7 +354,8 @@ pub fn prove_table<const K: usize>(
                 "the partial evaluations are not those of the committed polynomial".into(),
             ));
         }
-        fs.exts(labels.round_poly, &h);
+        let sent = [h[0], h[2]];
+        fs.exts(labels.round_poly, &sent);
         let r = fs.field_coins::<K>(labels.challenge, field.modulus(), 1)?[0];
         for table in [&mut t, &mut w] {
             for i in 0..half {
@@ -252,7 +364,7 @@ pub fn prove_table<const K: usize>(
             }
             table.truncate(half);
         }
-        rounds.push(h);
+        rounds.push(sent);
         point.push(r);
     }
     let value = t[0];
@@ -261,16 +373,15 @@ pub fn prove_table<const K: usize>(
 }
 
 /// The verifier, run after the statement and the partial evaluations were absorbed: draws
-/// $\gamma$, checks the rounds against $V = \sum_t \gamma^t v_t$ and $f'(\mathbf r)$ = `value`
-/// against the last claim, absorbing as [`prove_table`] does under the same `labels`. Returns
-/// $\mathbf r$, at which the rest of the opening must prove $f'(\mathbf r)$ = `value`. `x` is
-/// $\mathbf x'$.
+/// $\boldsymbol\eta$, follows the rounds from $V = \sum_u \eta_u \hat y_u$ and checks
+/// $f'(\mathbf r)$ = `value` against the last claim, absorbing as [`prove_table`] does under the
+/// same `labels`. Returns $\mathbf r$, at which the rest of the opening must prove
+/// $f'(\mathbf r)$ = `value`. `x` is $\mathbf x'$; `partials`, all $K$ of them, come from
+/// [`complete`].
 ///
 /// # Errors
 /// [`VerifyError::Malformed`] unless there are $|\mathbf x'|$ rounds and $K$ partial
-/// evaluations; [`VerifyError::Check`] if a round's values at 0 and 1 do not add up to the
-/// running claim, or if the last claim is not $f'(\mathbf r) \sum_t \gamma^t
-/// \widetilde{eq}(\mathbf r, \mathbf p_t)$.
+/// evaluations; [`VerifyError::Check`] if the last claim is not $f'(\mathbf r) W(\mathbf r)$.
 pub fn verify<const K: usize>(
     field: &Fqk<K>,
     x: &[Ext<K>],
@@ -288,28 +399,16 @@ pub fn verify<const K: usize>(
             x.len()
         )));
     }
-    let gamma = fs.field_coins::<K>(labels.gamma, field.modulus(), 1)?[0];
-    let gammas = powers(field, &gamma, K);
-    let mut claim = batched(field, &gammas, &conjugate_values(field, partials));
+    let etas = batching_coefficients(field, labels, fs)?;
+    let mut claim = batched(field, &etas, &transpose(partials));
     let mut point = Vec::with_capacity(rounds.len());
-    for (i, h) in rounds.iter().enumerate() {
-        if field.add(&h[0], &h[1]) != claim {
-            return Err(VerifyError::Check(format!(
-                "batching sumcheck, round {}",
-                i + 1
-            )));
-        }
+    for h in rounds {
         fs.exts(labels.round_poly, h);
         let r = fs.field_coins::<K>(labels.challenge, field.modulus(), 1)?[0];
-        claim = interpolate(field, h, &r);
+        claim = interpolate(field, &[h[0], field.sub(&claim, &h[0]), h[1]], &r);
         point.push(r);
     }
-    let weight = gammas
-        .iter()
-        .zip(conjugate_points(field, x))
-        .fold(field.zero(), |acc, (g, p)| {
-            field.add(&acc, &field.mul(g, &eq_eval(field, &point, &p)))
-        });
+    let weight = batched(field, &etas, &row_weights(field, x, &point));
     if field.mul(value, &weight) != claim {
         return Err(VerifyError::Check(
             "the batching sumcheck's final value".into(),
@@ -319,11 +418,10 @@ pub fn verify<const K: usize>(
     Ok(point)
 }
 
-/// A dishonest prover, for the tests: the rounds of [`prove`] on the true tables, each with its
-/// value at 0 replaced so that it adds up to the running claim that starts from the batched
-/// value of `partials`, and a final value fitted to the last claim. It passes [`verify`]
-/// whatever the partial evaluations, with a final value that is not $f'(\mathbf r)$ when they
-/// are false: the rest of the opening must reject it.
+/// A dishonest prover, for the tests: the rounds of [`prove`] on the true tables, followed from
+/// the running claim that starts from the batched value of `partials`, and a final value fitted
+/// to the last claim. It passes [`verify`] whatever the partial evaluations, with a final value
+/// that is not $f'(\mathbf r)$ when they are false: the rest of the opening must reject it.
 #[cfg(test)]
 pub(crate) fn prove_fitted<const K: usize>(
     field: &Fqk<K>,
@@ -333,31 +431,22 @@ pub(crate) fn prove_fitted<const K: usize>(
     labels: &Labels,
     fs: &mut Fs,
 ) -> (Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>) {
-    let gamma = fs
-        .field_coins::<K>(labels.gamma, field.modulus(), 1)
-        .unwrap()[0];
-    let gammas = powers(field, &gamma, K);
+    let etas = batching_coefficients(field, labels, fs).unwrap();
     let mut t = hypercube_values(field, coeffs).unwrap();
-    let mut w = vec![field.zero(); t.len()];
-    for (g, p) in gammas.iter().zip(conjugate_points(field, x)) {
-        for (wb, e) in w.iter_mut().zip(eq_table(field, &p)) {
-            *wb = field.add(wb, &field.mul(g, &e));
-        }
-    }
-    let mut claim = batched(field, &gammas, &conjugate_values(field, partials));
+    let mut w = weights(field, &etas, x);
+    let mut claim = batched(field, &etas, &transpose(partials));
     let (mut rounds, mut point) = (Vec::new(), Vec::new());
     for _ in 0..x.len() {
         let half = t.len() / 2;
-        let mut h = [field.zero(); 3];
+        let mut sent = [field.zero(); 2];
         for i in 0..half {
             let (t0, t1, w0, w1) = (t[i], t[i + half], w[i], w[i + half]);
             let t2 = field.sub(&field.add(&t1, &t1), &t0);
             let w2 = field.sub(&field.add(&w1, &w1), &w0);
-            h[1] = field.add(&h[1], &field.mul(&t1, &w1));
-            h[2] = field.add(&h[2], &field.mul(&t2, &w2));
+            sent[0] = field.add(&sent[0], &field.mul(&t0, &w0));
+            sent[1] = field.add(&sent[1], &field.mul(&t2, &w2));
         }
-        h[0] = field.sub(&claim, &h[1]);
-        fs.exts(labels.round_poly, &h);
+        fs.exts(labels.round_poly, &sent);
         let r = fs
             .field_coins::<K>(labels.challenge, field.modulus(), 1)
             .unwrap()[0];
@@ -368,8 +457,8 @@ pub(crate) fn prove_fitted<const K: usize>(
             }
             table.truncate(half);
         }
-        claim = interpolate(field, &h, &r);
-        rounds.push(h);
+        claim = interpolate(field, &[sent[0], field.sub(&claim, &sent[0]), sent[1]], &r);
+        rounds.push(sent);
         point.push(r);
     }
     let value = field.mul(&claim, &field.inv(&w[0]).unwrap());
@@ -380,6 +469,7 @@ pub(crate) fn prove_fitted<const K: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iteration::basis;
     use crate::mle::mle_eval;
     use hachi_co_math::{Ring, Subfield};
 
@@ -441,12 +531,23 @@ mod tests {
         (packed, parts)
     }
 
+    /// $\varphi^t(x)$, for $t$ of either sign.
+    fn conjugate(field: &Fqk<K>, x: &Ext<K>, t: isize) -> Ext<K> {
+        (0..t.rem_euclid(K as isize)).fold(*x, |y, _| field.frobenius(&y))
+    }
+
+    /// The table of $A_u$: coordinate $u$ of $\widetilde{eq}(\mathbf x', \mathbf b)$.
+    fn coordinates(field: &Fqk<K>, x: &[Ext<K>], u: usize) -> Vec<Ext<K>> {
+        eq_table(field, x)
+            .iter()
+            .map(|e| field.from_base(e.0[u]))
+            .collect()
+    }
+
     #[test]
-    fn the_conjugate_points_carry_the_conjugate_values() {
-        // f'(phi^{-t}(x')) = sum_i Z_i phi^{-t}(f_i(x')) for the true partial evaluations,
-        // with f' evaluated in monomial form, as the multilinear extension of its hypercube
-        // values (mle_eval) and as sum_b T(b) eq(b, p_t): this fixes the direction of the
-        // Frobenius and the bit order of the tables.
+    fn the_rows_are_sums_of_the_table_with_base_field_weights() {
+        // y^_u = sum_b A_u(b) T(b): the identity the reduction rests on, for the polynomial in
+        // monomial form and its table in hypercube form, which also fixes the bit order.
         let sub = subfield();
         let field = sub.field();
         for n in [1usize, 2, 5] {
@@ -454,23 +555,85 @@ mod tests {
             let x = exts(100 + n as u64, n);
             let partials: Vec<Ext<K>> = parts.iter().map(|p| evaluate(&sub, p, &x)).collect();
             let table = hypercube_values(field, &packed).unwrap();
-            let values = conjugate_values(field, &partials);
-            for (t, p) in conjugate_points(field, &x).iter().enumerate() {
-                let direct = evaluate(&sub, &packed, p);
-                assert_eq!(direct, values[t], "n {n}, t {t}");
-                assert_eq!(mle_eval(field, &table, p), direct, "n {n}, t {t}");
-                let by_eq = table
+            let rows = transpose(&partials);
+            for (u, row) in rows.iter().enumerate() {
+                let sum = table
                     .iter()
-                    .zip(eq_table(field, p))
-                    .fold(field.zero(), |acc, (v, e)| {
-                        field.add(&acc, &field.mul(v, &e))
+                    .zip(coordinates(field, &x, u))
+                    .fold(field.zero(), |acc, (t, a)| {
+                        field.add(&acc, &field.mul(t, &a))
                     });
-                assert_eq!(by_eq, direct, "n {n}, t {t}");
+                assert_eq!(sum, *row, "n {n}, row {u}");
             }
-            // phi(x') carries v_{K-1}, not v_1: the direction matters.
-            let forward: Vec<Ext<K>> = x.iter().map(|xj| field.frobenius(xj)).collect();
-            assert_eq!(evaluate(&sub, &packed, &forward), values[K - 1], "n {n}");
-            assert_ne!(evaluate(&sub, &packed, &forward), values[1], "n {n}");
+        }
+    }
+
+    #[test]
+    fn the_rows_are_the_claims_on_the_orbit() {
+        // Diamond and Posen's Eq. (16), and the claims of version 3: f'(phi^t(x')) =
+        // sum_u phi^t(Z_u) y^_u, with the Frobenius in the direction that the tests of version 3
+        // fixed: phi^{-t}(x') carries sum_i Z_i phi^{-t}(y_i).
+        let sub = subfield();
+        let field = sub.field();
+        for n in [1usize, 2, 5] {
+            let (packed, parts) = polynomial(10 + n as u64, n);
+            let x = exts(200 + n as u64, n);
+            let partials: Vec<Ext<K>> = parts.iter().map(|p| evaluate(&sub, p, &x)).collect();
+            let rows = transpose(&partials);
+            for t in 0..K as isize {
+                let orbit: Vec<Ext<K>> = x.iter().map(|xj| conjugate(field, xj, t)).collect();
+                let by_rows = rows.iter().enumerate().fold(field.zero(), |acc, (u, row)| {
+                    let z = conjugate(field, &basis::<K>(u), t);
+                    field.add(&acc, &field.mul(&z, row))
+                });
+                assert_eq!(evaluate(&sub, &packed, &orbit), by_rows, "n {n}, t {t}");
+                let by_partials = partials
+                    .iter()
+                    .enumerate()
+                    .fold(field.zero(), |acc, (i, y)| {
+                        let conjugated = conjugate(field, y, t);
+                        field.add(&acc, &field.mul(&basis::<K>(i), &conjugated))
+                    });
+                assert_eq!(by_partials, by_rows, "n {n}, t {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_verifier_weight_is_the_extension_of_the_prover_table() {
+        // row_weights in the tensor algebra against the multilinear extensions of the tables of
+        // the A_u, at random points and at the corners, where it is the table itself.
+        let field = subfield().field().clone();
+        for n in [0usize, 1, 2, 6] {
+            let x = exts(300 + n as u64, n);
+            let tables: Vec<Vec<Ext<K>>> = (0..K).map(|u| coordinates(&field, &x, u)).collect();
+            for seed in 0..4 {
+                let r = exts(400 + seed, n);
+                let got = row_weights(&field, &x, &r);
+                for u in 0..K {
+                    assert_eq!(got[u], mle_eval(&field, &tables[u], &r), "n {n}, row {u}");
+                }
+            }
+            let corners = (0..1usize << n).map(|b| -> Vec<Ext<K>> {
+                (0..n)
+                    .map(|j| field.from_base(((b >> (n - 1 - j)) & 1) as u64))
+                    .collect()
+            });
+            for (b, corner) in corners.enumerate() {
+                let got = row_weights(&field, &x, &corner);
+                let at_b: Vec<Ext<K>> = tables.iter().map(|table| table[b]).collect();
+                assert_eq!(got.to_vec(), at_b, "n {n}, corner {b}");
+            }
+            // The batched weight, from one eq table, against the same extension.
+            let etas = eq_table(&field, &exts(500, 2));
+            assert_eq!(etas.len(), K);
+            let table = weights(&field, &etas, &x);
+            let r = exts(600, n);
+            assert_eq!(
+                batched(&field, &etas, &row_weights(&field, &x, &r)),
+                mle_eval(&field, &table, &r),
+                "n {n}"
+            );
         }
     }
 
@@ -490,10 +653,9 @@ mod tests {
     }
 
     #[test]
-    fn the_conjugates_determine_the_partials() {
-        // A delta in the kernel of the paper's check, sum_i delta_i Z_i = 0, moves some v_t
-        // with t > 0; and for random deltas the K values (sum_i Z_i phi^{-t}(delta_i))_t vanish
-        // only for delta = 0 (the Moore matrix is invertible).
+    fn the_rows_determine_the_partials() {
+        // A delta in the kernel of the paper's check, sum_i delta_i Z_i = 0, moves the rows; for
+        // random deltas the rows vanish only for delta = 0, as they are its coordinates.
         let sub = subfield();
         let field = sub.field();
         let ratio = field.mul(&basis::<K>(1), &field.inv(&basis::<K>(0)).unwrap());
@@ -504,19 +666,58 @@ mod tests {
             field.add(&acc, &field.mul(d, &basis::<K>(i)))
         });
         assert!(field.is_zero(&zero), "delta is in the kernel");
-        let moved = conjugate_values(field, &delta);
-        assert!(field.is_zero(&moved[0]));
-        assert!(moved[1..].iter().any(|v| !field.is_zero(v)));
+        assert!(transpose(&delta).iter().any(|v| !field.is_zero(v)));
+        assert_eq!(transpose(&transpose(&delta)).to_vec(), delta);
         for seed in 0..50 {
             let delta = exts(1000 + seed, K);
-            let values = conjugate_values(field, &delta);
-            assert!(values.iter().any(|v| !field.is_zero(v)), "seed {seed}");
+            assert!(transpose(&delta).iter().any(|v| !field.is_zero(v)));
         }
         assert!(
-            conjugate_values(field, &[field.zero(); K])
+            transpose(&[field.zero(); K])
                 .iter()
                 .all(|v| field.is_zero(v))
         );
+    }
+
+    #[test]
+    fn the_partial_evaluation_left_out_is_derived_from_the_value() {
+        let field = subfield().field().clone();
+        let partials = exts(20, K);
+        for (first, weights) in [
+            // Non-zero weights; a zero first weight, as eq(i, a1) has when a coordinate is 1;
+            // only the last weight left, as at the corners of eq.
+            (0, exts(21, K)),
+            (1, [vec![field.zero()], exts(22, K - 1)].concat()),
+            (K - 1, [vec![field.zero(); K - 1], exts(23, 1)].concat()),
+        ] {
+            let value = batched(&field, &weights, &partials);
+            let sent = omit(&field, &weights, &partials).unwrap();
+            assert_eq!(sent.len(), K - 1);
+            let mut left = partials.clone();
+            left.remove(first);
+            assert_eq!(sent, left, "the omitted index is {first}");
+            assert_eq!(
+                complete(&field, &weights, &value, &sent).unwrap(),
+                partials,
+                "first non-zero weight at {first}"
+            );
+            // Another value moves only the partial evaluation left out, and keeps the check.
+            let other = field.add(&value, &field.one());
+            let moved = complete(&field, &weights, &other, &sent).unwrap();
+            assert_ne!(moved[first], partials[first]);
+            assert_eq!(batched(&field, &weights, &moved), other);
+        }
+        // Malformed inputs: no panic.
+        let weights = exts(24, K);
+        let value = field.one();
+        assert!(complete(&field, &weights, &value, &partials).is_err());
+        assert!(complete(&field, &weights[1..], &value, &partials[1..]).is_err());
+        let zeros = vec![field.zero(); K];
+        assert!(complete(&field, &zeros, &value, &partials[1..]).is_err());
+        assert!(matches!(
+            omit(&field, &zeros, &partials),
+            Err(Error::Protocol(_))
+        ));
     }
 
     #[test]
@@ -556,29 +757,21 @@ mod tests {
                 &mut Fs::new(&context),
             )
         };
+        let last = |v: core::result::Result<Vec<Ext<K>>, VerifyError>| matches!(v, Err(VerifyError::Check(m)) if m == "the batching sumcheck's final value");
         // Every value of every round, and the final value.
         for i in 0..n {
-            for j in 0..3 {
+            for j in 0..2 {
                 let mut bad = rounds.clone();
                 bad[i][j] = field.add(&bad[i][j], &field.one());
-                assert!(
-                    matches!(verdict(&partials, &bad, &value), Err(VerifyError::Check(_))),
-                    "round {i}, value {j}"
-                );
+                assert!(last(verdict(&partials, &bad, &value)), "round {i}, {j}");
             }
         }
         let other = field.add(&value, &field.one());
-        assert!(matches!(
-            verdict(&partials, &rounds, &other),
-            Err(VerifyError::Check(_))
-        ));
+        assert!(last(verdict(&partials, &rounds, &other)));
         // Another partial evaluation, a missing round, a missing partial evaluation.
         let mut moved = partials.clone();
         moved[2] = field.add(&moved[2], &field.one());
-        assert!(matches!(
-            verdict(&moved, &rounds, &value),
-            Err(VerifyError::Check(m)) if m.contains("round 1")
-        ));
+        assert!(last(verdict(&moved, &rounds, &value)));
         assert!(matches!(
             verdict(&partials, &rounds[1..], &value),
             Err(VerifyError::Malformed(_))
