@@ -86,6 +86,19 @@ entry), and use a fresh `session` for every run. The optional fields `connect_ti
 `recv_timeout_ms` (default 60000) set the timeouts. The exit status is 0 on success, 1 if the run or the
 verification failed, 2 for a usage or configuration error, and 3 if the party's address is in use.
 
+`scripts/run_parties.py` does all of this for one instance on one machine: it writes the configurations (the seeds
+are SHA-256 of a tag), starts the parties as local processes, verifies the proof and prints one JSON object with
+the times, each party's peak memory, the bytes sent and the proof's size:
+
+```text
+python3 scripts/run_parties.py --preset bench-l16-n2 --n 2 --out /tmp/run
+```
+
+The presets `bench-l<l>-n<n>` are the insecure choices of `toy-n<n>` with l variables. For large l, `--spill
+<directory>` (the configuration's `spill_dir`) keeps each party's blocks of f′ in a file there, in the clear, and
+recomputes their digits when they are needed. The commitment and the proof are the same. `scripts/bench_grid.py` runs
+a grid of such instances; `benchmarks/README.md` has the results.
+
 ## Documentation
 
 - `cargo docs` builds the documentation of every workspace crate, including private items, into

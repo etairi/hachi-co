@@ -290,6 +290,36 @@ pub fn hachi_preset(name: &str) -> Result<Option<HachiPreset>> {
     Ok(file.presets.get(name).copied())
 }
 
+/// The benchmark choices with $\ell$ variables and $n$ parties: [`toy_choices`]`(n)` with this
+/// $\ell$. **Not secure**, like [`dev_choices`]; they measure the protocol at the small
+/// parameters of the toys. The presets `bench-l<l>-n<n>` of [`preset`], which [`presets`] does
+/// not list.
+pub fn bench_choices(ell: u32, n: u64) -> Choices {
+    Choices {
+        ell,
+        ..toy_choices(n)
+    }
+}
+
+/// The preset `bench-l<l>-n<n>`, if `name` is one ([`bench_choices`]); the suffix `-residues`
+/// selects [`PadRule::Residues`], to measure the two pads against each other.
+pub fn bench_preset(name: &str) -> Option<Preset> {
+    let (rest, pad) = match name.strip_suffix("-residues") {
+        Some(rest) => (rest, PadRule::Residues),
+        None => (name, PadRule::Field),
+    };
+    let (ell, n) = rest.strip_prefix("bench-l")?.split_once("-n")?;
+    Some(Preset {
+        name: name.to_owned(),
+        kind: PresetKind::Dev,
+        choices: Choices {
+            pad,
+            ..bench_choices(ell.parse().ok()?, n.parse().ok()?)
+        },
+        security: None,
+    })
+}
+
 /// Parses the embedded [`SECURE_JSON`].
 ///
 /// # Errors
@@ -335,6 +365,9 @@ pub fn presets() -> Result<Vec<Preset>> {
 ///
 /// [`Error::UnknownPreset`] if there is none, or as [`secure_preset_file`].
 pub fn preset(name: &str) -> Result<Preset> {
+    if let Some(bench) = bench_preset(name) {
+        return Ok(bench);
+    }
     presets()?
         .into_iter()
         .find(|p| p.name == name)

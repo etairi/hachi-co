@@ -5,6 +5,7 @@
 //! ```text
 //! hachi-co-party <config.json>          run the party of the configuration
 //! hachi-co-party --verify <directory>   verify the proof and the statement in an output directory
+//! hachi-co-party --sizes <preset> <n>   print the proof size that the parameter tool predicts
 //! ```
 //!
 //! A party prints its timings and its accounting: the payload bytes and the frames it sent and
@@ -21,7 +22,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: hachi-co-party <config.json>
-       hachi-co-party --verify <output directory>";
+       hachi-co-party --verify <output directory>
+       hachi-co-party --sizes <preset> <n>";
 
 /// The bytes of a frame on the wire besides its label and its payload: the label length (2),
 /// the round (8) and the payload length (8) (`hachi_co_mpc::TcpTransport`, "Frames").
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         [flag, dir] if flag == "--verify" => verify(Path::new(dir)),
+        [flag, preset, n] if flag == "--sizes" => sizes(preset, n),
         [config] if !config.starts_with('-') => run(Path::new(config)),
         _ => {
             eprintln!("{USAGE}");
@@ -120,6 +123,25 @@ fn print_report(config: &PartyConfig, r: &PartyReport) {
             s.calls, s.rounds, s.bytes_sent, s.bytes_received
         );
     }
+}
+
+/// The proof size of the parameter tool for one party of `preset`, in bytes:
+/// [`hachi_co_params::sizes_with_base`] with the words of the preset's base PCS, as encoded and
+/// with each residue in $\lceil \log\_2 q \rceil$ bits.
+fn sizes(preset: &str, n: &str) -> Result<(), HarnessError> {
+    let n = n
+        .parse()
+        .map_err(|e| HarnessError::Config(format!("n = {n}: {e}")))?;
+    let setup = harness::Setup::new(preset, n, &[0; 32])?;
+    let ctx = &setup.ctx;
+    let words = setup
+        .pcs
+        .words(&ctx.layout)
+        .map_err(HarnessError::Protocol)?;
+    let sizes = hachi_co_params::sizes_with_base(&ctx.params, &words)
+        .map_err(|e| HarnessError::Config(format!("{preset}: {e}")))?;
+    println!("{} {}", sizes.total, sizes.packed_total);
+    Ok(())
 }
 
 fn verify(dir: &Path) -> Result<(), HarnessError> {

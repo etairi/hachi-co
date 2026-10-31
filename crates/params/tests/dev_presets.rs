@@ -4,8 +4,8 @@
 //! big integers; q checked to be the smallest admissible prime by an independent search (trial
 //! division); the report flags only the knowledge-error target, as for the toys.
 
-use hachi_co_params::presets::{DEV_ELLS, dev_choices, dev_presets, toy_choices};
-use hachi_co_params::{ConstraintId, Omega, PresetKind, QChoice, TauRule, derive, preset};
+use hachi_co_params::presets::{DEV_ELLS, dev_choices, dev_presets, presets, toy_choices};
+use hachi_co_params::{ConstraintId, Omega, PadRule, PresetKind, QChoice, TauRule, derive, preset};
 use num_bigint::BigUint;
 
 #[test]
@@ -173,4 +173,33 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         .map(|p| p.derive().unwrap().0.ell_dprime)
         .collect();
     assert_eq!(ell_pp, [18, 21, 23]);
+}
+
+/// The names `bench-l<l>-n<n>` and their `-residues` variant parse, the presets are not listed,
+/// and other names are unknown.
+#[test]
+fn bench_presets_are_found_by_name() {
+    let p = preset("bench-l20-n4").unwrap();
+    assert_eq!(p.kind, PresetKind::Dev);
+    assert_eq!(
+        (p.choices.ell, p.choices.n, p.choices.pad),
+        (20, 4, PadRule::Field)
+    );
+    let residues = preset("bench-l20-n4-residues").unwrap();
+    assert_eq!(residues.choices.pad, PadRule::Residues);
+    assert_eq!(residues.choices.ell, 20);
+    for name in [
+        "bench-l20",
+        "bench-lx-n2",
+        "bench-l20-nx",
+        "bench-l20-n4-other",
+    ] {
+        assert!(preset(name).is_err(), "{name}");
+    }
+    assert!(
+        presets()
+            .unwrap()
+            .iter()
+            .all(|p| !p.name.starts_with("bench"))
+    );
 }
