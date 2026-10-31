@@ -98,6 +98,7 @@ fn print_report(config: &PartyConfig, r: &PartyReport) {
         "statement  {}",
         config.output.join(STATEMENT_FILE).display()
     );
+    println!("vector     {}", hachi_co_math::fma::vector_instructions());
     let total = r.stats.total();
     let (mut wire_sent, mut wire_received) = (0u64, 0u64);
     for (label, s) in r.stats.iter() {

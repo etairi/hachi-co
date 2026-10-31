@@ -3,7 +3,8 @@
 
 Prints one JSON object: the commitment and evaluation times of the slowest party, the peak memory of
 each party, the payload bytes and the proof's size. The seeds are SHA-256 of a tag, so a run is reproduced by its
-command line. The peak memory is /usr/bin/time's: the peak footprint on macOS, the peak resident size on Linux.
+command line. The peak memory is /usr/bin/time's: the peak footprint on macOS, the peak resident size on Linux. Each
+party gets its share of the cores, as RAYON_NUM_THREADS, and the verifier gets all of them.
 
     cargo build --release -p hachi-co --bin hachi-co-party
     python3 scripts/run_parties.py --preset toy-n3 --n 3 --out /tmp/run
@@ -55,6 +56,7 @@ def report(stdout):
         "network_s": seconds(get(r"^network\s+(\S+)").group(1)),
         "proof_bytes": int(get(r"^proof\s+(\d+) bytes").group(1)),
         "sent_bytes": int(get(r"^sent\s+(\d+) payload").group(1)),
+        "vector": get(r"^vector\s+(\S+)").group(1),
     }
 
 
@@ -67,7 +69,9 @@ def main():
     parser.add_argument("--port", type=int, default=7300)
     parser.add_argument("--tag", default="hachi-co/bench", help="the seeds are SHA-256 of this tag and an index")
     parser.add_argument("--timeout-ms", type=int, default=3_600_000)
+    parser.add_argument("--threads", type=int, help="threads of each party, by default its share of the cores")
     args = parser.parse_args()
+    threads = args.threads or max(os.cpu_count() // args.n, 1)
     args.out.mkdir(parents=True, exist_ok=True)
     if args.spill:
         args.spill.mkdir(parents=True, exist_ok=True)
@@ -98,6 +102,7 @@ def main():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env={**os.environ, "RAYON_NUM_THREADS": str(threads)},
             )
         )
     parties = []
@@ -142,6 +147,8 @@ def main():
         "sent_bytes_per_party": [p["sent_bytes"] for p in parties],
         "peak_bytes_per_party": [p["peak_bytes"] for p in parties],
         "cores": os.cpu_count(),
+        "threads_per_party": threads,
+        "vector": parties[0]["vector"],
         "platform": platform.platform(),
     }
     print(json.dumps(result))

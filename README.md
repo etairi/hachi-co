@@ -35,6 +35,11 @@ cargo build --release
 cargo test --workspace --release
 ```
 
+On x86-64, `.cargo/config.toml` builds for the CPU of the building machine. The exact products of `hachi-co-math` use
+fused floating-point operations (`crates/math/src/fma.rs`), which are otherwise a library call each; they are exact
+either way, and the crates stay free of `unsafe`. A binary then runs only on machines with the instructions of the
+one that built it.
+
 Hachi's command-line program:
 
 ```text
@@ -96,8 +101,9 @@ python3 scripts/run_parties.py --preset bench-l16-n2 --n 2 --out /tmp/run
 
 The presets `bench-l<l>-n<n>` are the insecure choices of `toy-n<n>` with l variables. For large l, `--spill
 <directory>` (the configuration's `spill_dir`) keeps each party's blocks of f′ in a file there, in the clear, and
-recomputes their digits when they are needed. The commitment and the proof are the same. `scripts/bench_grid.py` runs
-a grid of such instances; `benchmarks/README.md` has the results.
+recomputes their digits when they are needed. The commitment and the proof are the same. Each party gets its share of
+the cores, or `--threads` of them, and the output records this and the vector instructions of the build.
+`scripts/bench_grid.py` runs a grid of such instances; `benchmarks/README.md` has the results.
 
 ## Documentation
 
