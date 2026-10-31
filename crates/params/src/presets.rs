@@ -16,6 +16,10 @@ use serde::{Deserialize, Serialize};
 /// The contents of `crates/params/presets/secure.json`, embedded at compile time.
 pub const SECURE_JSON: &str = include_str!("../presets/secure.json");
 
+/// Hachi's parameters for the secure presets (`presets/hachi.json`, from
+/// `scripts/hachi-parameters/`).
+pub const HACHI_JSON: &str = include_str!("../presets/hachi.json");
+
 /// Whether a preset is meant to be secure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PresetKind {
@@ -235,6 +239,55 @@ pub fn dev_presets() -> Vec<Preset> {
             security: None,
         })
         .collect()
+}
+
+/// The words of the opening proofs of one prover, or the iterations of the openings, for
+/// $\langle \widetilde w \rangle$, $g\_0$ and $g\_1$.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerObject {
+    /// For $\langle \widetilde w \rangle$.
+    pub w: usize,
+    /// For $g\_0$.
+    pub g0: usize,
+    /// For $g\_1$.
+    pub g1: usize,
+}
+
+/// Hachi's parameters for one secure preset, without hiding: an estimate of the Module-SIS
+/// instances of its binding at the preset's $\lambda$ (`scripts/hachi-parameters/choose.py`), one
+/// choice for the three objects that Hachi opens. Hiding is not covered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HachiPreset {
+    /// The decomposition base.
+    pub b: u64,
+    /// The $\ell\_1$ radius of the challenges.
+    pub omega: u64,
+    /// The height of $\mathbf A$.
+    pub n_a: usize,
+    /// The height of $\mathbf B$.
+    pub n_b: usize,
+    /// The height of $\mathbf D$.
+    pub n_d: usize,
+    /// The words of one prover's opening proofs.
+    pub proof_words: PerObject,
+    /// The iterations of the openings.
+    pub iterations: PerObject,
+}
+
+#[derive(Deserialize)]
+struct HachiFile {
+    presets: std::collections::BTreeMap<String, HachiPreset>,
+}
+
+/// The entry of the preset `name` in [`HACHI_JSON`], if it has one.
+///
+/// # Errors
+///
+/// As [`secure_preset_file`], for the embedded [`HACHI_JSON`].
+pub fn hachi_preset(name: &str) -> Result<Option<HachiPreset>> {
+    let file: HachiFile = serde_json::from_str(HACHI_JSON)?;
+    Ok(file.presets.get(name).copied())
 }
 
 /// Parses the embedded [`SECURE_JSON`].

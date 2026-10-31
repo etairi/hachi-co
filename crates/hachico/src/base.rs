@@ -106,6 +106,31 @@ impl<const K: usize> HachiBase<K> {
         }
     }
 
+    /// The choices of the preset `name` from [`hachi_preset`](hachi_co_params::presets::hachi_preset),
+    /// without hiding, or [`HachiBase::default_choices`] for a preset without an entry; the seed
+    /// of the public matrices is derived from the setup seed ([`base_pcs_seed`]).
+    ///
+    /// # Errors
+    /// As [`hachi_preset`](hachi_co_params::presets::hachi_preset).
+    pub fn preset_choices(
+        ctx: &Context<K>,
+        name: &str,
+        seed: &[u8; 32],
+    ) -> Result<HachiChoices, hachi_co_params::Error> {
+        let Some(entry) = hachi_co_params::presets::hachi_preset(name)? else {
+            return Ok(Self::default_choices(ctx, seed));
+        };
+        Ok(HachiChoices {
+            b: entry.b,
+            omega: entry.omega,
+            n_a: entry.n_a,
+            n_b: entry.n_b,
+            n_d: entry.n_d,
+            seed: base_pcs_seed(seed),
+            ..HachiChoices::toy(ctx.layout.d)
+        })
+    }
+
     /// The scheme.
     pub fn pcs(&self) -> &HachiPcs<K> {
         &self.pcs

@@ -12,8 +12,8 @@
 //!   $\mathbf f$ and every share; in a deployment each party would hold its share from elsewhere
 //!   and the claim would be computed jointly.
 //! - The connections are plaintext TCP ([`hachi_co_mpc::TcpTransport`], "Not a secure channel").
-//! - The parameters are insecure test choices: those of the presets that are not `secure-*`,
-//!   and those of [`HachiBase::setup`] at every preset.
+//! - The parameters are insecure test choices, except at the `secure-*` presets, where Hachi
+//!   takes the choices of [`HachiBase::preset_choices`]: estimates for binding, without hiding.
 //!
 //! # Configuration
 //!
@@ -49,7 +49,7 @@
 //! | Value | Derived from |
 //! |---|---|
 //! | the context: the parameters and $\mathbf A, \mathbf B, \mathbf D$ | [`crate::setup`] on the preset's derived parameters, with the setup seed |
-//! | the base PCS | [`HachiBase::setup`] for that context, with the setup seed |
+//! | the base PCS | [`HachiBase::preset_choices`] for that context and preset, with the setup seed |
 //! | $\mathbf f \in \mathbb F\_{q^k}^{2^\ell}$, then $\mathbf x \in \mathbb F\_{q^k}^\ell$ | the PRG stream (instance seed, [`DOMAIN_INSTANCE`], 0), every coordinate by [`uniform_mod_q`] |
 //! | $y = f(\mathbf x)$ | [`hachi_co_conv::evaluate`] |
 //! | the share of party $p \lt n$ | the stream (instance seed, [`DOMAIN_SHARE`], $p$), $2^\ell$ elements as for $\mathbf f$ |
@@ -327,8 +327,8 @@ pub struct Setup {
 
 impl Setup {
     /// $\mathsf{Setup}$ for the preset `preset` with `n` parties and the setup seed `seed`:
-    /// [`crate::setup`] on the preset's derived parameters, and [`HachiBase::setup`] with the
-    /// same seed.
+    /// [`crate::setup`] on the preset's derived parameters, and [`HachiBase`] with
+    /// [`HachiBase::preset_choices`] and the same seed.
     ///
     /// # Errors
     /// [`HarnessError::Config`] for an unknown preset or an $n$ other than the preset's;
@@ -344,7 +344,8 @@ impl Setup {
         }
         let (params, _report) = hachi_co_params::derive(&preset_choices).map_err(config)?;
         let ctx = crate::setup::<K>(params, seed)?;
-        let pcs = HachiBase::setup(&ctx, seed)?;
+        let choices = HachiBase::preset_choices(&ctx, preset, seed).map_err(config)?;
+        let pcs = HachiBase::new(ctx.q(), choices)?;
         Ok(Self { ctx, pcs })
     }
 }

@@ -25,7 +25,8 @@ base PCS of Hachi-Co.
 | `ref/` | — | A SageMath reference implementation of the building blocks, used as a test oracle and fixture generator. |
 
 `parameters.sage` computes parameters and security estimates. It clones the lattice estimator into a
-temporary directory and removes it at exit.
+temporary directory and removes it at exit. `scripts/hachi-parameters/` chooses Hachi's parameters for the secure
+presets.
 
 ## Build and test
 
