@@ -5,12 +5,13 @@
 //! $w \bmod^{\pm} q$). Every method reads a `u64` argument modulo $q$, so an unreduced argument
 //! stands for its residue class, and every method returns a reduced residue.
 //!
-//! Products are computed exactly as `u128` and reduced by the `u128` remainder; this is the
-//! reference arithmetic of the crate, which the faster paths elsewhere (Shoup products in the
-//! transforms and the CRT) are tested against.
+//! Products are computed exactly as `u128` and reduced by division by the invariant $q$
+//! (`Reducer`), which the tests compare with the `u128` remainder, the reference arithmetic of
+//! the crate; the other fast paths (Shoup products in the transforms and the CRT) are tested
+//! against it too.
 
 use crate::{
-    arith::{self, mul_mod, reduce},
+    arith::{self, Reducer, reduce},
     error::{Error, Result},
 };
 
@@ -28,6 +29,8 @@ pub struct Zq {
     q: u64,
     /// $(q-1)/2$: residues above it are negative when centered.
     half: u64,
+    /// Reduction modulo $q$.
+    reducer: Reducer,
 }
 
 impl Zq {
@@ -41,7 +44,11 @@ impl Zq {
         if q < 3 || q.is_multiple_of(2) || q >= 1 << 63 || !is_prime(q) {
             return Err(Error::Modulus(q));
         }
-        Ok(Self { q, half: q / 2 })
+        Ok(Self {
+            q,
+            half: q / 2,
+            reducer: Reducer::new(q),
+        })
     }
 
     /// The modulus $q$ (draft `4_preliminaries.tex`:61).
@@ -81,9 +88,9 @@ impl Zq {
 
     /// $ab \bmod q$, multiplication in $\mathbb Z_q$ (draft `4_preliminaries.tex`:61), from the
     /// exact `u128` product (valid for any `u64` operands).
-    #[inline]
+    #[inline(always)]
     pub fn mul(&self, a: u64, b: u64) -> u64 {
-        mul_mod(a, b, self.q)
+        self.reducer.mul(reduce(a, self.q), reduce(b, self.q))
     }
 
     /// $a^e \bmod q$ in $\mathbb Z_q$ (draft `4_preliminaries.tex`:61) by square and multiply, with
@@ -113,15 +120,27 @@ impl Zq {
     }
 
     /// $x \bmod^+ q$ for a `u128` (draft `4_preliminaries.tex`:86).
-    #[inline]
+    #[inline(always)]
     pub fn reduce_u128(&self, x: u128) -> u64 {
-        (x % u128::from(self.q)) as u64
+        self.reducer.reduce(x)
+    }
+
+    /// $x \bmod^+ q$ for $x \lt q 2^{64}$, a `u128` below that bound (draft
+    /// `4_preliminaries.tex`:86).
+    #[inline(always)]
+    pub(crate) fn reduce_below(&self, x: u128) -> u64 {
+        self.reducer.reduce_below(x)
     }
 
     /// $x \bmod^+ q$ for a signed integer (draft `4_preliminaries.tex`:86).
     #[inline]
     pub fn from_i64(&self, x: i64) -> u64 {
-        i128::from(x).rem_euclid(i128::from(self.q)) as u64
+        let magnitude = reduce(x.unsigned_abs(), self.q);
+        if x >= 0 || magnitude == 0 {
+            magnitude
+        } else {
+            self.q - magnitude
+        }
     }
 
     /// $x \bmod^+ q$ for a signed 128-bit integer (draft `4_preliminaries.tex`:86).

@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 crypto-bigint.workspace = true
+rayon.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

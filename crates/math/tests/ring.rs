@@ -6,6 +6,7 @@ mod common;
 
 use common::*;
 use hachi_co_math::{Error, Poly, Ring};
+use rand::RngExt;
 
 /// Worst-case operands: all $q-1$ (centered $-1$), all $(q-1)/2$ and all $(q+1)/2$ (the centered
 /// extremes $\pm(q-1)/2$), alternating extremes, and the extreme with a sign flip after the first
@@ -236,7 +237,112 @@ fn inner_products_and_matrix_products_equal_sums_of_products() {
         for (row, got) in m.iter().zip(&got) {
             assert_eq!(*got, ring.inner(row, &b).unwrap());
         }
+        // The same matrix, transformed once, against two vectors.
+        let prepared = ring.prepare(&m).unwrap();
+        assert_eq!(ring.mat_vec_prepared(&prepared, &b).unwrap(), got);
+        assert_eq!(
+            ring.mat_vec_prepared(&prepared, &a).unwrap(),
+            ring.mat_vec(&m, &a).unwrap()
+        );
+        assert!(ring.mat_vec_prepared(&prepared, &a[1..]).is_err());
+        assert!(ring.prepare(&[vec![Poly(vec![0; d - 1])]]).is_err());
     }
+}
+
+#[test]
+fn padded_inner_products_are_products_that_do_not_wrap() {
+    let mut rng = rng(16);
+    for q in [Q32, Q63] {
+        let d = 32;
+        let ring = Ring::new(q, d).unwrap();
+        let ring2 = Ring::new(q, 2 * d).unwrap();
+        // 150 pairs: more than one chunk of NADDS, and every length up to d.
+        let short = |rng: &mut _, i: usize| Poly(residues(rng, q, i % d + 1));
+        let a: Vec<Poly> = (0..150).map(|i| short(&mut rng, i)).collect();
+        let b: Vec<Poly> = (0..150).map(|i| short(&mut rng, 2 * i)).collect();
+        let lifted = |x: &Poly| {
+            let mut c = x.0.clone();
+            c.resize(2 * d, 0);
+            Poly(c)
+        };
+        let mut want = ring2.zero();
+        for (x, y) in a.iter().zip(&b) {
+            let product = ring2.mul(&lifted(x), &lifted(y)).unwrap();
+            want = ring2.add(&want, &product).unwrap();
+        }
+        assert_eq!(ring2.inner_padded(&a, &b).unwrap(), want);
+        // Reduced modulo X^d + 1, the padded sum is the inner product of R_q.
+        let full = |p: &Poly| {
+            let mut c = p.0.clone();
+            c.resize(d, 0);
+            Poly(c)
+        };
+        let (fa, fb): (Vec<Poly>, Vec<Poly>) =
+            (a.iter().map(full).collect(), b.iter().map(full).collect());
+        let (low, high) = want.0.split_at(d);
+        let reduced: Vec<u64> = low
+            .iter()
+            .zip(high)
+            .map(|(l, h)| ring.zq().sub(*l, *h))
+            .collect();
+        assert_eq!(ring.inner(&fa, &fb).unwrap().0, reduced);
+    }
+    let ring = Ring::new(Q32, 4).unwrap();
+    let long = [Poly(vec![0; 5])];
+    assert!(ring.inner_padded(&long, &long).is_err());
+    assert!(ring.inner_padded(&[ring.zero()], &[]).is_err());
+}
+
+#[test]
+fn sparse_products_equal_the_exact_product() {
+    let mut rng = rng(17);
+    for q in [5u64, Q32, Q52, Q61, Q63] {
+        for d in [2usize, 16, 256] {
+            let ring = Ring::new(q, d).unwrap();
+            for round in 0..12 {
+                // Every kind of challenge: empty, all of X^j, signs, and larger coefficients.
+                let mut c = vec![0i64; d];
+                let weight = [0, 1, 2, d / 2, d][round % 5];
+                for _ in 0..weight {
+                    let j = rng.random_range(0..d);
+                    c[j] = [1, -1, 2, -2, 7, -3, i64::MAX, i64::MIN + 1][round % 8];
+                }
+                if round == 7 {
+                    c[d - 1] = 1;
+                    c[0] = -1;
+                }
+                let a = Poly(residues(&mut rng, q, d));
+                let start = Poly(residues(&mut rng, q, d));
+                let mut acc = start.clone();
+                let sparse = ring.sparse(&c).unwrap();
+                ring.add_sparse_product(&mut acc, &sparse, &a).unwrap();
+                let product = ring.mul(&ring.from_i64(&c).unwrap(), &a).unwrap();
+                assert_eq!(
+                    acc,
+                    ring.add(&start, &product).unwrap(),
+                    "q {q} d {d} c {c:?}"
+                );
+                // Coefficients read modulo q, as everywhere in the ring.
+                let unreduced = Poly(a.0.iter().map(|x| x + q).collect());
+                if q < 1 << 62 {
+                    let mut again = start.clone();
+                    ring.add_sparse_product(&mut again, &sparse, &unreduced)
+                        .unwrap();
+                    assert_eq!(again, acc, "q {q} d {d}");
+                }
+            }
+        }
+    }
+    let ring = Ring::new(Q32, 16).unwrap();
+    assert!(ring.sparse(&[0; 15]).is_err());
+    let sparse = ring.sparse(&[0; 16]).unwrap();
+    let mut short = Poly(vec![0; 15]);
+    assert!(
+        ring.add_sparse_product(&mut short, &sparse, &ring.zero())
+            .is_err()
+    );
+    let mut ok = ring.zero();
+    assert!(ring.add_sparse_product(&mut ok, &sparse, &short).is_err());
 }
 
 #[test]

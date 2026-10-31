@@ -8,12 +8,12 @@
 //! only errors are polynomials of the wrong length and invalid exponents.
 
 use crate::{
-    arith::{reduce, shoup, shoup_mul},
+    arith::{add_mod, reduce, shoup, shoup_mul, sub_mod},
     error::{Error, Result},
-    rns::Plan,
+    rns::{Plan, Prepared},
     zq::Zq,
 };
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 /// A ring element as its coefficients: entry $j$ is the coefficient of $X^j$, a residue in
 /// $[0, q)$ in canonical form (`docs/m0-spec.md`, "Conventions").
@@ -31,6 +31,14 @@ impl AsRef<[u64]> for Poly {
     fn as_ref(&self) -> &[u64] {
         &self.0
     }
+}
+
+/// A ring element by its nonzero coefficients, for products without a transform
+/// ([`Ring::add_sparse_product`]): a folding challenge has a few small ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sparse {
+    /// The exponent $j$, the residue of $|c_j|$ with its Shoup constant, and whether $c_j \lt 0$.
+    terms: Vec<(usize, u64, u64, bool)>,
 }
 
 /// The ring $\mathcal R_q = \mathbb Z_q\[X\]/(X^d + 1)$ (draft `4_preliminaries.tex`:67) with its
@@ -300,6 +308,127 @@ impl Ring {
     /// [`Error::Length`] for rows of the wrong length or polynomials without $d$ coefficients.
     pub fn mat_vec(&self, m: &[Vec<Poly>], v: &[Poly]) -> Result<Vec<Poly>> {
         Ok(self.plan.mat_vec(m, v)?.into_iter().map(Poly).collect())
+    }
+
+    /// The matrix `m` over $\mathcal R_q$ in the NTT form, for [`Ring::mat_vec_prepared`]: it
+    /// takes one residue per selected NTT prime for each coefficient of `m`.
+    ///
+    /// # Errors
+    /// [`Error::Length`] for polynomials without $d$ coefficients.
+    pub fn prepare(&self, m: &[Vec<Poly>]) -> Result<Prepared> {
+        self.plan.prepare(m)
+    }
+
+    /// [`Ring::prepare`] for vectors of centered coefficients of absolute value at most `norm`,
+    /// with fewer primes when they suffice ([`crate::rns`]).
+    ///
+    /// # Errors
+    /// [`Error::Length`] for polynomials without $d$ coefficients.
+    pub fn prepare_short(&self, m: &[Vec<Poly>], norm: u64) -> Result<Prepared> {
+        self.plan.prepare_short(m, norm)
+    }
+
+    /// [`Ring::mat_vec`] of a vector of centered coefficients of absolute value at most `norm`,
+    /// with fewer primes when they suffice ([`crate::rns`]).
+    ///
+    /// # Errors
+    /// As [`Ring::mat_vec`], and [`Error::Overflow`] for a vector above the bound.
+    pub fn mat_vec_short(&self, m: &[Vec<Poly>], v: &[Poly], norm: u64) -> Result<Vec<Poly>> {
+        let rows = self.plan.mat_vec_short(m, v, norm)?;
+        Ok(rows.into_iter().map(Poly).collect())
+    }
+
+    /// [`Ring::mat_vec`] of a matrix from [`Ring::prepare`], which saves its transforms when
+    /// it multiplies many vectors.
+    ///
+    /// # Errors
+    /// [`Error::Length`] for rows of the wrong length or polynomials without $d$ coefficients;
+    /// [`Error::Overflow`] for a vector above the bound of [`Ring::prepare_short`].
+    pub fn mat_vec_prepared(&self, m: &Prepared, v: &[Poly]) -> Result<Vec<Poly>> {
+        Ok(self
+            .plan
+            .mat_vec_prepared(m, v)?
+            .into_iter()
+            .map(Poly)
+            .collect())
+    }
+
+    /// [`Ring::inner`] of polynomials with at most $d$ coefficients, the others zero
+    /// ([`crate::rns::Plan::inner_padded`]).
+    ///
+    /// # Errors
+    /// [`Error::Length`] for sides of different lengths or polynomials of more than $d$
+    /// coefficients.
+    pub fn inner_padded(&self, a: &[Poly], b: &[Poly]) -> Result<Poly> {
+        Ok(Poly(self.plan.inner_padded(a, b)?))
+    }
+
+    /// The sparse form of the ring element with these signed coefficients, for
+    /// [`Ring::add_sparse_product`].
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless there are $d$ coefficients.
+    pub fn sparse(&self, coeffs: &[i64]) -> Result<Sparse> {
+        if coeffs.len() != self.d {
+            return Err(Error::Length {
+                expected: self.d,
+                actual: coeffs.len(),
+            });
+        }
+        let q = self.modulus();
+        let terms = coeffs
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c != 0)
+            .map(|(j, c)| {
+                let w = reduce(c.unsigned_abs(), q);
+                (j, w, shoup(w, q), *c < 0)
+            })
+            .collect();
+        Ok(Sparse { terms })
+    }
+
+    /// `acc` $\gets$ `acc` $+ ca$ in $\mathcal R_q$, in $O(d)$ operations per coefficient of $c$:
+    /// $X^j a$ is $a$ shifted by $j$, with the top $j$ coefficients negated at the bottom (draft
+    /// `4_preliminaries.tex`:67). `acc` must be reduced.
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless both polynomials have $d$ coefficients.
+    pub fn add_sparse_product(&self, acc: &mut Poly, c: &Sparse, a: &Poly) -> Result<()> {
+        self.check(acc)?;
+        self.check(a)?;
+        let (q, d) = (self.modulus(), self.d);
+        // The loops below stay plain, so that they vectorize, on reduced coefficients.
+        let reduced = if a.0.iter().copied().fold(0, u64::max) < q {
+            Cow::Borrowed(&a.0)
+        } else {
+            Cow::Owned(a.0.iter().map(|x| reduce(*x, q)).collect())
+        };
+        for (j, w, w_shoup, negative) in &c.terms {
+            let (bottom, top) = acc.0.split_at_mut(*j);
+            let (stays, wraps) = reduced.split_at(d - *j);
+            let ((added, to), (subtracted, from)) = if *negative {
+                ((wraps, bottom), (stays, top))
+            } else {
+                ((stays, top), (wraps, bottom))
+            };
+            if *w == 1 {
+                for (x, out) in added.iter().zip(to.iter_mut()) {
+                    *out = add_mod(*out, *x, q);
+                }
+                for (x, out) in subtracted.iter().zip(from.iter_mut()) {
+                    *out = sub_mod(*out, *x, q);
+                }
+            } else {
+                for (x, out) in added.iter().zip(to.iter_mut()) {
+                    *out = add_mod(*out, shoup_mul(*x, *w, *w_shoup, q), q);
+                }
+                for (x, out) in subtracted.iter().zip(from.iter_mut()) {
+                    *out = sub_mod(*out, shoup_mul(*x, *w, *w_shoup, q), q);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The infinity norm $\Vert a \Vert_\infty = \max_j |a_j \bmod^{\pm} q|$ of the centered

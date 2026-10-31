@@ -47,6 +47,9 @@ pub struct Fqk<const K: usize> {
     /// The Frobenius as a signed permutation: coordinate $m$ of $x$ goes to coordinate
     /// `frobenius[m].0` of $x^q$, negated if `frobenius[m].1`.
     frobenius: [(usize, bool); K],
+    /// $(K - 2) q^2$, when $\max(3K - 3, 1)\, q \lt 2^{64}$ (every $q \lt 2^{59}$): then a product
+    /// needs one reduction per coordinate ([`Fqk::mul`]). `None` for larger $q$.
+    offset: Option<u128>,
 }
 
 /// A `u128` accumulator of products below $2^{126}$, reduced lazily so that it never overflows.
@@ -54,15 +57,41 @@ pub struct Fqk<const K: usize> {
 struct Acc(u128);
 impl Acc {
     #[inline(always)]
-    fn add(&mut self, product: u128, q: u64) {
+    fn add(&mut self, product: u128, zq: &Zq) {
         if self.0 >= 1 << 127 {
-            self.0 %= u128::from(q);
+            self.0 = u128::from(zq.reduce_u128(self.0));
         }
         self.0 += product;
     }
-    #[inline(always)]
-    fn reduce(self, q: u64) -> u64 {
-        (self.0 % u128::from(q)) as u64
+}
+
+/// The products $x_a y_b$ of a product in $\mathbb F_{q^K}$ with the coordinates they enter, by the
+/// Chebyshev rule of the module documentation: `add(true, m, p)` adds $p$ to coordinate $m$, and
+/// `add(false, m, p)` subtracts it.
+#[inline(always)]
+fn products<const K: usize>(x: &[u64; K], y: &[u64; K], mut add: impl FnMut(bool, usize, u128)) {
+    for (a, xa) in x.iter().enumerate() {
+        for (b, yb) in y.iter().enumerate() {
+            let p = u128::from(*xa) * u128::from(*yb);
+            if a == 0 || b == 0 {
+                // 1 * e_b = e_b, e_a * 1 = e_a (and 1 * 1 = 1).
+                add(true, a + b, p);
+                continue;
+            }
+            // e_a e_b = e_{a+b} + e_{|a-b|}.
+            let s = a + b;
+            if s < K {
+                add(true, s, p);
+            } else if s > K {
+                add(false, 2 * K - s, p);
+            }
+            if a == b {
+                add(true, 0, p);
+                add(true, 0, p);
+            } else {
+                add(true, a.abs_diff(b), p);
+            }
+        }
     }
 }
 
@@ -90,7 +119,14 @@ impl<const K: usize> Fqk<K> {
             debug_assert!(j != 0 && j != K && j != 2 * K, "q m is not a multiple of K");
             *slot = if j < K { (j, false) } else { (2 * K - j, true) };
         }
-        Ok(Self { zq, frobenius })
+        let units = (3 * K as u128 - 3).max(1);
+        let offset = (units * u128::from(q) < 1 << 64)
+            .then(|| K.saturating_sub(2) as u128 * u128::from(q) * u128::from(q));
+        Ok(Self {
+            zq,
+            frobenius,
+            offset,
+        })
     }
 
     /// The base field $\mathbb Z_q = \mathbb F_q$, the coordinates of Eq. (7).
@@ -147,37 +183,41 @@ impl<const K: usize> Fqk<K> {
 
     /// $xy$, the product of $\mathcal R_q$ restricted to $\mathcal R_q^H$ (Hachi, Lemma 5), by the
     /// Chebyshev rule of the module documentation.
+    ///
+    /// Coordinate $m$ is a sum of at most $2K - 1$ products of residues minus at most $K - 2$
+    /// others. With `offset`, the negative part becomes $(K - 2) q^2$ minus it, and the
+    /// coordinate is below $(3K - 3) q^2 \lt q 2^{64}$, which one reduction takes; otherwise the
+    /// two parts are accumulated and reduced apart.
+    #[inline]
     pub fn mul(&self, x: &Ext<K>, y: &Ext<K>) -> Ext<K> {
-        let q = self.modulus();
+        let (zq, q) = (&self.zq, self.modulus());
         let x = x.0.map(|c| reduce(c, q));
         let y = y.0.map(|c| reduce(c, q));
+        if let Some(offset) = self.offset {
+            let mut pos = [0u128; K];
+            let mut neg = [0u128; K];
+            products(&x, &y, |sign, m, p| {
+                if sign {
+                    pos[m] += p;
+                } else {
+                    neg[m] += p;
+                }
+            });
+            return Ext(core::array::from_fn(|m| {
+                zq.reduce_below(pos[m] + (offset - neg[m]))
+            }));
+        }
         let mut pos = [Acc(0); K];
         let mut neg = [Acc(0); K];
-        for a in 0..K {
-            for b in 0..K {
-                let p = u128::from(x[a]) * u128::from(y[b]);
-                if a == 0 || b == 0 {
-                    // 1 * e_b = e_b, e_a * 1 = e_a (and 1 * 1 = 1).
-                    pos[a + b].add(p, q);
-                    continue;
-                }
-                // e_a e_b = e_{a+b} + e_{|a-b|}.
-                let s = a + b;
-                if s < K {
-                    pos[s].add(p, q);
-                } else if s > K {
-                    neg[2 * K - s].add(p, q);
-                }
-                if a == b {
-                    pos[0].add(p, q);
-                    pos[0].add(p, q);
-                } else {
-                    pos[a.abs_diff(b)].add(p, q);
-                }
+        products(&x, &y, |sign, m, p| {
+            if sign {
+                pos[m].add(p, zq);
+            } else {
+                neg[m].add(p, zq);
             }
-        }
+        });
         Ext(core::array::from_fn(|m| {
-            sub_mod(pos[m].reduce(q), neg[m].reduce(q), q)
+            sub_mod(zq.reduce_u128(pos[m].0), zq.reduce_u128(neg[m].0), q)
         }))
     }
 

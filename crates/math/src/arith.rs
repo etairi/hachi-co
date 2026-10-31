@@ -66,6 +66,86 @@ pub(crate) fn reduce(x: u64, p: u64) -> u64 {
     if x < p { x } else { x % p }
 }
 
+/// Reduction modulo an invariant $p$, $2 \le p < 2^{63}$, without a 128-bit division: the
+/// products of $\mathbb Z_q$ and $\mathbb F_{q^K}$ take this path, which [`mul_mod`], the
+/// reference, checks in the tests.
+///
+/// With $s$ the leading zeros of $p$, $s \ge 1$, the divisor $D = p 2^s$ has its top bit set, and
+/// $v = \lfloor (2^{128} - 1)/D \rfloor - 2^{64}$ is its reciprocal. A number $U = u_1 2^{64} +
+/// u_0$ with $u_1 < D$ is divided by Algorithm 4 of Möller and Granlund, *Improved division by
+/// invariant integers* (IEEE Trans. Computers 60(2), 2011): two 64-bit products and two
+/// conditional corrections. Then $x \bmod p = ((x 2^s) \bmod D)/2^s$.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Reducer {
+    p: u64,
+    /// $D = p 2^s$.
+    divisor: u64,
+    /// $v$.
+    reciprocal: u64,
+    /// $s$.
+    shift: u32,
+}
+
+impl Reducer {
+    /// The reducer of $2 \le p < 2^{63}$.
+    pub(crate) fn new(p: u64) -> Self {
+        debug_assert!((2..1 << 63).contains(&p));
+        let shift = p.leading_zeros();
+        let divisor = p << shift;
+        Self {
+            p,
+            divisor,
+            // The quotient lies in [2^64, 2^65): the cast takes off 2^64.
+            reciprocal: (u128::MAX / u128::from(divisor)) as u64,
+            shift,
+        }
+    }
+
+    /// $U \bmod D$ for $U = u_1 2^{64} + u_0$ with $u_1 < D$.
+    #[inline(always)]
+    fn rem_2by1(&self, u1: u64, u0: u64) -> u64 {
+        let d = self.divisor;
+        // v u1 + U = u1 (v + 2^64) + u0 < 2^128, as u1 < D and v + 2^64 <= (2^128 - 1)/D.
+        let quotient = u128::from(self.reciprocal) * u128::from(u1)
+            + ((u128::from(u1) << 64) | u128::from(u0));
+        let q1 = ((quotient >> 64) as u64).wrapping_add(1);
+        let q0 = quotient as u64;
+        let mut r = u0.wrapping_sub(q1.wrapping_mul(d));
+        if r > q0 {
+            r = r.wrapping_add(d);
+        }
+        if r >= d { r - d } else { r }
+    }
+
+    /// $x \bmod p$ for $x < p 2^{64}$, such as a product of residues.
+    #[inline(always)]
+    pub(crate) fn reduce_below(&self, x: u128) -> u64 {
+        debug_assert!(x >> 64 < u128::from(self.p));
+        let shifted = x << self.shift;
+        self.rem_2by1((shifted >> 64) as u64, shifted as u64) >> self.shift
+    }
+
+    /// $x \bmod p$ for any `u128`.
+    #[inline(always)]
+    pub(crate) fn reduce(&self, x: u128) -> u64 {
+        let high = (x >> 64) as u64;
+        let high = if high < self.p {
+            high
+        } else {
+            // shift >= 1, and high >> (64 - shift) < 2^shift <= D.
+            let (u1, u0) = (high >> (64 - self.shift), high << self.shift);
+            self.rem_2by1(u1, u0) >> self.shift
+        };
+        self.reduce_below((u128::from(high) << 64) | u128::from(x as u64))
+    }
+
+    /// $ab \bmod p$ for $a, b < p$.
+    #[inline(always)]
+    pub(crate) fn mul(&self, a: u64, b: u64) -> u64 {
+        self.reduce_below(u128::from(a) * u128::from(b))
+    }
+}
+
 /// Deterministic Miller–Rabin primality test, exact for every 64-bit integer.
 ///
 /// Trial division by the primes up to 37, then the strong-probable-prime test to the seven
@@ -154,6 +234,68 @@ pub(crate) mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The reducer against the `u128` remainder: for $p$ from 2 up to the largest values below
+    /// $2^{63}$, on every side of a power of two and of a multiple of $p$ (the corrections of
+    /// the division), and on random operands of every size.
+    #[test]
+    fn the_reducer_equals_the_remainder() {
+        let mut rng = SplitMix(5);
+        let mut moduli: Vec<u64> = vec![2, 3, 4, 5, 7, 13, 1 << 31, (1 << 31) + 1, 4294967197];
+        for bits in 2..=62u32 {
+            moduli.extend([(1 << bits) - 1, 1 << bits, (1 << bits) + 1]);
+        }
+        moduli.extend([
+            (1 << 63) - 1,
+            (1 << 63) - 2,
+            (1 << 63) - 25,
+            (1 << 63) - 259,
+        ]);
+        moduli.extend(crate::ntt::NTT_PRIMES.iter().map(|(p, _)| *p));
+        moduli.extend((0..200).map(|_| (rng.next() >> 1) | 1));
+        moduli.extend((0..200).map(|_| (rng.next() >> (2 + rng.next() % 60)) | 2));
+        for p in moduli {
+            let r = Reducer::new(p);
+            let wide = u128::from(p);
+            let mut below: Vec<u128> = vec![0, 1, wide - 1, wide, wide + 1, wide * wide - 1];
+            below.extend([(wide << 64) - 1, (wide << 64) - wide, (wide - 1) << 64]);
+            let mut any: Vec<u128> = below.clone();
+            any.extend([
+                u128::MAX,
+                u128::MAX - 1,
+                u128::MAX - wide,
+                1 << 127,
+                (1 << 64) - 1,
+            ]);
+            any.extend([
+                1 << 64,
+                (u128::MAX / wide) * wide,
+                (u128::MAX / wide) * wide - 1,
+            ]);
+            for _ in 0..200 {
+                let x = (u128::from(rng.next()) << 64) | u128::from(rng.next());
+                any.push(x);
+                any.push(x >> (rng.next() % 128));
+                below.push(x % (wide << 64));
+                below.push((x >> 64) * u128::from(rng.next() % p) % (wide << 64));
+            }
+            for x in below {
+                assert_eq!(
+                    u128::from(r.reduce_below(x)),
+                    x % wide,
+                    "below, p {p} x {x}"
+                );
+            }
+            for x in any {
+                assert_eq!(u128::from(r.reduce(x)), x % wide, "any, p {p} x {x}");
+            }
+            for _ in 0..200 {
+                let (a, b) = (rng.next() % p, rng.next() % p);
+                assert_eq!(r.mul(a, b), reference(a, b, p), "p {p} a {a} b {b}");
+            }
+            assert_eq!(r.mul(p - 1, p - 1), reference(p - 1, p - 1, p));
         }
     }
 

@@ -3,8 +3,9 @@
 //! - [`zq`]: $\mathbb Z_q$ for a runtime prime $q < 2^{63}$, with `u128` reference products.
 //! - [`ntt`] and [`crt`]: negacyclic transforms over NTT primes below $2^{62}$ (sizes up to 4096)
 //!   and the exact CRT straight to $\bmod q$, ported from jali.
+//! - [`fma`]: the faster transforms on doubles over primes below $2^{50}$, tested against [`ntt`].
 //! - [`rns`]: exact products, inner products and matrix-vector products in
-//!   $\mathbb Z_q\[X\]/(X^n + 1)$.
+//!   $\mathbb Z_q\[X\]/(X^n + 1)$, on the transforms of [`fma`] and the CRT.
 //! - [`ring`]: $\mathcal R_q = \mathbb Z_q\[X\]/(X^d + 1)$ with automorphisms and norms.
 //! - [`decompose`]: the balanced decompositions $\mathbf G^{-1}$, $\mathbf J^{-1}$ and their
 //!   gadgets.
@@ -28,6 +29,7 @@ mod arith;
 pub mod crt;
 pub mod decompose;
 pub mod error;
+pub mod fma;
 pub mod fqk;
 pub mod ntt;
 pub mod ring;
@@ -37,6 +39,7 @@ pub mod zq;
 
 pub use error::{Error, Result};
 pub use fqk::{Ext, Fqk};
-pub use ring::{Poly, Ring};
+pub use ring::{Poly, Ring, Sparse};
+pub use rns::Prepared;
 pub use subfield::Subfield;
 pub use zq::Zq;

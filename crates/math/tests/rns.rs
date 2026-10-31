@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use hachi_co_math::{
-    ntt::NTT_PRIMES,
+    fma::FMA_PRIMES,
     rns::{NADDS, Plan},
 };
 use num_bigint::{BigInt, BigUint};
@@ -218,7 +218,7 @@ fn products_are_exact_for_any_modulus_below_2_to_63() {
 #[test]
 fn products_are_exact_at_the_prime_count_boundary() {
     for (k, n) in [(1usize, 16usize), (1, 4096), (2, 16), (2, 4096)] {
-        let p_k: BigUint = NTT_PRIMES[..k]
+        let p_k: BigUint = FMA_PRIMES[..k]
             .iter()
             .map(|(p, _)| BigUint::from(*p))
             .product();

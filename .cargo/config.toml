@@ -5,3 +5,11 @@
 [alias]
 docs = ["doc", "--workspace", "--no-deps", "--document-private-items", "--config", "build.rustdocflags=[\"--html-in-header\",\"katex-header.html\"]"]
 docs-open = ["doc", "--workspace", "--no-deps", "--document-private-items", "--open", "--config", "build.rustdocflags=[\"--html-in-header\",\"katex-header.html\"]"]
+
+# The exact products of hachi-co-math use fused operations (crates/math/src/fma.rs). They are exact
+# on every target, but on x86-64 only the CPU of the building machine has them as instructions,
+# and vectors with them: without this, a build calls a library function per product. A binary
+# then runs only on machines with the instructions of the one that built it. RUSTFLAGS overrides
+# this, as for cross-compiling.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native"]

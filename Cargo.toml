@@ -29,6 +29,7 @@ num-bigint = "0.5"
 num-traits = "0.2"
 rand = "0.10.3"
 rand_chacha = "0.10.0"
+rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -50,3 +51,8 @@ hachi-co-transcript = { path = "crates/transcript" }
 # Tests run optimized (the arithmetic tests are heavy); overflow checks and debug assertions stay on.
 [profile.test]
 opt-level = 3
+
+# The arithmetic spans several crates, and benchmarks are the reason for a release build.
+[profile.release]
+lto = "fat"
+codegen-units = 1

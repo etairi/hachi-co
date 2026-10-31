@@ -1,12 +1,12 @@
-# NTT primes of hachi-co-math (crates/math/src/ntt.rs, NTT_PRIMES).
+# NTT primes of hachi-co-math (crates/math/src/ntt.rs, NTT_PRIMES, and crates/math/src/fma.rs,
+# FMA_PRIMES).
 #
 # Run:  sage crates/math/tools/ntt_primes.sage
 #
-# The primes p are the NUM_PRIMES largest primes below 2^62 with p = 1 (mod 2^13), in descending
-# order. 2^13 | p - 1 gives a primitive 2^13-th root of unity, hence negacyclic transforms of every
+# The primes p of a table are the largest primes below its bound with p = 1 (mod 2^13), in
+# descending order. 2^13 | p - 1 gives a primitive 2^13-th root of unity, hence negacyclic transforms of every
 # power-of-two size n <= 4096 (a negacyclic transform of size n needs a primitive 2n-th root). The
-# bound p < 2^62 is what the Shoup and Montgomery products of the transform need (jali,
-# src/math/ntt.rs).
+# bound p < 2^62 is what the Shoup products of the integer transform need (jali, src/math/ntt.rs).
 #
 # For each prime the root is root = g^((p - 1)/2^13) mod p, where g is the smallest primitive root
 # modulo p, found from the definition (g^((p-1)/l) != 1 for every prime l | p - 1), so the choice
@@ -18,8 +18,6 @@
 
 LOG_ORDER = 13
 ORDER = 2**LOG_ORDER
-NUM_PRIMES = 9
-BOUND = 2**62
 
 
 def smallest_primitive_root(p):
@@ -31,30 +29,38 @@ def smallest_primitive_root(p):
         g += 1
 
 
-primes = []
-p = ((BOUND - 2) // ORDER) * ORDER + 1  # the largest p = 1 (mod 2^13) below 2^62
-while len(primes) < NUM_PRIMES:
-    assert p < BOUND and p % ORDER == 1
-    if is_prime(p):
-        g = smallest_primitive_root(p)
-        root = power_mod(g, (p - 1) // ORDER, p)
-        # order exactly 2^13: root^(2^13) = 1 and root^(2^12) = -1
-        assert power_mod(root, ORDER, p) == 1
-        assert power_mod(root, ORDER // 2, p) == p - 1
-        assert Mod(root, p).multiplicative_order() == ORDER
-        primes.append((p, g, root))
-    p -= ORDER
+def table(name, log_bound, count):
+    bound = 2**log_bound
+    primes = []
+    p = ((bound - 2) // ORDER) * ORDER + 1  # the largest p = 1 (mod 2^13) below the bound
+    while len(primes) < count:
+        assert p < bound and p % ORDER == 1
+        if is_prime(p):
+            g = smallest_primitive_root(p)
+            root = power_mod(g, (p - 1) // ORDER, p)
+            # order exactly 2^13: root^(2^13) = 1 and root^(2^12) = -1
+            assert power_mod(root, ORDER, p) == 1
+            assert power_mod(root, ORDER // 2, p) == p - 1
+            assert Mod(root, p).multiplicative_order() == ORDER
+            primes.append((p, g, root))
+        p -= ORDER
+    print("pub const %s: [(u64, u64); %d] = [" % (name, count))
+    for p, g, root in primes:
+        print("    (%d, %d)," % (p, root))
+    print("];")
+    print()
+    for p, g, root in primes:
+        print("p = %d = 2^%d - %d, v2(p - 1) = %d, smallest primitive root g = %d"
+              % (p, log_bound, bound - p, (p - 1).valuation(2), g))
+    total = 1
+    for p, _, _ in primes:
+        total *= p
+    print("log2(product of the %d primes) = %.3f" % (count, float(log(total, 2))))
+    print()
 
-print("pub const NTT_PRIMES: [(u64, u64); %d] = [" % NUM_PRIMES)
-for p, g, root in primes:
-    print("    (%d, %d)," % (p, root))
-print("];")
-print()
-for p, g, root in primes:
-    print("p = %d = 2^62 - %d, v2(p - 1) = %d, smallest primitive root g = %d"
-          % (p, BOUND - p, (p - 1).valuation(2), g))
-total = 1
-for p, _, _ in primes:
-    total *= p
-print("log2(product of the %d primes) = %.3f" % (NUM_PRIMES, float(log(total, 2))))
+
+table("NTT_PRIMES", 62, 9)
+# The primes of the fused multiply-add transforms (crates/math/src/fma.rs), which work on doubles:
+# below 2^50 their residues and lazy sums are exact integers.
+table("FMA_PRIMES", 50, 3)
 print(version())

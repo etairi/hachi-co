@@ -24,12 +24,18 @@ use crate::{
     ring::{Poly, Ring},
     zq::Zq,
 };
+use rayon::prelude::*;
 
 /// The digit set $[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1]$ of base $b \ge 2$, as
 /// $(-\lfloor b/2 \rfloor, \lfloor (b-1)/2 \rfloor)$ (draft `4_preliminaries.tex`:88, 96).
 pub fn digit_range(b: u64) -> (i128, i128) {
     let b = i128::from(b);
     (-(b / 2), (b - 1) / 2)
+}
+
+/// The largest absolute value of a digit of base $b$ ([`digit_range`]).
+pub fn digit_bound(b: u64) -> u64 {
+    b / 2
 }
 
 /// $S_k = 1 + b + \dots + b^{k-1}$, or `None` if it exceeds `u128`.
@@ -129,17 +135,42 @@ pub fn draft_tau(beta: u128, b: u64) -> Result<usize> {
 }
 
 /// Writes the `out.len()` balanced base-$b$ digits of $z$, least significant first, and returns
-/// what is left, $(z - \sum_i a_i b^i)/b^{k}$: zero exactly when $z$ is representable.
+/// what is left, $(z - \sum_i a_i b^i)/b^{k}$: zero exactly when $z$ is representable. A power of
+/// two takes the masks and shifts of the two's complement, which give the same residues and
+/// exact quotients without a 128-bit division.
+#[inline]
 fn balanced_digits(mut z: i128, b: u64, out: &mut [i64]) -> i128 {
+    let (_, hi) = digit_range(b);
     let b = i128::from(b);
-    let (_, hi) = digit_range(b as u64);
-    for digit in out.iter_mut() {
-        let r = z.rem_euclid(b);
-        let a = if r > hi { r - b } else { r };
-        *digit = a as i64;
-        z = (z - a) / b;
+    if b & (b - 1) == 0 {
+        let (mask, bits) = (b - 1, b.trailing_zeros());
+        for digit in out.iter_mut() {
+            let r = z & mask;
+            let a = if r > hi { r - b } else { r };
+            *digit = a as i64;
+            z = (z - a) >> bits;
+        }
+    } else {
+        for digit in out.iter_mut() {
+            let r = z.rem_euclid(b);
+            let a = if r > hi { r - b } else { r };
+            *digit = a as i64;
+            z = (z - a) / b;
+        }
     }
     z
+}
+
+/// The representative of the residue $x$ that $\mathbf G^{-1}$ decomposes, for `top` the upper
+/// end of the window ([`g_inv_scalar`]).
+#[inline]
+fn representative(zq: &Zq, top: i128, x: u64) -> i128 {
+    let x = i128::from(zq.reduce(x));
+    if x <= top {
+        x
+    } else {
+        x - i128::from(zq.modulus())
+    }
 }
 
 /// $b^\delta \ge q$: the window of $\delta$ digits holds a representative of every residue.
@@ -186,11 +217,8 @@ fn check_digits(b: u64, k: usize, out: &[i64]) -> Result<()> {
 pub fn g_inv_scalar(zq: &Zq, b: u64, delta: usize, x: u64, out: &mut [i64]) -> Result<()> {
     check_digits(b, delta, out)?;
     check_window(zq, b, delta)?;
-    let q = zq.modulus();
-    let x = i128::from(zq.reduce(x));
     let (_, top) = representable_range(b, delta);
-    let representative = if x <= top { x } else { x - i128::from(q) };
-    let rest = balanced_digits(representative, b, out);
+    let rest = balanced_digits(representative(zq, top, x), b, out);
     debug_assert_eq!(rest, 0, "the window holds the representative");
     Ok(())
 }
@@ -222,9 +250,13 @@ pub fn j_inv_scalar(b: u64, tau: usize, z: i64, out: &mut [i64]) -> Result<()> {
 /// # Errors
 /// As [`g_inv_scalar`], and [`Error::Length`] for an entry without $d$ coefficients.
 pub fn g_inv(ring: &Ring, b: u64, delta: usize, t: &[Poly]) -> Result<Vec<Poly>> {
-    check_window(ring.zq(), b, delta)?;
+    let zq = ring.zq();
+    check_window(zq, b, delta)?;
+    let (_, top) = representable_range(b, delta);
     decompose(ring, b, delta, t, |x, out| {
-        g_inv_scalar(ring.zq(), b, delta, x, out)
+        let rest = balanced_digits(representative(zq, top, x), b, out);
+        debug_assert_eq!(rest, 0, "the window holds the representative");
+        Ok(())
     })
 }
 
@@ -236,8 +268,15 @@ pub fn g_inv(ring: &Ring, b: u64, delta: usize, t: &[Poly]) -> Result<Vec<Poly>>
 /// As [`j_inv_scalar`] (a coefficient whose centered value is not representable), and
 /// [`Error::Length`] for an entry without $d$ coefficients.
 pub fn j_inv(ring: &Ring, b: u64, tau: usize, z: &[Poly]) -> Result<Vec<Poly>> {
+    let (min, max) = representable_range(b, tau);
     decompose(ring, b, tau, z, |x, out| {
-        j_inv_scalar(b, tau, ring.zq().to_centered(x), out)
+        let value = i128::from(ring.zq().to_centered(x));
+        if value < min || value > max {
+            return Err(Error::NotRepresentable { value, min, max });
+        }
+        let rest = balanced_digits(value, b, out);
+        debug_assert_eq!(rest, 0, "the window is the representable set");
+        Ok(())
     })
 }
 
@@ -246,26 +285,32 @@ fn decompose(
     b: u64,
     k: usize,
     input: &[Poly],
-    digits_of: impl Fn(u64, &mut [i64]) -> Result<()>,
+    digits_of: impl Fn(u64, &mut [i64]) -> Result<()> + Sync,
 ) -> Result<Vec<Poly>> {
     let d = ring.degree();
-    let mut digits = vec![0i64; k];
-    check_digits(b, k, &digits)?;
+    check_digits(b, k, &vec![0i64; k])?;
+    let zq = ring.zq();
     let mut out = vec![ring.zero(); input.len() * k];
-    for (i, entry) in input.iter().enumerate() {
-        if entry.0.len() != d {
-            return Err(Error::Length {
-                expected: d,
-                actual: entry.0.len(),
-            });
-        }
-        for (j, x) in entry.0.iter().enumerate() {
-            digits_of(*x, &mut digits)?;
-            for (l, digit) in digits.iter().enumerate() {
-                out[i * k + l].0[j] = ring.zq().from_i64(*digit);
-            }
-        }
-    }
+    out.par_chunks_mut(k)
+        .zip(input.par_iter())
+        .try_for_each_init(
+            || vec![0i64; k],
+            |digits, (out, entry)| {
+                if entry.0.len() != d {
+                    return Err(Error::Length {
+                        expected: d,
+                        actual: entry.0.len(),
+                    });
+                }
+                for (j, x) in entry.0.iter().enumerate() {
+                    digits_of(*x, digits)?;
+                    for (poly, digit) in out.iter_mut().zip(digits.iter()) {
+                        poly.0[j] = zq.from_i64(*digit);
+                    }
+                }
+                Ok(())
+            },
+        )?;
     Ok(out)
 }
 
@@ -310,7 +355,7 @@ fn gadget(ring: &Ring, b: u64, k: usize, s: &[Poly]) -> Result<Vec<Poly>> {
         }
     }
     let b = zq.reduce(b);
-    Ok(s.chunks(k)
+    Ok(s.par_chunks(k)
         .map(|digits| {
             // Horner's rule from the most significant digit.
             Poly(

@@ -2,8 +2,8 @@
 //! extended): a reference transform with a remainder per product, the twiddles advanced by a
 //! product per butterfly and every constant recomputed; and, for small sizes, direct evaluation
 //! of the polynomial at $\psi^{2j+1}$ by Horner's rule. Equal outputs for all nine NTT primes
-//! and every size from 2 to 4096, on boundary and random residues; the Montgomery form against
-//! the standard one; the table against its definition; Montgomery products against remainders.
+//! and every size from 2 to 4096, on boundary and random residues; the table against its
+//! definition.
 use super::*;
 use crate::arith::tests::SplitMix;
 
@@ -140,7 +140,6 @@ fn the_table_matches_its_definition() {
 fn transforms_equal_the_reference_for_every_prime_and_degree() {
     let mut rng = SplitMix(1);
     for (index, (p, root)) in NTT_PRIMES.into_iter().enumerate() {
-        let r = ((1u128 << 64) % u128::from(p)) as u64;
         for log_d in 1..=12 {
             let d = 1usize << log_d;
             let psi = root_of_unity(p, root, d);
@@ -160,13 +159,6 @@ fn transforms_equal_the_reference_for_every_prime_and_degree() {
                 if d <= 64 {
                     assert_eq!(new, evaluate(&a, p, psi), "evaluation p {p} d {d}");
                 }
-                // The Montgomery form is the standard one times R.
-                let mut mont = a.clone();
-                plan.forward_mont(&mut mont);
-                let scaled: Vec<u64> = new.iter().map(|x| mul_mod(*x, r, p)).collect();
-                assert_eq!(mont, scaled, "forward_mont p {p} d {d}");
-                plan.inverse_mont(&mut mont);
-                assert_eq!(mont, a, "inverse_mont p {p} d {d}");
                 // The inverse of an arbitrary vector, and the inverse of the transform.
                 let (mut new_inv, mut expected_inv) = (a.clone(), a.clone());
                 plan.inverse(&mut new_inv).unwrap();
@@ -230,21 +222,4 @@ fn invalid_plans_are_rejected() {
     assert!(NttPlan::new(4294967197, 4, 2).is_err());
     // The largest size is accepted.
     assert!(NttPlan::new(p, 4096, psi(4096)).is_ok());
-}
-
-#[test]
-fn montgomery_products_equal_remainders() {
-    let mut rng = SplitMix(2);
-    for (p, root) in NTT_PRIMES {
-        let plan = NttPlan::new(p, 2, root_of_unity(p, root, 2)).unwrap();
-        assert_eq!(p.wrapping_mul(plan.neg_inv.wrapping_neg()), 1);
-        let r_inv = pow_mod(((1u128 << 64) % u128::from(p)) as u64, p - 2, p);
-        let mut values = vec![0, 1, 2, p / 2, p / 2 + 1, p - 2, p - 1];
-        values.extend((0..40).map(|_| rng.next() % p));
-        for &a in &values {
-            for &b in &values {
-                assert_eq!(plan.mont_mul(a, b), mul_mod(mul_mod(a, b, p), r_inv, p));
-            }
-        }
-    }
 }
