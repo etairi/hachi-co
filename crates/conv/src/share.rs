@@ -29,7 +29,7 @@ pub fn u_share<const K: usize>(
     state.validate(l)?;
     public.validate(l)?;
     let mut acc = ring.zero();
-    for block in &state.blocks {
+    state.for_each_block(ctx, |block| {
         let start = block.index * l.block_len;
         let d_block = public
             .d
@@ -41,7 +41,8 @@ pub fn u_share<const K: usize>(
             })?;
         let d_ring: Vec<Poly> = d_block.iter().map(|e| ctx.sub.embed(e)).collect();
         acc = ring.add(&acc, &ring.inner(&d_ring, &block.f_prime)?)?;
-    }
+        Ok::<(), Error>(())
+    })?;
     Ok(acc)
 }
 

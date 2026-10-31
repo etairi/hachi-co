@@ -45,8 +45,16 @@ pub fn decode_received<const K: usize>(
     ctx: &Context<K>,
     incoming: &[Vec<u64>],
 ) -> Result<Vec<Vec<Ext<K>>>> {
+    decode_chunk(ctx, incoming, pow2(ctx.layout.ell, "2^l")?)
+}
+
+/// [`decode_received`] for chunks of `len` elements.
+pub(crate) fn decode_chunk<const K: usize>(
+    ctx: &Context<K>,
+    incoming: &[Vec<u64>],
+    len: usize,
+) -> Result<Vec<Vec<Ext<K>>>> {
     let l = &ctx.layout;
-    let len = pow2(l.ell, "2^l")?;
     let q = ctx.q();
     check_len("received shares (one per party)", l.n, incoming.len())?;
     incoming
@@ -81,8 +89,16 @@ pub fn sum_shares<const K: usize>(
     ctx: &Context<K>,
     received: &[Vec<Ext<K>>],
 ) -> Result<Vec<Ext<K>>> {
+    sum_chunk(ctx, received, pow2(ctx.layout.ell, "2^l")?)
+}
+
+/// [`sum_shares`] for chunks of `len` elements.
+pub(crate) fn sum_chunk<const K: usize>(
+    ctx: &Context<K>,
+    received: &[Vec<Ext<K>>],
+    len: usize,
+) -> Result<Vec<Ext<K>>> {
     let l = &ctx.layout;
-    let len = pow2(l.ell, "2^l")?;
     check_len("received shares (one per party)", l.n, received.len())?;
     let field = ctx.field();
     let mut sum = vec![field.zero(); len];

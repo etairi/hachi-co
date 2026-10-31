@@ -129,7 +129,12 @@ pub fn owned_w<const K: usize>(
     state: &PartyState<K>,
 ) -> Result<Vec<BlockW>> {
     state.validate(&ctx.layout)?;
-    state.blocks.iter().map(|b| block_w(ctx, pv, b)).collect()
+    let mut out = Vec::with_capacity(state.blocks.len());
+    state.for_each_block(ctx, |block| {
+        out.push(block_w(ctx, pv, block)?);
+        Ok::<(), Error>(())
+    })?;
+    Ok(out)
 }
 
 /// The images of a mask $\mathbf r\_p$ (`5_Building_Blocks.tex`:123-126).
@@ -461,7 +466,7 @@ pub fn fold<const K: usize>(
     check_challenges(ctx, c)?;
     let (d, q) = (l.d, ctx.q());
     let mut acc = vec![0i64; response_len(ctx)];
-    for block in &state.blocks {
+    state.for_each_block(ctx, |block| {
         let ci = &c[block.index];
         for (row, s) in block.s.iter().enumerate() {
             let mut digits = centered_digits(s, q)?;
@@ -473,7 +478,8 @@ pub fn fold<const K: usize>(
             }
             crate::ct::wipe(&mut product);
         }
-    }
+        Ok::<(), Error>(())
+    })?;
     Ok(acc)
 }
 

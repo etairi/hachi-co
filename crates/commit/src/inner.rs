@@ -86,6 +86,7 @@ pub fn party_state<const K: usize>(
         share,
         blocks,
         rho_u,
+        spill: None,
     })
 }
 
@@ -93,7 +94,7 @@ pub fn party_state<const K: usize>(
 fn check_blocks<const K: usize>(ctx: &Context<K>, blocks: &[BlockState]) -> Result<()> {
     let mut seen = vec![false; ctx.layout.n_blocks];
     for block in blocks {
-        block.validate(&ctx.layout)?;
+        block.validate_commitment(&ctx.layout)?;
         if core::mem::replace(&mut seen[block.index], true) {
             return Err(Error::DuplicateBlock { index: block.index });
         }

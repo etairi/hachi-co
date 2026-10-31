@@ -9,6 +9,7 @@
 //! |---|---|---|
 //! | [`setup`] | $\mathsf{Setup}$: [`Context::setup`] ($\mathbf A, \mathbf B, \mathbf D$ from a seed) | `6_Collaborative_Hachi.tex`:265-303 |
 //! | [`commit`] | $\mathsf{Commit}$ of one party: [`hachi_co_commit::commit`] | 300-391 |
+//! | [`commit_streaming`] | [`commit`] with the blocks of $\mathbf f'$ on disk | 300-391 |
 //! | [`eval`], [`eval_with`], [`EvalOutput`] | $\mathsf{Eval}$ of one party with Fiat-Shamir and a base PCS ([`BasePcs`]) | 408-419 |
 //! | [`verify`], [`verify_with`], [`verify_claims_with`] | the verifier, with the $3n$ openings of the base PCS | 408-419; `5_Building_Blocks.tex`:308-366 |
 //! | [`EvalProof`], [`encoded_len`], [`EvalProof::encoded_len`] | the proof, its canonical encoding and its length | — |
@@ -157,7 +158,7 @@ mod verifier;
 pub use base::{HACHI_BASE_DIGEST_DOMAIN, HachiBase, SETUP_DOMAIN_BASE_PCS, base_pcs_seed};
 pub use error::{DecodeError, Error, ProofError, StatementError, VerifyError};
 pub use proof::{EvalProof, HEADER_LEN, MAGIC, VERSION, encoded_len};
-pub use prover::{EvalOutput, commit, eval, eval_with, setup};
+pub use prover::{EvalOutput, commit, commit_streaming, eval, eval_with, setup};
 pub use statement::{
     EVAL_DOMAIN, LABEL_PP_A, LABEL_PP_B, LABEL_PP_BASE, LABEL_PP_D, LABEL_X, LABEL_Y,
     LABELS_PARAMS, absorb_statement, check_statement, statement_words,

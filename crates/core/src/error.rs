@@ -91,6 +91,10 @@ pub enum Error {
     /// recording (feature `fixtures`).
     #[error("replay: {0}")]
     Replay(String),
+    /// The file of a state kept on disk ([`SpillFile`](crate::SpillFile)) failed; the message
+    /// names it.
+    #[error("spill file: {0}")]
+    Spill(String),
     /// A fixture could not be read or decoded, or disagrees with the Rust parameters (feature
     /// `fixtures`).
     #[error("fixture: {0}")]

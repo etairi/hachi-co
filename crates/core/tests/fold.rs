@@ -38,6 +38,7 @@ fn state(fx: &Fixture, ctx: &Context<K>, p: usize) -> PartyState<K> {
         share: fx.exts(&format!("/commit/f_shares/{}", p - 1)).unwrap(),
         blocks,
         rho_u: vec![ctx.ring.zero(); l.m_u],
+        spill: None,
     }
 }
 

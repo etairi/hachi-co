@@ -81,6 +81,7 @@ fn configs(n: usize, attempt: u64, addresses: &[SocketAddr], dir: &Path) -> Vec<
             output: dir.join(format!("party-{p}")),
             connect_timeout_ms: 20_000,
             recv_timeout_ms: 30_000,
+            spill_dir: None,
         })
         .collect()
 }

@@ -18,6 +18,9 @@
 //! | 6. $\mathbf u = \mathbf B (\hat{\mathbf t}, \boldsymbol\rho^u)$ (383-397) | [`t_hat_slice`], [`fah_b_input`] | `fah` ([`LABEL_FAH_B`]) |
 //! | 7. $\mathbf u$ and $\mathsf{st}\_p$ (400) | [`commit`] | |
 //!
+//! [`commit_streaming`] runs the same steps block by block, for a polynomial too large for memory,
+//! with the blocks of $\mathbf f'$ on disk.
+//!
 //! [`open`] is $\mathsf{Open}$ (lines 403-419), reporting each condition ([`OpenReport`]); its
 //! slack space needs the invertibility test of [`units`]. The global view of $\mathsf{PConv}$
 //! ([`pconv`], [`f_hat`], [`f_prime_of_f_hat`]) and its inverse ([`f_hat_of_f_prime`],
@@ -53,7 +56,7 @@ mod polyconv;
 mod share;
 pub mod units;
 
-pub use driver::{LABEL_FAH_B, LABEL_RESHARE, LABEL_U, commit};
+pub use driver::{LABEL_FAH_B, LABEL_RESHARE, LABEL_U, commit, commit_streaming};
 pub use error::{Error, Result};
 pub use inner::{block_state, fah_b_input, party_state, sample_rho_u, t_hat_slice};
 pub use opening::{OpenChecks, OpenReport, c_star, open};

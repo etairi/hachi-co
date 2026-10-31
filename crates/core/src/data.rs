@@ -5,8 +5,8 @@
 //! Each type has a `validate` method that checks its shape (lengths and the number of
 //! coefficients of every polynomial) against a [`Layout`]; it does not check values.
 
-use crate::{Error, Layout, Result};
-use hachi_co_math::{Ext, Poly};
+use crate::{Context, Error, Layout, Result, SpillFile};
+use hachi_co_math::{Ext, Poly, decompose};
 use hachi_co_mpc::PartyId;
 
 /// A matrix over a polynomial ring, row-major: `m[i][j]` is entry $(i, j)$
@@ -78,6 +78,18 @@ impl BlockState {
     /// # Errors
     /// [`Error::Shape`] for the first wrong length.
     pub fn validate(&self, layout: &Layout) -> Result<()> {
+        self.validate_commitment(layout)?;
+        let d = layout.d;
+        check_polys("f'_i", &self.f_prime, layout.block_len, d)?;
+        check_polys("s_i", &self.s, layout.width_a, d)
+    }
+
+    /// [`BlockState::validate`] without $\mathbf f'\_i$ and $\mathbf s\_i$, which a state on
+    /// disk does not hold.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for the first wrong length.
+    pub fn validate_commitment(&self, layout: &Layout) -> Result<()> {
         if self.index >= layout.n_blocks {
             return Err(Error::Shape {
                 what: "block index (must be below 2^r)",
@@ -86,8 +98,6 @@ impl BlockState {
             });
         }
         let d = layout.d;
-        check_polys("f'_i", &self.f_prime, layout.block_len, d)?;
-        check_polys("s_i", &self.s, layout.width_a, d)?;
         check_polys("t_i", &self.t, layout.n_a, d)?;
         check_polys("t_hat_i", &self.t_hat, layout.n_a * layout.delta, d)
     }
@@ -96,6 +106,10 @@ impl BlockState {
 /// Prover $p$'s private state after Commit: $\mathsf{st}\_p$ of `6_Collaborative_Hachi.tex`:400
 /// (the triples $(\mathbf f'\_i, \mathbf s\_i, \hat{\mathbf t}\_i)$ of the blocks it holds, here
 /// with $\mathbf t\_i$ as well) plus its share $\langle \mathbf f \rangle\_p$ of the coefficients.
+///
+/// A state with [`PartyState::spill`] keeps $\mathbf f'\_i$ on disk: its blocks have empty
+/// `f_prime` and `s`, its `share` is empty, and [`PartyState::for_each_block`] is the way to read
+/// them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyState<const K: usize> {
     /// The prover $p \in \lbrace 1, \dots, n \rbrace$.
@@ -111,12 +125,15 @@ pub struct PartyState<const K: usize> {
     /// ring elements of residues. Every evaluation of this commitment reuses it
     /// (`t-hiding.tex`:13).
     pub rho_u: Vec<Poly>,
+    /// The file that holds $\mathbf f'\_i$ of the blocks, in order, if they are not in memory.
+    pub spill: Option<SpillFile>,
 }
 
 impl<const K: usize> PartyState<K> {
     /// Checks that $p \in \lbrace 1, \dots, n \rbrace$, that the share has $2^\ell$ entries,
     /// that the blocks are exactly [`Layout::blocks_of`]`(p)`, in order, each valid, and that
-    /// $\boldsymbol\rho^u\_p$ has $m\_u$ entries.
+    /// $\boldsymbol\rho^u\_p$ has $m\_u$ entries; for a state on disk, the same without the
+    /// share, $\mathbf f'\_i$ and $\mathbf s\_i$.
     ///
     /// # Errors
     /// [`Error::InvalidParty`], [`Error::Shape`] or [`Error::Overflow`].
@@ -127,7 +144,9 @@ impl<const K: usize> PartyState<K> {
                 n: layout.n,
             });
         }
-        check_len("<f>_p", pow2(layout.ell, "2^l")?, self.share.len())?;
+        if self.spill.is_none() {
+            check_len("<f>_p", pow2(layout.ell, "2^l")?, self.share.len())?;
+        }
         let owned = layout.blocks_of(self.party);
         check_len("blocks of the state", owned.len(), self.blocks.len())?;
         for (block, i) in self.blocks.iter().zip(owned) {
@@ -138,9 +157,42 @@ impl<const K: usize> PartyState<K> {
                     actual: block.index,
                 });
             }
-            block.validate(layout)?;
+            if self.spill.is_none() {
+                block.validate(layout)?;
+            } else {
+                block.validate_commitment(layout)?;
+            }
         }
         check_polys("rho^u_p", &self.rho_u, layout.m_u, layout.d)
+    }
+
+    /// Calls `visit` on every block, in order, with $\mathbf f'\_i$ and $\mathbf s\_i$: the
+    /// blocks themselves, or for a state on disk each block read back and decomposed, one at a
+    /// time.
+    ///
+    /// # Errors
+    /// The first error of `visit`; [`Error::Spill`] or [`Error::Math`] for a state on disk.
+    pub fn for_each_block<E: From<Error>>(
+        &self,
+        ctx: &Context<K>,
+        mut visit: impl FnMut(&BlockState) -> core::result::Result<(), E>,
+    ) -> core::result::Result<(), E> {
+        let Some(file) = &self.spill else {
+            return self.blocks.iter().try_for_each(visit);
+        };
+        for (slot, block) in self.blocks.iter().enumerate() {
+            let f_prime = file.read_block(slot)?;
+            let s = decompose::g_inv(&ctx.ring, ctx.b(), ctx.layout.delta, &f_prime)
+                .map_err(Error::from)?;
+            visit(&BlockState {
+                index: block.index,
+                f_prime,
+                s,
+                t: block.t.clone(),
+                t_hat: block.t_hat.clone(),
+            })?;
+        }
+        Ok(())
     }
 }
 

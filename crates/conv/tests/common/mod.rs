@@ -64,6 +64,7 @@ pub fn state_from_share(ctx: &Context<K>, p: PartyId, share: Vec<Ext<K>>) -> Par
         share,
         blocks,
         rho_u: vec![ctx.ring.zero(); ctx.layout.m_u],
+        spill: None,
     }
 }
 

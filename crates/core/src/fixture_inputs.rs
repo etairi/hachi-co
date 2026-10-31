@@ -69,6 +69,7 @@ impl Fixture {
             share: self.exts(&format!("/commit/f_shares/{}", p - 1))?,
             blocks,
             rho_u,
+            spill: None,
         };
         state.validate(l)?;
         Ok(state)

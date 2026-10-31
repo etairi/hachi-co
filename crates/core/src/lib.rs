@@ -10,6 +10,7 @@
 //! | [`Layout`] | positions in $\mathbf z'$, rows of $\mathbf M$, block owners, $S\_p$, hypercube sizes | `5_Building_Blocks.tex`:170-186, 226; `6_Collaborative_Hachi.tex`:282-285, 421 |
 //! | [`build_m`], [`build_y`] | the linear relation $\mathbf M \mathbf z' = \mathbf y$ | `5_Building_Blocks.tex`:167-196 |
 //! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:400; `field-to-ring-rok.tex`:140-151; `5_Building_Blocks.tex`:177-193, 238-243, 275-282 |
+//! | [`SpillFile`] | the blocks of $\mathbf f'$ on disk, for large polynomials | |
 //! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:122, 238-243 |
 //! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir, and the contexts of the base-PCS openings | `5_Building_Blocks.tex`:134-138, 275-282, 344, 346-358 |
 //! | [`BasePcs`], [`base_pcs`] | the base PCS of the sumcheck (commitments and openings of $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$), the Möbius transform, evaluations | `5_Building_Blocks.tex`:238-273, 346-365 |
@@ -60,6 +61,7 @@ mod layout;
 mod linear;
 mod randomness;
 pub mod short;
+mod spill;
 pub mod wire;
 
 #[cfg(feature = "fixtures")]
@@ -85,8 +87,9 @@ pub use layout::{Layout, NamedBlock};
 pub use linear::{build_m, build_y};
 pub use randomness::{
     DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE,
-    DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, PartyRandomness, PrgRandomness,
+    DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, PartyRandomness, PrgRandomness, ReshareStream,
 };
+pub use spill::SpillFile;
 
 #[cfg(feature = "fixtures")]
 pub use clear_pcs::{ClearCommitment, ClearOpening, ClearPcs, ClearPolynomial};

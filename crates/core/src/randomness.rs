@@ -67,6 +67,19 @@ pub trait PartyRandomness<const K: usize> {
     /// [`Error::Parameter`] for $n = 0$, and implementation-specific errors.
     fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>>;
 
+    /// [`PartyRandomness::reshare`] of a vector given in consecutive chunks, for a vector too
+    /// large for memory: the concatenated shares do not depend on the chunks. It replaces the
+    /// draw of `reshare`, not an addition to it.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] for $n = 0$ or a source without streams, and implementation-specific
+    /// errors.
+    fn reshare_stream(&mut self, _field: &Fqk<K>, _n: usize) -> Result<ReshareStream<K>> {
+        Err(Error::Parameter(
+            "this randomness source has no streaming AS.Share".into(),
+        ))
+    }
+
     /// The mask $\mathbf r\_i \leftarrow \chi\_r$ of attempt `attempt` of the ring-to-linear step
     /// (`5_Building_Blocks.tex`:122; `4_preliminaries.tex`:117): `len` $= N = d\delta 2^m$
     /// integers uniform in $\[-\gamma, \gamma\]$, flat (element $i$, coefficient $j$ at $id + j$).
@@ -192,26 +205,58 @@ impl PrgRandomness {
     }
 }
 
+/// $\mathsf{AS.Share}$ of a vector given in consecutive chunks
+/// ([`PartyRandomness::reshare_stream`]): share $j \lt n$ is the stream
+/// (seed, [`DOMAIN_RESHARE`], $j - 1$) of uniform elements of $\mathbb F\_{q^K}$.
+pub struct ReshareStream<const K: usize> {
+    field: Fqk<K>,
+    shares: Vec<ShakePrg>,
+}
+
+impl<const K: usize> ReshareStream<K> {
+    /// The shares of the next chunk `input`, in order; share $j$ goes to party $j$.
+    ///
+    /// # Errors
+    /// The errors of the sampler.
+    pub fn next_chunk(&mut self, input: &[Ext<K>]) -> Result<Vec<Vec<Ext<K>>>> {
+        let (field, q) = (&self.field, self.field.modulus());
+        let mut last: Vec<Ext<K>> = input.iter().map(|x| field.reduce(x)).collect();
+        let mut shares = Vec::with_capacity(self.shares.len() + 1);
+        for prg in &mut self.shares {
+            let share = (0..input.len())
+                .map(|_| uniform_ext::<K>(prg, q))
+                .collect::<Result<Vec<_>>>()?;
+            for (l, s) in last.iter_mut().zip(&share) {
+                *l = field.sub(l, s);
+            }
+            shares.push(share);
+        }
+        shares.push(last);
+        Ok(shares)
+    }
+}
+
 impl<const K: usize> PartyRandomness<K> for PrgRandomness {
     fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>> {
+        PartyRandomness::<K>::reshare_stream(self, field, n)?.next_chunk(input)
+    }
+
+    fn reshare_stream(&mut self, field: &Fqk<K>, n: usize) -> Result<ReshareStream<K>> {
         if n == 0 {
             return Err(Error::Parameter("AS.Share needs n >= 1".into()));
         }
-        let q = field.modulus();
-        self.draw(DOMAIN_RESHARE, 0, |prg| {
-            let mut shares = Vec::with_capacity(n);
-            let mut last: Vec<Ext<K>> = input.iter().map(|x| field.reduce(x)).collect();
-            for _ in 1..n {
-                let share = (0..input.len())
-                    .map(|_| uniform_ext::<K>(prg, q))
-                    .collect::<Result<Vec<_>>>()?;
-                for (l, s) in last.iter_mut().zip(&share) {
-                    *l = field.sub(l, s);
-                }
-                shares.push(share);
-            }
-            shares.push(last);
-            Ok(shares)
+        if !self.used.insert((DOMAIN_RESHARE, 0)) {
+            return Err(Error::RandomnessReuse {
+                kind: DOMAIN_RESHARE,
+                index: 0,
+            });
+        }
+        let shares = (1..n as u64)
+            .map(|j| ShakePrg::new(&self.seed, DOMAIN_RESHARE.as_bytes(), j - 1))
+            .collect();
+        Ok(ReshareStream {
+            field: field.clone(),
+            shares,
         })
     }
 

@@ -2,12 +2,13 @@
 //! [`Comm`].
 
 use crate::error::{Error, Result};
-use crate::inner::{fah_b_input, party_state, sample_rho_u};
-use crate::share::{decode_received, reshare, sum_shares};
+use crate::inner::{block_state, fah_b_input, party_state, sample_rho_u};
+use crate::share::{decode_chunk, decode_received, reshare, sum_chunk, sum_shares};
 use hachi_co_core::wire::{flatten_exts, flatten_polys, unflatten_polys};
-use hachi_co_core::{Context, PartyRandomness, PartyState};
+use hachi_co_core::{Context, PartyRandomness, PartyState, SpillFile};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_mpc::Comm;
+use std::path::Path;
 
 /// The [`Comm::exchange`] label of the resharing (step 1, `6_Collaborative_Hachi.tex`:308-310).
 pub const LABEL_RESHARE: &str = "hachi-co/commit/reshare";
@@ -76,7 +77,6 @@ pub fn commit<const K: usize, C: Comm, R: PartyRandomness<K>>(
     f_init: &[Ext<K>],
 ) -> Result<(Vec<Poly>, PartyState<K>)> {
     check_comm(ctx, comm)?;
-    let l = &ctx.layout;
     // Step 1: AS.Share and the pairwise exchange.
     let shares = reshare(ctx, rng, f_init)?;
     let outgoing = shares.iter().map(|s| flatten_exts(s)).collect();
@@ -87,13 +87,82 @@ pub fn commit<const K: usize, C: Comm, R: PartyRandomness<K>>(
     // Steps 3-4: PConv of the party's blocks and the inner commitments.
     let rho_u = sample_rho_u(ctx, rng)?;
     let state = party_state(ctx, comm.id(), share, rho_u)?;
-    // Step 5: F_AH(B).
+    let u = fah_b(ctx, comm, &state)?;
+    Ok((u, state))
+}
+
+/// Step 6: $\mathbf u$ from $\mathcal F\_{\mathsf{AH}}(\mathbf B)$.
+fn fah_b<const K: usize, C: Comm>(
+    ctx: &Context<K>,
+    comm: &mut C,
+    state: &PartyState<K>,
+) -> Result<Vec<Poly>> {
+    let l = &ctx.layout;
     let local = fah_b_input(ctx, state.party, &state.blocks, &state.rho_u)?;
     let output = comm.fah(LABEL_FAH_B, &flatten_polys(&local))?;
-    let u = unflatten_polys(&output, l.n_b, l.d).map_err(|_| Error::Shape {
+    unflatten_polys(&output, l.n_b, l.d).map_err(|_| Error::Shape {
         what: "F_AH(B) output (n_B d residues)",
         expected: l.n_b.saturating_mul(l.d),
         actual: output.len(),
-    })?;
+    })
+}
+
+/// [`commit`] for a polynomial too large for memory: the same messages and the same commitment,
+/// with the party's initial share given block by block and the blocks of $\mathbf f'$ kept on
+/// disk ([`SpillFile`], in the directory `dir`). `input(j)` returns the $j$-th chunk of
+/// $\mathbf f\_p$, of $2^m d/k$ elements, $j \lt$ `blocks_per_party`; its entries are the
+/// coefficients of the $j$-th of the party's blocks. Every chunk goes through the steps of
+/// [`commit`] on its own, so that memory holds one block of $\mathbf s\_i$ at a time; `exchange`
+/// runs once per chunk, and with [`PartyRandomness::reshare_stream`] the shares do not depend on
+/// the chunks.
+///
+/// The state has no `share` and no `f_prime` or `s` in its blocks
+/// ([`PartyState::for_each_block`]).
+///
+/// # Errors
+/// As [`commit`]; [`Error::Core`] if the file fails; `input`'s errors.
+pub fn commit_streaming<const K: usize, C: Comm, R: PartyRandomness<K>>(
+    ctx: &Context<K>,
+    comm: &mut C,
+    rng: &mut R,
+    dir: &Path,
+    mut input: impl FnMut(usize) -> Result<Vec<Ext<K>>>,
+) -> Result<(Vec<Poly>, PartyState<K>)> {
+    check_comm(ctx, comm)?;
+    let (l, party) = (&ctx.layout, comm.id());
+    let g = l.d / l.k.max(1);
+    let chunk_len = l.block_len * g;
+    let mut stream = rng.reshare_stream(ctx.field(), l.n)?;
+    let spill = SpillFile::create(dir, party, l)?;
+    let mut blocks = Vec::with_capacity(l.blocks_per_party);
+    for (slot, index) in l.blocks_of(party).enumerate() {
+        let chunk = input(slot)?;
+        crate::error::check_len("a chunk of f_p (2^m d/k entries)", chunk_len, chunk.len())?;
+        let outgoing = stream
+            .next_chunk(&chunk)?
+            .iter()
+            .map(|s| flatten_exts(s))
+            .collect();
+        let incoming = comm.exchange(LABEL_RESHARE, outgoing)?;
+        let received = decode_chunk(ctx, &incoming, chunk_len)?;
+        let share = sum_chunk(ctx, &received, chunk_len)?;
+        let f_prime = share
+            .chunks_exact(g)
+            .map(|c| ctx.sub.psi(c))
+            .collect::<hachi_co_math::Result<Vec<_>>>()?;
+        let mut block = block_state(ctx, index, f_prime)?;
+        spill.write_block(slot, &block.f_prime)?;
+        block.f_prime = Vec::new();
+        block.s = Vec::new();
+        blocks.push(block);
+    }
+    let state = PartyState {
+        party,
+        share: Vec::new(),
+        blocks,
+        rho_u: sample_rho_u(ctx, rng)?,
+        spill: Some(spill),
+    };
+    let u = fah_b(ctx, comm, &state)?;
     Ok((u, state))
 }

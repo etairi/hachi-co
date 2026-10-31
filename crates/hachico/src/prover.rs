@@ -41,6 +41,25 @@ pub fn commit<const K: usize, C: Comm, R: PartyRandomness<K>>(
     Ok(hachi_co_commit::commit(ctx, comm, rng, f_init)?)
 }
 
+/// [`commit`] for a polynomial too large for memory: [`hachi_co_commit::commit_streaming`], with
+/// the party's initial share read through `input` chunk by chunk and the blocks of
+/// $\mathbf f'$ kept in a file in `dir`. It gives the commitment of [`commit`] for the same
+/// share and randomness, and [`eval`] takes the state as usual, reading one block at a time.
+///
+/// # Errors
+/// [`Error::Commit`] as [`hachi_co_commit::commit_streaming`].
+pub fn commit_streaming<const K: usize, C: Comm, R: PartyRandomness<K>>(
+    ctx: &Context<K>,
+    comm: &mut C,
+    rng: &mut R,
+    dir: &std::path::Path,
+    input: impl FnMut(usize) -> hachi_co_commit::Result<Vec<Ext<K>>>,
+) -> Result<(Vec<Poly>, PartyState<K>), Error> {
+    Ok(hachi_co_commit::commit_streaming(
+        ctx, comm, rng, dir, input,
+    )?)
+}
+
 /// Everything one party has after [`eval_with`]: the proof (the same at every party) and the
 /// party's private data (the tests check the claims against it). Apart from `proof`, it holds
 /// the party's secrets (its share of $u$, of $\mathbf z'$ and of $\widetilde w$, its blinders):

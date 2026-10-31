@@ -31,12 +31,15 @@
 //!   "party_seed": "1111...",
 //!   "output": "out/party-1",
 //!   "connect_timeout_ms": 30000,
-//!   "recv_timeout_ms": 60000
+//!   "recv_timeout_ms": 60000,
+//!   "spill_dir": "/tmp/spill"
 //! }
 //! ```
 //!
 //! where the session id and the seeds are 32 bytes in 64 hexadecimal digits (shortened here),
-//! and the two timeouts are optional (with these defaults). All parties of a run share the
+//! the two timeouts are optional (with these defaults), and `spill_dir`, also optional, is an
+//! existing directory that makes the party keep its blocks of $\mathbf f'$ on disk
+//! ([`prove_streaming`]). All parties of a run share the
 //! preset, $n$, the
 //! addresses, the session id, the setup seed and the instance seed; each has its own index,
 //! party seed and output directory.
@@ -73,10 +76,10 @@
 
 use crate::error::{DecodeError, Error, VerifyError};
 use crate::proof::EvalProof;
-use crate::prover::{commit, eval};
+use crate::prover::{commit, commit_streaming, eval};
 use crate::verifier::verify;
 use crate::{Context, HachiBase};
-use hachi_co_core::{Ext, Poly, PrgRandomness};
+use hachi_co_core::{Ext, Fqk, Poly, PrgRandomness};
 use hachi_co_mpc::{Comm, Endpoint, PartyId, Stats, TcpConfig, TcpTransport, ZeroSharing};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -240,6 +243,10 @@ pub struct PartyConfig {
     /// [`DEFAULT_RECV_TIMEOUT_MS`].
     #[serde(default = "default_recv_timeout_ms")]
     pub recv_timeout_ms: u64,
+    /// A directory for the party's blocks of $\mathbf f'$; optional. With it the party runs
+    /// [`prove_streaming`], without it [`prove`]: same commitment and proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spill_dir: Option<PathBuf>,
 }
 
 /// Reads a whole file.
@@ -354,18 +361,74 @@ pub struct Instance {
     pub y: Ext<K>,
 }
 
-/// `count` uniform elements of $\mathbb F\_{q^K}$ from `prg`, coordinate by coordinate.
-fn uniform_exts(prg: &mut ShakePrg, q: u64, count: usize) -> Result<Vec<Ext<K>>, HarnessError> {
+/// `count` uniform elements of $\mathbb F\_{q^K}$ from `prg`, coordinate by coordinate. A stream
+/// read in several calls gives what one call gives.
+fn uniform_chunk(prg: &mut ShakePrg, q: u64, count: usize) -> hachi_co_core::Result<Vec<Ext<K>>> {
     let len = count
         .checked_mul(K)
-        .ok_or_else(|| HarnessError::Config(format!("{count} field elements overflow")))?;
-    let residues = uniform_mod_q(prg, q, len).map_err(|e| Error::Core(e.into()))?;
+        .ok_or(hachi_co_core::Error::Overflow("a count of field elements"))?;
+    let residues = uniform_mod_q(prg, q, len)?;
     Ok(residues
         .as_chunks::<K>()
         .0
         .iter()
         .map(|c| Ext(*c))
         .collect())
+}
+
+/// [`uniform_chunk`] with the errors of the harness.
+fn uniform_exts(prg: &mut ShakePrg, q: u64, count: usize) -> Result<Vec<Ext<K>>, HarnessError> {
+    uniform_chunk(prg, q, count).map_err(|e| Error::Core(e).into())
+}
+
+/// The chunks of a party's share for [`commit_streaming`], read off the streams of
+/// [`Instance::share`]: only one chunk of each stream is in memory.
+struct ShareChunks {
+    q: u64,
+    len: usize,
+    field: Fqk<K>,
+    first: ShakePrg,
+    others: Vec<ShakePrg>,
+}
+
+impl ShareChunks {
+    fn new(ctx: &Context<K>, seed: &[u8; 32], party: PartyId) -> Self {
+        let n = ctx.layout.n;
+        let (first, others) = if party < n {
+            (ShakePrg::new(seed, DOMAIN_SHARE, party as u64), Vec::new())
+        } else {
+            (
+                ShakePrg::new(seed, DOMAIN_INSTANCE, 0),
+                (1..n as u64)
+                    .map(|p| ShakePrg::new(seed, DOMAIN_SHARE, p))
+                    .collect(),
+            )
+        };
+        Self {
+            q: ctx.q(),
+            len: chunk_len(ctx),
+            field: ctx.field().clone(),
+            first,
+            others,
+        }
+    }
+
+    fn next_chunk(&mut self) -> hachi_co_core::Result<Vec<Ext<K>>> {
+        let mut chunk = uniform_chunk(&mut self.first, self.q, self.len)?;
+        for prg in &mut self.others {
+            let part = uniform_chunk(prg, self.q, self.len)?;
+            for (s, r) in chunk.iter_mut().zip(&part) {
+                *s = self.field.sub(s, r);
+            }
+        }
+        Ok(chunk)
+    }
+}
+
+/// The length $2^m d/k$ of the chunks of [`commit_streaming`].
+fn chunk_len(ctx: &Context<K>) -> usize {
+    let l = &ctx.layout;
+    l.block_len * (l.d / l.k.max(1))
 }
 
 /// $2^\ell$ for the context.
@@ -389,6 +452,42 @@ impl Instance {
         let x = uniform_exts(&mut prg, ctx.q(), ctx.layout.ell)?;
         let y = hachi_co_conv::evaluate(ctx, &f, &x).map_err(Error::from)?;
         Ok(Self { f, x, y })
+    }
+
+    /// [`Instance::derive`] without $\mathbf f$ in memory: the same $\mathbf x$ and $y$, an empty
+    /// `f`. It reads the stream of $\mathbf f$ twice, first to reach $\mathbf x$, then to
+    /// evaluate chunk by chunk.
+    ///
+    /// # Errors
+    /// As [`Instance::derive`].
+    pub fn derive_streaming(ctx: &Context<K>, seed: &[u8; 32]) -> Result<Self, HarnessError> {
+        let (field, q) = (ctx.field(), ctx.q());
+        let (len, chunks) = (chunk_len(ctx), ctx.layout.blocks_per_party);
+        let mut prg = ShakePrg::new(seed, DOMAIN_INSTANCE, 0);
+        for _ in 0..chunks {
+            uniform_exts(&mut prg, q, len)?;
+        }
+        let x = uniform_exts(&mut prg, q, ctx.layout.ell)?;
+        let (high, low) = x.split_at(chunks.trailing_zeros() as usize);
+        let mut weights = vec![field.one()];
+        for xj in high {
+            weights = weights
+                .iter()
+                .flat_map(|w| [*w, field.mul(w, xj)])
+                .collect();
+        }
+        let mut prg = ShakePrg::new(seed, DOMAIN_INSTANCE, 0);
+        let mut y = field.zero();
+        for weight in &weights {
+            let chunk = uniform_exts(&mut prg, q, len)?;
+            let value = hachi_co_conv::evaluate(ctx, &chunk, low).map_err(Error::from)?;
+            y = field.add(&y, &field.mul(weight, &value));
+        }
+        Ok(Self {
+            f: Vec::new(),
+            x,
+            y,
+        })
     }
 
     /// Party `party`'s additive share of $\mathbf f$ for the instance seed `seed`: for
@@ -462,6 +561,46 @@ pub fn prove<C: Comm>(
     let mut rng = PrgRandomness::new(*party_seed);
     let start = Instant::now();
     let (u, state) = commit(ctx, comm, &mut rng, share)?;
+    let commit_time = start.elapsed();
+    let start = Instant::now();
+    let proof = eval(
+        ctx,
+        pcs,
+        comm,
+        &mut rng,
+        &state,
+        &u,
+        &instance.x,
+        &instance.y,
+    )?;
+    Ok(PartyOutput {
+        u,
+        proof,
+        commit_time,
+        eval_time: start.elapsed(),
+    })
+}
+
+/// [`prove`] for an instance too large for memory: [`commit_streaming`] on the share of `party`
+/// for the instance seed `instance_seed` (the streams of [`Instance::share`]), with the blocks
+/// of $\mathbf f'$ in a file in `dir`, then [`eval`]. The commitment and the proof are those of
+/// [`prove`].
+///
+/// # Errors
+/// [`HarnessError::Protocol`] with the error of [`commit_streaming`] or [`eval`].
+pub fn prove_streaming<C: Comm>(
+    setup: &Setup,
+    comm: &mut C,
+    party_seed: &[u8; 32],
+    instance_seed: &[u8; 32],
+    dir: &Path,
+    instance: &Instance,
+) -> Result<PartyOutput, HarnessError> {
+    let (ctx, pcs) = (&setup.ctx, &setup.pcs);
+    let mut rng = PrgRandomness::new(*party_seed);
+    let mut chunks = ShareChunks::new(ctx, instance_seed, comm.id());
+    let start = Instant::now();
+    let (u, state) = commit_streaming(ctx, comm, &mut rng, dir, |_| Ok(chunks.next_chunk()?))?;
     let commit_time = start.elapsed();
     let start = Instant::now();
     let proof = eval(
@@ -572,8 +711,14 @@ impl Prepared {
         config.validate()?;
         let start = Instant::now();
         let setup = Setup::new(&config.preset, config.n, &config.setup_seed)?;
-        let instance = Instance::derive(&setup.ctx, &config.instance_seed)?;
-        let share = instance.share(&setup.ctx, &config.instance_seed, config.party)?;
+        let (instance, share) = if config.spill_dir.is_some() {
+            let instance = Instance::derive_streaming(&setup.ctx, &config.instance_seed)?;
+            (instance, Vec::new())
+        } else {
+            let instance = Instance::derive(&setup.ctx, &config.instance_seed)?;
+            let share = instance.share(&setup.ctx, &config.instance_seed, config.party)?;
+            (instance, share)
+        };
         Ok(Self {
             setup,
             instance,
@@ -638,7 +783,17 @@ fn run_prepared(
         config.network_seed(),
     )?;
     let connect_time = start.elapsed();
-    let output = prove(&setup, &mut endpoint, &config.party_seed, &share, &instance)?;
+    let output = match &config.spill_dir {
+        Some(dir) => prove_streaming(
+            &setup,
+            &mut endpoint,
+            &config.party_seed,
+            &config.instance_seed,
+            dir,
+            &instance,
+        )?,
+        None => prove(&setup, &mut endpoint, &config.party_seed, &share, &instance)?,
+    };
     let stats = endpoint.stats().clone();
     drop(endpoint);
     let network_time = start.elapsed();

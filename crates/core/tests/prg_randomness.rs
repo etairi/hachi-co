@@ -127,13 +127,23 @@ fn reshare_is_additive_sharing() {
             }
         }
         assert_eq!(sum, input, "n = {n}");
-        // Shares 1..n-1 are the documented stream, element by element.
-        let mut prg = ShakePrg::new(&SEED, DOMAIN_RESHARE.as_bytes(), 0);
-        for s in &shares[..n - 1] {
+        // Share j < n is the documented stream j - 1, element by element.
+        for (j, s) in shares[..n - 1].iter().enumerate() {
+            let mut prg = ShakePrg::new(&SEED, DOMAIN_RESHARE.as_bytes(), j as u64);
             for x in s {
                 assert_eq!(*x, ext_from(&mut prg));
             }
         }
+        // The shares do not depend on the chunks.
+        let mut stream = PartyRandomness::<K>::reshare_stream(&mut PrgRandomness::new(SEED), &f, n);
+        let stream = stream.as_mut().unwrap();
+        let mut chunked = vec![Vec::new(); n];
+        for chunk in input.chunks(input.len().div_ceil(3)) {
+            for (all, part) in chunked.iter_mut().zip(stream.next_chunk(chunk).unwrap()) {
+                all.extend(part);
+            }
+        }
+        assert_eq!(chunked, shares, "n = {n}");
         // A second resharing from the same source is refused.
         assert_eq!(
             PartyRandomness::<K>::reshare(&mut rng, &f, &input, n),
