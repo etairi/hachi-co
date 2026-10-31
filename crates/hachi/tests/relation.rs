@@ -12,7 +12,7 @@
 //! in the table breaks the identity.
 
 use hachi::Error;
-use hachi::commit::{Ctx, commit};
+use hachi::commit::{Committed, Ctx, commit};
 use hachi::iteration::{commitment_randomness, evaluate_claim};
 use hachi::mle::{eq_table, powers};
 use hachi::params::{HachiChoices, Hiding, Layout, Noise, Schedule};
@@ -213,7 +213,16 @@ fn check_constrained(choices: &HachiChoices) {
         }
         out
     };
-    let (z, r_z) = (fold(&witness.s), fold(&witness.r));
+    let s: Vec<Vec<Poly>> = witness
+        .message
+        .iter()
+        .map(|chunk| {
+            Committed::digits(&ctx, &witness.layout, delta, chunk)
+                .unwrap()
+                .into_owned()
+        })
+        .collect();
+    let (z, r_z) = (fold(&s), fold(&witness.r));
     let b_mat = ctx.matrix(b"B", 0, n_b, chunks * n_a * delta).unwrap();
     let a_mat = ctx.matrix(b"A", 0, n_a, layout.width(delta)).unwrap();
     let public = Public {

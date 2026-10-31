@@ -12,6 +12,7 @@ use hachi_co_math::{Fqk, Poly, Ring, Subfield};
 use hachi_co_sampling::matrix::expand;
 use hachi_co_sampling::{ShakePrg, gauss, uniform};
 use rand::Rng;
+use std::borrow::Cow;
 
 /// Everything both sides need: $q$, the choices, $\mathcal R_q$ of degree $d$, the ring of degree
 /// $2d$ in which products of two elements of degree below $d$ are exact (for the quotients of
@@ -188,10 +189,10 @@ impl<const K: usize> Ctx<K> {
 pub struct Committed {
     /// The layout.
     pub layout: Layout,
-    /// The message chunks $\mathbf f_i$ ($2^r$ chunks of $2^m$ ring elements).
+    /// The message chunks $\mathbf f_i$ ($2^r$ chunks of $2^m$ ring elements). The committed
+    /// vectors $\mathbf s_i$ are not kept: [`Committed::digits`] recomputes them, as they take
+    /// $\delta$ times the memory of a decomposed message.
     pub message: Vec<Vec<Poly>>,
-    /// The committed vectors $\mathbf s_i$.
-    pub s: Vec<Vec<Poly>>,
     /// The randomness $\mathbf r_i$ of each chunk ($\nu + n_A$ ring elements each), or no
     /// chunk at all without [`Hiding`].
     pub r: Vec<Vec<Poly>>,
@@ -203,6 +204,26 @@ pub struct Committed {
     pub t_hat: Vec<Poly>,
     /// The commitment $\mathbf u = \mathbf B \hat{\mathbf t}$ ($n_B$ ring elements).
     pub u: Vec<Poly>,
+}
+
+impl Committed {
+    /// The committed vector $\mathbf s_i$ of the chunk `chunk`: its digits in a decomposed
+    /// layout, the chunk itself otherwise.
+    ///
+    /// # Errors
+    /// Arithmetic errors.
+    pub fn digits<'a, const K: usize>(
+        ctx: &Ctx<K>,
+        layout: &Layout,
+        delta: usize,
+        chunk: &'a [Poly],
+    ) -> Result<Cow<'a, [Poly]>> {
+        Ok(if layout.decomposed {
+            Cow::Owned(g_inv(&ctx.ring, ctx.choices.b, delta, chunk)?)
+        } else {
+            Cow::Borrowed(chunk)
+        })
+    }
 }
 
 /// Checks that `message` has the layout's shape.
@@ -258,18 +279,13 @@ pub fn commit<const K: usize>(
         ctx.choices.n_b,
         layout.chunks() * ctx.choices.n_a * delta,
     )?;
-    let s: Vec<Vec<Poly>> = if layout.decomposed {
-        message
-            .iter()
-            .map(|chunk| g_inv(ring, b, delta, chunk))
-            .collect::<hachi_co_math::Result<_>>()?
-    } else {
-        message.clone()
-    };
-    let mut t: Vec<Vec<Poly>> = s
+    let mut t: Vec<Vec<Poly>> = message
         .iter()
-        .map(|si| ring.mat_vec(&a, si))
-        .collect::<hachi_co_math::Result<_>>()?;
+        .map(|chunk| {
+            let s = Committed::digits(ctx, &layout, delta, chunk)?;
+            Ok(ring.mat_vec(&a, &s)?)
+        })
+        .collect::<Result<_>>()?;
     if !r.is_empty() {
         let a_rand = ctx.rand_matrix(b"A'", iteration, ctx.choices.n_a)?;
         for (ti, ri) in t.iter_mut().zip(&r) {
@@ -287,7 +303,6 @@ pub fn commit<const K: usize>(
     Ok(Committed {
         layout,
         message,
-        s,
         r,
         t,
         t_hat,

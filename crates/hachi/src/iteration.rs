@@ -315,8 +315,9 @@ pub fn prove<const K: usize>(
         .collect::<hachi_co_math::Result<_>>()?;
     let width = layout.width(delta);
     let mut z = vec![ring.zero(); width];
-    for (ci, si) in c.iter().zip(&witness.s) {
-        for (zx, sx) in z.iter_mut().zip(si) {
+    for (ci, fi) in c.iter().zip(&witness.message) {
+        let si = Committed::digits(ctx, layout, delta, fi)?;
+        for (zx, sx) in z.iter_mut().zip(si.iter()) {
             *zx = ring.add(zx, &ring.mul(ci, sx)?)?;
         }
     }

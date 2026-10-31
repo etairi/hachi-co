@@ -519,15 +519,21 @@ impl<const K: usize> HachiPcs<K> {
         }
         let vars = coeffs.len().trailing_zeros() as usize;
         let layout = self.multilinear_ext_layout(vars)?;
-        let coeffs: Vec<Ext<K>> = coeffs.iter().map(|c| ctx.field().reduce(c)).collect();
-        let elements = coeffs
-            .chunks_exact(ctx.d_over_k())
-            .map(|block| ctx.sub.psi(block))
+        let g = ctx.d_over_k();
+        let mut block = Vec::with_capacity(g);
+        let message = coeffs
+            .chunks_exact(g * layout.chunk_len())
+            .map(|chunk| {
+                chunk
+                    .chunks_exact(g)
+                    .map(|c| {
+                        block.clear();
+                        block.extend(c.iter().map(|x| ctx.field().reduce(x)));
+                        ctx.sub.psi(&block)
+                    })
+                    .collect::<hachi_co_math::Result<Vec<Poly>>>()
+            })
             .collect::<hachi_co_math::Result<Vec<_>>>()?;
-        let message: Vec<Vec<Poly>> = elements
-            .chunks_exact(layout.chunk_len())
-            .map(<[Poly]>::to_vec)
-            .collect();
         let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
         let committed = commit(ctx, 0, layout, message, r)?;
         Ok((
@@ -710,17 +716,19 @@ impl<const K: usize> HachiPcs<K> {
         seed: &[u8; 32],
     ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>, Vec<Poly>)> {
         let schedule = self.schedule(layout, reduction)?;
-        let mut witness = committed.clone();
+        let mut later: Option<Committed> = None;
         let mut claim = claim;
         let mut proofs = Vec::with_capacity(schedule.iterations.len());
         for (index, params) in schedule.iterations.iter().enumerate() {
+            let witness = later.as_ref().unwrap_or(committed);
             let (proof, next, next_claim) =
-                iteration::prove(&self.ctx, index, params, &witness, &claim, fs, seed)?;
+                iteration::prove(&self.ctx, index, params, witness, &claim, fs, seed)?;
             proofs.push(proof);
-            witness = next;
+            later = Some(next);
             claim = next_claim;
         }
-        Ok((proofs, witness.message.concat(), witness.r.concat()))
+        let last = later.as_ref().unwrap_or(committed);
+        Ok((proofs, last.message.concat(), last.r.concat()))
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
