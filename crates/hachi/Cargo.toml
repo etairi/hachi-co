@@ -16,6 +16,7 @@ hachi-co-math.workspace = true
 hachi-co-sampling.workspace = true
 hachi-co-transcript.workspace = true
 rand.workspace = true
+rayon.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

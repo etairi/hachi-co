@@ -145,11 +145,7 @@ fn lift(ring2: &Ring, p: &Poly) -> Poly {
 /// $\sum_j x_j y_j$ in $\mathbb Z_q\[X\]$, exactly (degrees below $d$), as an element of the ring
 /// of degree $2d$.
 fn exact_inner(ring2: &Ring, x: &[Poly], y: &[Poly]) -> Result<Poly> {
-    let mut acc = ring2.zero();
-    for (a, b) in x.iter().zip(y) {
-        acc = ring2.add(&acc, &ring2.mul(&lift(ring2, a), &lift(ring2, b))?)?;
-    }
-    Ok(acc)
+    Ok(ring2.inner_padded(x, y)?)
 }
 
 /// The quotients $q_i$ of the rows: $(\text{row}_i(\mathbf z') - y_i) = (X^d + 1) q_i$ in

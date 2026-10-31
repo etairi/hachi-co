@@ -14,6 +14,7 @@ use hachi_co_core::short::center_poly;
 use hachi_co_core::{BlockState, Context, PartyId, PartyRandomness, PartyState, PublicVectors};
 use hachi_co_math::{Poly, decompose};
 use hachi_co_sampling::{l1ball, rej};
+use rayon::prelude::*;
 
 /// `Err(Shape)` unless `actual == expected`.
 pub(crate) fn check_len(what: &'static str, expected: usize, actual: usize) -> Result<()> {
@@ -130,8 +131,29 @@ pub fn owned_w<const K: usize>(
 ) -> Result<Vec<BlockW>> {
     state.validate(&ctx.layout)?;
     let mut out = Vec::with_capacity(state.blocks.len());
+    pv.validate(&ctx.layout)?;
+    let a_ring = ctx.ring.prepare(core::slice::from_ref(&pv.a_ring))?;
     state.for_each_block(ctx, |block| {
-        out.push(block_w(ctx, pv, block)?);
+        block.validate(&ctx.layout)?;
+        let g = decompose::g_apply(&ctx.ring, ctx.b(), ctx.layout.delta, &block.s)?;
+        let [w] = <[Poly; 1]>::try_from(ctx.ring.mat_vec_prepared(&a_ring, &g)?).map_err(|_| {
+            Error::Shape {
+                what: "a^T G s_i (one row)",
+                expected: 1,
+                actual: 0,
+            }
+        })?;
+        let w_hat = decompose::g_inv(
+            &ctx.ring,
+            ctx.b(),
+            ctx.layout.delta,
+            core::slice::from_ref(&w),
+        )?;
+        out.push(BlockW {
+            index: block.index,
+            w,
+            w_hat,
+        });
         Ok::<(), Error>(())
     })?;
     Ok(out)
@@ -206,7 +228,7 @@ pub fn mask_images<const K: usize>(
         hachi_co_sampling::Error::MaskOutOfRange.into()
     })?;
     let images = (|| {
-        let t0 = ctx.ring.mat_vec(&ctx.pp.a, &r)?;
+        let t0 = ctx.ring.mat_vec_prepared(ctx.a_prepared()?, &r)?;
         let t0_hat = decompose::g_inv(&ctx.ring, ctx.b(), l.delta, &t0)?;
         let w0 = a_times_g(ctx, &pv.a_ring, &r)?;
         let w0_hat = decompose::g_inv(&ctx.ring, ctx.b(), l.delta, core::slice::from_ref(&w0))?;
@@ -468,17 +490,19 @@ pub fn fold<const K: usize>(
     let mut acc = vec![0i64; response_len(ctx)];
     state.for_each_block(ctx, |block| {
         let ci = &c[block.index];
-        for (row, s) in block.s.iter().enumerate() {
-            let mut digits = centered_digits(s, q)?;
-            let product = hachi_co_core::short::negacyclic_mul(ci, &digits);
-            crate::ct::wipe(&mut digits);
-            let mut product = product?;
-            for (a, x) in acc[row * d..(row + 1) * d].iter_mut().zip(&product) {
-                *a = a.checked_add(*x).ok_or(Error::Overflow("the fold"))?;
-            }
-            crate::ct::wipe(&mut product);
-        }
-        Ok::<(), Error>(())
+        acc.par_chunks_mut(d)
+            .zip(block.s.par_iter())
+            .try_for_each(|(row, s)| {
+                let mut digits = centered_digits(s, q)?;
+                let product = hachi_co_core::short::negacyclic_mul(ci, &digits);
+                crate::ct::wipe(&mut digits);
+                let mut product = product?;
+                for (a, x) in row.iter_mut().zip(&product) {
+                    *a = a.checked_add(*x).ok_or(Error::Overflow("the fold"))?;
+                }
+                crate::ct::wipe(&mut product);
+                Ok::<(), Error>(())
+            })
     })?;
     Ok(acc)
 }

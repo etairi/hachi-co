@@ -54,9 +54,10 @@ use crate::partials::{self, RoundValues};
 use crate::relation::{Public, mstar, next_table, quotients};
 use crate::sumcheck::{self, RoundMessage, range_poly};
 use crate::{Error, Result};
-use hachi_co_math::decompose::{digit_range, g_inv, j_inv};
-use hachi_co_math::{Ext, Poly};
+use hachi_co_math::decompose::{digit_bound, digit_range, g_inv, j_inv};
+use hachi_co_math::{Ext, Poly, Sparse};
 use hachi_co_sampling::ShakePrg;
+use rayon::prelude::*;
 
 const LABEL_V: &[u8] = b"hachi/iter/v";
 const LABEL_C: &[u8] = b"hachi/iter/c";
@@ -287,14 +288,19 @@ pub fn prove<const K: usize>(
         ));
     }
     // Step 1.
+    let a_row = ring.prepare(core::slice::from_ref(&claim.a))?;
     let w: Vec<Poly> = witness
         .message
-        .iter()
-        .map(|fi| ring.inner(&claim.a, fi))
-        .collect::<hachi_co_math::Result<_>>()?;
+        .par_iter()
+        .map(|fi| {
+            ring.mat_vec_prepared(&a_row, fi)?
+                .pop()
+                .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
+        })
+        .collect::<Result<_>>()?;
     let w_hat = g_inv(ring, b, delta, &w)?;
     let d_mat = ctx.matrix(b"D", index, ctx.choices.n_d, layout.chunks() * delta)?;
-    let mut v = ring.mat_vec(&d_mat, &w_hat)?;
+    let mut v = ring.mat_vec_short(&d_mat, &w_hat, digit_bound(b))?;
     let (a_rand, d_rand) = rand_matrices(ctx, index)?;
     let rho = if ctx.hiding().is_some() {
         let mut prg = ShakePrg::new(seed, DOMAIN_RHO, index as u64);
@@ -309,19 +315,33 @@ pub fn prove<const K: usize>(
     };
     fs.polys(LABEL_V, &v);
     // Step 2.
-    let c: Vec<Poly> = fs
-        .challenges(LABEL_C, layout.chunks(), d, ctx.choices.omega)?
+    let coeffs = fs.challenges(LABEL_C, layout.chunks(), d, ctx.choices.omega)?;
+    let c: Vec<Poly> = coeffs
         .iter()
         .map(|ci| ring.from_i64(ci))
         .collect::<hachi_co_math::Result<_>>()?;
+    let sparse: Vec<Sparse> = coeffs
+        .iter()
+        .map(|ci| ring.sparse(ci))
+        .collect::<hachi_co_math::Result<_>>()?;
     let width = layout.width(delta);
-    let mut z = vec![ring.zero(); width];
-    for (ci, fi) in c.iter().zip(&witness.message) {
-        let si = Committed::digits(ctx, layout, delta, fi)?;
-        for (zx, sx) in z.iter_mut().zip(si.iter()) {
-            *zx = ring.add(zx, &ring.mul(ci, sx)?)?;
-        }
-    }
+    let zeros = || vec![ring.zero(); width];
+    let z = sparse
+        .par_iter()
+        .zip(&witness.message)
+        .try_fold(zeros, |mut acc, (ci, fi)| -> Result<Vec<Poly>> {
+            let si = Committed::digits(ctx, layout, delta, fi)?;
+            for (zx, sx) in acc.iter_mut().zip(si.iter()) {
+                ring.add_sparse_product(zx, ci, sx)?;
+            }
+            Ok(acc)
+        })
+        .try_reduce(zeros, |mut acc, other| {
+            for (x, y) in acc.iter_mut().zip(&other) {
+                *x = ring.add(x, y)?;
+            }
+            Ok(acc)
+        })?;
     for zx in &z {
         if ring.inf_norm(zx)? > params.beta {
             return Err(Error::Protocol(format!(
@@ -333,9 +353,9 @@ pub fn prove<const K: usize>(
     let z_hat = j_inv(ring, b, tau, &z)?;
     // The folded randomness r_z = sum_i c_i r_i, within beta_r.
     let mut r_z = vec![ring.zero(); witness.r.first().map_or(0, Vec::len)];
-    for (ci, ri) in c.iter().zip(&witness.r) {
+    for (ci, ri) in sparse.iter().zip(&witness.r) {
         for (x, y) in r_z.iter_mut().zip(ri) {
-            *x = ring.add(x, &ring.mul(ci, y)?)?;
+            ring.add_sparse_product(x, ci, y)?;
         }
     }
     for x in &r_z {
@@ -410,10 +430,9 @@ pub fn prove<const K: usize>(
         .iter()
         .flat_map(|mu| alpha_pows[..d].iter().map(move |ap| field.mul(mu, ap)))
         .collect();
-    let w_tab: Vec<Ext<K>> = table.iter().map(|x| field.from_base(*x)).collect();
     let digits = digit_residues(ctx);
     let (rounds, point, final_eval) =
-        sumcheck::prove(field, &digits, w_tab, eq_table(field, tau0), g, fs)?;
+        sumcheck::prove(field, &digits, &table, eq_table(field, tau0), g, fs)?;
     fs.exts(LABEL_FINAL, &[final_eval]);
     let (ys, batch_rounds, packed_eval, claim) =
         reduce_prove(ctx, params, &table, &point, final_eval, &next, fs)?;

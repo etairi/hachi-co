@@ -6,6 +6,7 @@
 //! (`ref/README.md`, "Hypercube").
 
 use hachi_co_math::{Ext, Fqk, Poly};
+use rayon::prelude::*;
 
 /// $(\widetilde{eq}(\mathbf x, \mathbf b))\_{\mathbf b \in \lbrace 0,1 \rbrace^n}$ for
 /// $\mathbf x \in \mathbb F_{q^K}^n$, with $\widetilde{eq}(\mathbf x, \mathbf b) = \prod_j (x_j
@@ -13,11 +14,14 @@ use hachi_co_math::{Ext, Fqk, Poly};
 pub fn eq_table<const K: usize>(field: &Fqk<K>, x: &[Ext<K>]) -> Vec<Ext<K>> {
     let mut out = vec![field.one()];
     for xj in x {
-        let one_minus = field.sub(&field.one(), xj);
-        out = out
-            .iter()
-            .flat_map(|v| [field.mul(v, &one_minus), field.mul(v, xj)])
-            .collect();
+        let mut next = vec![field.zero(); 2 * out.len()];
+        next.par_chunks_mut(2)
+            .zip(out.par_iter())
+            .for_each(|(children, v)| {
+                children[1] = field.mul(v, xj);
+                children[0] = field.sub(v, &children[1]);
+            });
+        out = next;
     }
     out
 }
@@ -32,6 +36,18 @@ pub fn eq_eval<const K: usize>(field: &Fqk<K>, x: &[Ext<K>], y: &[Ext<K>]) -> Ex
     })
 }
 
+/// Binds the first (most significant) variable of `table` to $r$: $T'\[x\] = T\[x\] + r (T\[x +
+/// h\] - T\[x\])$ for the half $h$ of its length, in place.
+pub fn fold_top<const K: usize>(field: &Fqk<K>, table: &mut Vec<Ext<K>>, r: &Ext<K>) {
+    let half = table.len() / 2;
+    let (low, high) = table.split_at_mut(half);
+    low.par_iter_mut().zip(high.par_iter()).for_each(|(a, b)| {
+        *a = field.add(a, &field.mul(r, &field.sub(b, a)));
+    });
+    table.truncate(half);
+    table.shrink_to_fit();
+}
+
 /// The multilinear extension of `table` ($2^n$ values) at $\mathbf x \in \mathbb F_{q^K}^n$,
 /// binding the first (most significant) variable first.
 ///
@@ -40,13 +56,7 @@ pub fn eq_eval<const K: usize>(field: &Fqk<K>, x: &[Ext<K>], y: &[Ext<K>]) -> Ex
 pub fn mle_eval<const K: usize>(field: &Fqk<K>, table: &[Ext<K>], x: &[Ext<K>]) -> Ext<K> {
     let mut t = table.to_vec();
     for r in x {
-        let half = t.len() / 2;
-        let (lo, hi) = t.split_at(half);
-        t = lo
-            .iter()
-            .zip(hi)
-            .map(|(a, b)| field.add(a, &field.mul(r, &field.sub(b, a))))
-            .collect();
+        fold_top(field, &mut t, r);
     }
     t.first().copied().unwrap_or_else(|| field.zero())
 }

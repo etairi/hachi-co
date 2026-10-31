@@ -7,11 +7,12 @@
 
 use crate::params::{HachiChoices, Hiding, Layout, Noise, check};
 use crate::{Error, Result};
-use hachi_co_math::decompose::{g_inv, num_digits};
+use hachi_co_math::decompose::{digit_bound, g_inv, num_digits};
 use hachi_co_math::{Fqk, Poly, Ring, Subfield};
 use hachi_co_sampling::matrix::expand;
 use hachi_co_sampling::{ShakePrg, gauss, uniform};
 use rand::Rng;
+use rayon::prelude::*;
 use std::borrow::Cow;
 
 /// Everything both sides need: $q$, the choices, $\mathcal R_q$ of degree $d$, the ring of degree
@@ -272,7 +273,10 @@ pub fn commit<const K: usize>(
     }
     let (ring, b, delta) = (&ctx.ring, ctx.choices.b, ctx.delta);
     let width = layout.width(delta);
-    let a = ctx.matrix(b"A", iteration, ctx.choices.n_a, width)?;
+    let a = ring.prepare_short(
+        &ctx.matrix(b"A", iteration, ctx.choices.n_a, width)?,
+        layout.beta_s,
+    )?;
     let bmat = ctx.matrix(
         b"B",
         iteration,
@@ -280,10 +284,10 @@ pub fn commit<const K: usize>(
         layout.chunks() * ctx.choices.n_a * delta,
     )?;
     let mut t: Vec<Vec<Poly>> = message
-        .iter()
+        .par_iter()
         .map(|chunk| {
             let s = Committed::digits(ctx, &layout, delta, chunk)?;
-            Ok(ring.mat_vec(&a, &s)?)
+            Ok(ring.mat_vec_prepared(&a, &s)?)
         })
         .collect::<Result<_>>()?;
     if !r.is_empty() {
@@ -299,7 +303,7 @@ pub fn commit<const K: usize>(
     for ti in &t {
         t_hat.extend(g_inv(ring, b, delta, ti)?);
     }
-    let u = ring.mat_vec(&bmat, &t_hat)?;
+    let u = ring.mat_vec_short(&bmat, &t_hat, digit_bound(b))?;
     Ok(Committed {
         layout,
         message,

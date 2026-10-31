@@ -36,7 +36,7 @@ pub fn block_state<const K: usize>(
     check_len("f'_i (2^m entries)", l.block_len, f_prime.len())?;
     let (ring, b, delta) = (&ctx.ring, ctx.b(), l.delta);
     let s = decompose::g_inv(ring, b, delta, &f_prime)?;
-    let t = ring.mat_vec(&ctx.pp.a, &s)?;
+    let t = ring.mat_vec_prepared(ctx.a_prepared()?, &s)?;
     let t_hat = decompose::g_inv(ring, b, delta, &t)?;
     Ok(BlockState {
         index,

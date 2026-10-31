@@ -12,6 +12,7 @@ use crate::transcript::RoundValues;
 use hachi_co_core::{Blinder, Context, SumcheckCoins};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_mpc::PartyId;
+use rayon::prelude::*;
 
 /// The tables that change with the coins (built by [`PartyProver::start`]).
 #[derive(Clone, Debug)]
@@ -41,6 +42,51 @@ struct Running<const K: usize> {
     point: Vec<Ext<K>>,
 }
 
+/// The values at the small integers that round 1's nodes reach, in the working representation:
+/// for a pair of integers of absolute value at most `digit` and a node $t$ among the first
+/// `nodes`, the value $v + t (v - u)$ has absolute value at most `reach`.
+struct SmallValues {
+    /// The largest absolute value of an entry that takes this path.
+    digit: i64,
+    /// The largest absolute value of a node value.
+    reach: i64,
+    /// $\phi(c)$ at index $c +$ `reach`.
+    value: Vec<u64>,
+    /// $\phi\bigl(\prod\_{j=-b+1}^{b-1} (c - j)\bigr)$ at index $c +$ `reach`.
+    range: Vec<u64>,
+}
+
+impl SmallValues {
+    fn new<const K: usize, A: Arith<K>>(
+        arith: &A,
+        field: &Fqk<K>,
+        range: &RangeProduct,
+        b: u64,
+        nodes: usize,
+    ) -> Self {
+        let zq = field.zq();
+        let digit = b.saturating_sub(1) as i64;
+        let reach = (2 * nodes as i64 + 1) * digit;
+        let residues: Vec<u64> = (-reach..=reach).map(|c| zq.from_i64(c)).collect();
+        Self {
+            digit,
+            reach,
+            value: residues.iter().map(|c| arith.enter_base(*c)).collect(),
+            range: residues
+                .iter()
+                .map(|c| arith.enter_base(range.eval(field, &field.from_base(*c)).0[0]))
+                .collect(),
+        }
+    }
+
+    /// The centered value of the residue `x`, if it is an integer of this path.
+    #[inline(always)]
+    fn small<const K: usize>(&self, field: &Fqk<K>, x: u64) -> Option<i64> {
+        let c = field.zq().to_centered(x);
+        (c.abs() <= self.digit).then_some(c)
+    }
+}
+
 /// One point's contribution to the sums of a round, at the nodes computed directly.
 struct Accumulators<const K: usize> {
     /// $\sum \widetilde{eq}\_L \cdot \prod\_c (W - c)$ per node.
@@ -63,6 +109,19 @@ impl<const K: usize> Accumulators<K> {
     fn clear(&mut self, field: &Fqk<K>) {
         for v in self.rp.iter_mut().chain(&mut self.w).chain(&mut self.m) {
             *v = field.zero();
+        }
+    }
+
+    /// Adds `other`, in the working representation of `arith`.
+    fn merge<A: Arith<K>>(&mut self, arith: &A, other: &Self) {
+        for (x, y) in self.rp.iter_mut().zip(&other.rp) {
+            *x = arith.add(x, y);
+        }
+        for (x, y) in self.w.iter_mut().zip(&other.w) {
+            *x = arith.add(x, y);
+        }
+        for (x, y) in self.m.iter_mut().zip(&other.m) {
+            *x = arith.add(x, y);
         }
     }
 }
@@ -98,8 +157,11 @@ impl<const K: usize> Accumulators<K> {
 /// closed form of [`round_poly`](crate::round_poly). The sums are formed in Montgomery form
 /// when $\max(3k - 3, 1)\, q \lt 2^{64}$ (every $q \lt 2^{59}$), which avoids the 128-bit
 /// divisions of the canonical product, and in the canonical arithmetic otherwise; the tables
-/// stay canonical and both give the same values. The tests check every value against the
-/// oracle's direct evaluation at all nodes, in both arithmetics.
+/// stay canonical and both give the same values. The range product is skipped on the rows where
+/// $e\_p$ vanishes at both ends. In round 1, half of the work, a pair of digits has small integers
+/// as node values, and their range products come from a table (`SmallValues`), so that each
+/// term is a product by a residue. The tests check every value against the oracle's direct
+/// evaluation at all nodes, in both arithmetics.
 #[derive(Clone, Debug)]
 pub struct PartyProver<const K: usize> {
     field: Fqk<K>,
@@ -117,6 +179,8 @@ pub struct PartyProver<const K: usize> {
     ext0: Extrapolation,
     ext1: Extrapolation,
     range: RangeProduct,
+    /// The base $b$.
+    b: u64,
     /// The Montgomery form of the inner loops, when $q$ admits it (otherwise the canonical
     /// field is used; both give the same values).
     mont: Option<Montgomery<K>>,
@@ -184,6 +248,7 @@ impl<const K: usize> PartyProver<K> {
         let sums = (hypercube_sum(&field, &g0), hypercube_sum(&field, &g1));
         Ok(Self {
             range: RangeProduct::new(zq, b),
+            b,
             mont: Montgomery::new(zq.modulus()),
             e_rows: row_indicator(l, &l.s_ranges(party))?,
             ind_rows: row_indicator(l, &[ind_rows(l)])?,
@@ -353,7 +418,7 @@ impl<const K: usize> PartyProver<K> {
     }
 
     /// The kernel on the base-field table in round 1 and on the folded table afterwards.
-    fn dispatch<A: Arith<K>>(
+    fn dispatch<A: Arith<K> + Sync>(
         &self,
         arith: &A,
         run: &Running<K>,
@@ -362,12 +427,14 @@ impl<const K: usize> PartyProver<K> {
         if r == 1 {
             let (f, wb) = (&self.field, &self.w_base);
             let (at, value) = self.pad.unwrap_or((usize::MAX, f.zero()));
-            self.kernel(arith, run, r, wb.len(), |x| {
+            let nodes = self.direct0.max(self.direct1);
+            let small = SmallValues::new(arith, f, &self.range, self.b, nodes);
+            self.kernel(arith, run, r, wb.len(), Some((&small, wb, at)), |x| {
                 if x == at { value } else { f.from_base(wb[x]) }
             })
         } else {
             let w = &run.w;
-            self.kernel(arith, run, r, w.len(), |x| w[x])
+            self.kernel(arith, run, r, w.len(), None, |x| w[x])
         }
     }
 
@@ -375,13 +442,17 @@ impl<const K: usize> PartyProver<K> {
     /// $1, \dots, \mathrm{direct}\_1$ (for $F\_{1,p}$), for the current table of
     /// $\langle \widetilde w \rangle\_p$ of `len` entries read through `w_at`. The tables are
     /// canonical; the values of a pair of points and the sums are formed in the working
-    /// representation of `arith` and the results returned canonical.
-    fn kernel<A: Arith<K>, W: Fn(usize) -> Ext<K>>(
+    /// representation of `arith` and the results returned canonical. The rows, or the pairs of
+    /// points, run on the Rayon pool; field sums do not depend on the order. `round1` gives the
+    /// small values, the table over $\mathbb Z\_q$ and the index of a field pad, if any.
+    #[allow(clippy::too_many_arguments)] // the tables and the path of round 1
+    fn kernel<A: Arith<K> + Sync, W: Fn(usize) -> Ext<K> + Sync>(
         &self,
         arith: &A,
         run: &Running<K>,
         r: usize,
         len: usize,
+        round1: Option<(&SmallValues, &[u64], usize)>,
         w_at: W,
     ) -> (Vec<Ext<K>>, Vec<Ext<K>>) {
         let f = &self.field;
@@ -395,75 +466,109 @@ impl<const K: usize> PartyProver<K> {
             .collect();
         let h = len / 2;
         let (n0, n1) = (self.direct0, self.direct1);
-        let mut acc = Accumulators::new(f, n0, n1);
-        let mut f0 = vec![zero; n0];
-        let mut f1 = vec![zero; n1];
-        if r <= self.ell_u {
+        let (f0, f1) = if r <= self.ell_u {
             // U round: the lower half is rows u < h / 2d of 2d points; e_p, ind and eq_U are
             // row values, eq_L does not change.
             let rows = h / self.two_d;
             let eq_l: Vec<Ext<K>> = run.eq_l.iter().map(|e| arith.enter(e)).collect();
-            for u in 0..rows {
-                acc.clear(f);
-                let base = u * self.two_d;
-                for (l, e) in eq_l.iter().enumerate() {
-                    self.accumulate_pair(
-                        arith,
-                        &squares,
-                        &mut acc,
-                        &w_at,
-                        &run.mstar,
-                        base + l,
-                        h,
-                        e,
-                        &zero,
-                    );
-                }
-                // The row factors at t = 1 and their increments.
-                let affine = |t: &[Ext<K>]| {
-                    (
-                        arith.enter(&t[u + rows]),
-                        arith.enter(&f.sub(&t[u + rows], &t[u])),
-                    )
-                };
-                let (mut eu, deu) = affine(&run.eq_u);
-                let (mut ee, dee) = affine(&run.e);
-                let (mut ii, dii) = affine(&run.ind);
-                for ((out, rp), w) in f0.iter_mut().zip(&acc.rp).zip(&acc.w) {
-                    let bracket = arith.sub(&arith.sub(&one, &ee), &ii);
-                    let v = arith.add(&arith.mul(&ee, rp), &arith.mul(&bracket, w));
-                    *out = arith.add(out, &arith.mul(&eu, &v));
-                    eu = arith.add(&eu, &deu);
-                    ee = arith.add(&ee, &dee);
-                    ii = arith.add(&ii, &dii);
-                }
-                for (out, m) in f1.iter_mut().zip(&acc.m) {
-                    *out = arith.add(out, m);
-                }
-            }
+            let start = || (Accumulators::new(f, n0, n1), vec![zero; n0], vec![zero; n1]);
+            let (_, f0, f1) = (0..rows)
+                .into_par_iter()
+                .fold(start, |(mut acc, mut f0, mut f1), u| {
+                    acc.clear(f);
+                    let base = u * self.two_d;
+                    // Without e_p on this row, the range product does not count.
+                    let range = !(f.is_zero(&run.e[u]) && f.is_zero(&run.e[u + rows]));
+                    for (l, e) in eq_l.iter().enumerate() {
+                        let x = base + l;
+                        if let Some((lo, hi)) = small_pair(f, round1, x, h) {
+                            let (small, ..) = round1.expect("a small pair comes from round 1");
+                            self.accumulate_small(
+                                arith, small, range, &mut acc, &run.mstar, x, h, lo, hi, e, &zero,
+                            );
+                        } else {
+                            self.accumulate_pair(
+                                arith, &squares, range, &mut acc, &w_at, &run.mstar, x, h, e, &zero,
+                            );
+                        }
+                    }
+                    // The row factors at t = 1 and their increments.
+                    let affine = |t: &[Ext<K>]| {
+                        (
+                            arith.enter(&t[u + rows]),
+                            arith.enter(&f.sub(&t[u + rows], &t[u])),
+                        )
+                    };
+                    let (mut eu, deu) = affine(&run.eq_u);
+                    let (mut ee, dee) = affine(&run.e);
+                    let (mut ii, dii) = affine(&run.ind);
+                    for ((out, rp), w) in f0.iter_mut().zip(&acc.rp).zip(&acc.w) {
+                        let bracket = arith.sub(&arith.sub(&one, &ee), &ii);
+                        let v = arith.add(&arith.mul(&ee, rp), &arith.mul(&bracket, w));
+                        *out = arith.add(out, &arith.mul(&eu, &v));
+                        eu = arith.add(&eu, &deu);
+                        ee = arith.add(&ee, &dee);
+                        ii = arith.add(&ii, &dii);
+                    }
+                    for (out, m) in f1.iter_mut().zip(&acc.m) {
+                        *out = arith.add(out, m);
+                    }
+                    (acc, f0, f1)
+                })
+                .reduce(start, |(acc, mut f0, mut f1), (_, g0, g1)| {
+                    for (x, y) in f0.iter_mut().zip(&g0) {
+                        *x = arith.add(x, y);
+                    }
+                    for (x, y) in f1.iter_mut().zip(&g1) {
+                        *x = arith.add(x, y);
+                    }
+                    (acc, f0, f1)
+                });
+            (f0, f1)
         } else {
             // L round: U is bound, so e_p, ind and eq_U are scalars; eq_L is folded with W.
-            for x in 0..h {
-                let (lo, hi) = (&run.eq_l[x], &run.eq_l[x + h]);
-                let (e_hi, de) = (arith.enter(hi), arith.enter(&f.sub(hi, lo)));
-                self.accumulate_pair(
-                    arith, &squares, &mut acc, &w_at, &run.mstar, x, h, &e_hi, &de,
-                );
-            }
+            let start = || Accumulators::new(f, n0, n1);
+            let range = !f.is_zero(&run.e[0]);
+            let acc = (0..h)
+                .into_par_iter()
+                .fold(start, |mut acc, x| {
+                    let (lo, hi) = (&run.eq_l[x], &run.eq_l[x + h]);
+                    let (e_hi, de) = (arith.enter(hi), arith.enter(&f.sub(hi, lo)));
+                    if let Some((a, b)) = small_pair(f, round1, x, h) {
+                        let (small, ..) = round1.expect("a small pair comes from round 1");
+                        self.accumulate_small(
+                            arith, small, range, &mut acc, &run.mstar, x, h, a, b, &e_hi, &de,
+                        );
+                    } else {
+                        self.accumulate_pair(
+                            arith, &squares, range, &mut acc, &w_at, &run.mstar, x, h, &e_hi, &de,
+                        );
+                    }
+                    acc
+                })
+                .reduce(start, |mut acc, other| {
+                    acc.merge(arith, &other);
+                    acc
+                });
             let (eu, ee, ii) = (
                 arith.enter(&run.eq_u[0]),
                 arith.enter(&run.e[0]),
                 arith.enter(&run.ind[0]),
             );
             let bracket = arith.sub(&arith.sub(&one, &ee), &ii);
-            for ((out, rp), w) in f0.iter_mut().zip(&acc.rp).zip(&acc.w) {
-                let v = arith.add(&arith.mul(&ee, rp), &arith.mul(&bracket, w));
-                *out = arith.mul(&eu, &v);
-            }
-            f1.clone_from(&acc.m);
-        }
+            let f0 = acc
+                .rp
+                .iter()
+                .zip(&acc.w)
+                .map(|(rp, w)| {
+                    let v = arith.add(&arith.mul(&ee, rp), &arith.mul(&bracket, w));
+                    arith.mul(&eu, &v)
+                })
+                .collect();
+            (f0, acc.m)
+        };
         // phi(v) times the canonical eq factor of the party is canonical.
-        let f0 = f0.iter().map(|v| arith.mul(v, &run.eq_party)).collect();
+        let f0: Vec<Ext<K>> = f0.iter().map(|v| arith.mul(v, &run.eq_party)).collect();
         let f1 = f1.iter().map(|v| arith.leave(v)).collect();
         (f0, f1)
     }
@@ -471,13 +576,14 @@ impl<const K: usize> PartyProver<K> {
     /// Adds the contribution of the point pair $(x, x + h)$ at the nodes $1, 2, \dots$: the values
     /// at node $t + 1$ are those at node $t$ plus the difference of the pair. The factor
     /// $\widetilde{eq}\_L$ is given in the working representation, at node 1 (`e_hi`) with its
-    /// increment `de`.
+    /// increment `de`; with `range` false the range product is left out.
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn accumulate_pair<A: Arith<K>, W: Fn(usize) -> Ext<K>>(
         &self,
         arith: &A,
         squares: &[u64],
+        range: bool,
         acc: &mut Accumulators<K>,
         w_at: &W,
         mstar: &[Ext<K>],
@@ -497,14 +603,59 @@ impl<const K: usize> PartyProver<K> {
         let (n0, n1) = (self.direct0, self.direct1);
         for t in 0..n0.max(n1) {
             if t < n0 {
-                let rp = range_eval(arith, &w, squares);
-                acc.rp[t] = arith.add(&acc.rp[t], &arith.mul(&e, &rp));
+                if range {
+                    let rp = range_eval(arith, &w, squares);
+                    acc.rp[t] = arith.add(&acc.rp[t], &arith.mul(&e, &rp));
+                }
                 acc.w[t] = arith.add(&acc.w[t], &arith.mul(&e, &w));
             }
             if t < n1 {
                 acc.m[t] = arith.add(&acc.m[t], &arith.mul(&w, &m));
             }
             w = arith.add(&w, &dw);
+            m = arith.add(&m, &dm);
+            e = arith.add(&e, de);
+        }
+    }
+
+    /// [`PartyProver::accumulate_pair`] for a pair of small integers `lo` and `hi`: their node
+    /// values and range products come from `small`, in the working representation, so that
+    /// each term is a product by a residue.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn accumulate_small<A: Arith<K>>(
+        &self,
+        arith: &A,
+        small: &SmallValues,
+        range: bool,
+        acc: &mut Accumulators<K>,
+        mstar: &[Ext<K>],
+        x: usize,
+        h: usize,
+        lo: i64,
+        hi: i64,
+        e_hi: &Ext<K>,
+        de: &Ext<K>,
+    ) {
+        let f = &self.field;
+        let (m_lo, m_hi) = (&mstar[x], &mstar[x + h]);
+        let dm = arith.enter(&f.sub(m_hi, m_lo));
+        let (mut w, mut m, mut e) = (hi, arith.enter(m_hi), *e_hi);
+        let (n0, n1) = (self.direct0, self.direct1);
+        for t in 0..n0.max(n1) {
+            let index = (w + small.reach) as usize;
+            let value = small.value[index];
+            if t < n0 {
+                if range {
+                    let rp = arith.scale_out(&e, small.range[index]);
+                    acc.rp[t] = arith.add(&acc.rp[t], &rp);
+                }
+                acc.w[t] = arith.add(&acc.w[t], &arith.scale_out(&e, value));
+            }
+            if t < n1 {
+                acc.m[t] = arith.add(&acc.m[t], &arith.scale_out(&m, value));
+            }
+            w += hi - lo;
             m = arith.add(&m, &dm);
             e = arith.add(&e, de);
         }
@@ -583,6 +734,22 @@ impl<const K: usize> PartyProver<K> {
     }
 }
 
+/// The centered entries of the point pair $(x, x + h)$ in round 1, if both are small and neither
+/// is a field pad.
+#[inline(always)]
+fn small_pair<const K: usize>(
+    f: &Fqk<K>,
+    round1: Option<(&SmallValues, &[u64], usize)>,
+    x: usize,
+    h: usize,
+) -> Option<(i64, i64)> {
+    let (small, table, pad) = round1?;
+    if x == pad || x + h == pad {
+        return None;
+    }
+    Some((small.small(f, table[x])?, small.small(f, table[x + h])?))
+}
+
 /// $\prod\_{c=-b+1}^{b-1} (w - c) = w \prod\_{c=1}^{b-1} (w^2 - c^2)$ in the working representation,
 /// with the constants $c^2$ in that representation ([`RangeProduct`] for the canonical one).
 #[inline(always)]
@@ -602,7 +769,7 @@ fn range_eval<const K: usize, A: Arith<K>>(arith: &A, w: &Ext<K>, squares: &[u64
 
 /// $T'\[x\] = T\[x\] + a (T\[x + h\] - T\[x\])$ on a canonical table, with the coin in the working
 /// representation (so that the product with a canonical difference is canonical).
-fn fold<const K: usize, A: Arith<K>>(
+fn fold<const K: usize, A: Arith<K> + Sync>(
     arith: &A,
     f: &Fqk<K>,
     table: &mut Vec<Ext<K>>,
@@ -610,9 +777,11 @@ fn fold<const K: usize, A: Arith<K>>(
 ) {
     let h = table.len() / 2;
     let (low, high) = table.split_at_mut(h);
-    for (lo, hi) in low.iter_mut().zip(high.iter()) {
-        *lo = f.add(lo, &arith.mul(coin, &f.sub(hi, lo)));
-    }
+    low.par_iter_mut()
+        .zip(high.par_iter())
+        .for_each(|(lo, hi)| {
+            *lo = f.add(lo, &arith.mul(coin, &f.sub(hi, lo)));
+        });
     table.truncate(h);
     table.shrink_to_fit();
 }
@@ -620,7 +789,7 @@ fn fold<const K: usize, A: Arith<K>>(
 /// Binds round $r$'s variable to $a$ in every table of `run` (the witness table from the
 /// base-field `w_base` and the pad in round 1).
 #[allow(clippy::too_many_arguments)] // the tables and the coin
-fn fold_tables<const K: usize, A: Arith<K>>(
+fn fold_tables<const K: usize, A: Arith<K> + Sync>(
     arith: &A,
     f: &Fqk<K>,
     w_base: &[u64],
@@ -635,8 +804,8 @@ fn fold_tables<const K: usize, A: Arith<K>>(
         let zq = f.zq();
         let (low, high) = w_base.split_at(w_base.len() / 2);
         run.w = low
-            .iter()
-            .zip(high)
+            .par_iter()
+            .zip(high.par_iter())
             .map(|(lo, hi)| f.add(&f.from_base(*lo), &arith.scale_out(&coin, zq.sub(*hi, *lo))))
             .collect();
         // The pad's pair has one entry outside the base field.

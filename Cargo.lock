@@ -184,6 +184,7 @@ dependencies = [
  "hachi-co-sampling",
  "hachi-co-transcript",
  "rand",
+ "rayon",
  "sha2",
  "thiserror",
 ]
@@ -310,6 +311,7 @@ dependencies = [
  "num-bigint",
  "rand",
  "rand_chacha",
+ "rayon",
  "serde_json",
  "sha2",
  "thiserror",
@@ -341,6 +343,7 @@ dependencies = [
  "num-bigint",
  "rand",
  "rand_chacha",
+ "rayon",
  "serde_json",
  "sha2",
  "thiserror",

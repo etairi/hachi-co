@@ -5,9 +5,11 @@
 
 use crate::data::{Matrix, check_len, check_polys};
 use crate::{Error, Layout, Result};
-use hachi_co_math::{Fqk, Poly, Ring, Subfield};
+use hachi_co_math::decompose::digit_bound;
+use hachi_co_math::{Fqk, Poly, Prepared, Ring, Subfield};
 use hachi_co_params::Params;
 use hachi_co_sampling::matrix;
+use std::sync::OnceLock;
 
 /// The PRG domain of $\mathbf A$ in [`Context::setup`].
 pub const SETUP_DOMAIN_A: &[u8] = b"hachi-co/setup/A";
@@ -100,6 +102,8 @@ pub struct Context<const K: usize> {
     pub sub: Subfield<K>,
     /// The public matrices $\mathbf A, \mathbf B, \mathbf D$.
     pub pp: PublicParams,
+    /// $\mathbf A$ in the NTT form, made on first use ([`Context::a_prepared`]).
+    a_prepared: OnceLock<Prepared>,
 }
 
 impl<const K: usize> Context<K> {
@@ -155,7 +159,23 @@ impl<const K: usize> Context<K> {
             ring2,
             sub,
             pp,
+            a_prepared: OnceLock::new(),
         })
+    }
+
+    /// $\mathbf A$ in the NTT form ([`Ring::prepare_short`]): every block, in digits of base $b$,
+    /// and every mask, in $[-\gamma, \gamma]$, multiplies it, so it is transformed once. It takes a
+    /// few times the memory of $\mathbf A$ and is kept with the context.
+    ///
+    /// # Errors
+    /// [`Error::Math`] if an entry of $\mathbf A$ lost its shape after [`Context::new`].
+    pub fn a_prepared(&self) -> Result<&Prepared> {
+        if let Some(prepared) = self.a_prepared.get() {
+            return Ok(prepared);
+        }
+        let norm = digit_bound(self.b()).max(self.gamma());
+        let prepared = self.ring.prepare_short(&self.pp.a, norm)?;
+        Ok(self.a_prepared.get_or_init(|| prepared))
     }
 
     /// $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:287-292) from a 32-byte seed: entry

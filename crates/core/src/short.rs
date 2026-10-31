@@ -20,7 +20,8 @@ use hachi_co_math::{Poly, Ring};
 /// digits of a block, so that $\sum\_{i' \in \mathcal I\_i} c\_{i'} \mathbf s\_{i'}$ is computed
 /// over the integers (`5_Building_Blocks.tex`:140; `ref/README.md`, choice 17).
 ///
-/// The products and sums are formed in `i128` with overflow checks.
+/// Within the bound below the products and sums are formed in `i64`, and otherwise in `i128`
+/// with overflow checks.
 ///
 /// # Errors
 /// [`Error::Shape`] if the lengths differ; [`Error::Overflow`] if a coefficient of the result does
@@ -28,6 +29,29 @@ use hachi_co_math::{Poly, Ring};
 pub fn negacyclic_mul(c: &[i64], s: &[i64]) -> Result<Vec<i64>> {
     check_len("negacyclic product (equal lengths)", c.len(), s.len())?;
     let d = c.len();
+    // Below 2^63 every partial sum of a coefficient fits in i64, the case of the protocol.
+    let norm_c: u128 = c.iter().map(|x| u128::from(x.unsigned_abs())).sum();
+    let norm_s = s.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+    if norm_c
+        .checked_mul(u128::from(norm_s))
+        .is_some_and(|bound| bound < 1 << 63)
+    {
+        let mut acc = vec![0i64; d];
+        for (i, ci) in c.iter().enumerate() {
+            if *ci == 0 {
+                continue;
+            }
+            let (stays, wraps) = s.split_at(d - i);
+            let (bottom, top) = acc.split_at_mut(i);
+            for (out, x) in top.iter_mut().zip(stays) {
+                *out += *ci * *x;
+            }
+            for (out, x) in bottom.iter_mut().zip(wraps) {
+                *out -= *ci * *x;
+            }
+        }
+        return Ok(acc);
+    }
     let mut acc = vec![0i128; d];
     for (i, ci) in c.iter().enumerate() {
         if *ci == 0 {
