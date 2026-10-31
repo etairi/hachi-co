@@ -1,7 +1,7 @@
 //! The toy presets reproduce the table of `docs/m0-spec.md` ("Toy presets") and the rows the Sage
 //! oracle adds for $n = 4, 8$ (`ref/hachico_ref/params.py`, `TOY_TABLE`) exactly, and every other
 //! derived value is checked against a direct evaluation of the draft's formulas
-//! (6_Collaborative_Hachi.tex:274-288) with big integers.
+//! (6_Collaborative_Hachi.tex:276-292) with big integers.
 
 use hachi_co_params::presets::{TOY_NS, toy_choices, toy_presets};
 use hachi_co_params::{ConstraintId, PresetKind, Severity, derive, preset};
@@ -30,19 +30,19 @@ type Row = (
 /// $q$ by its `choose_q`, the rest by its `derive`, also independent of this crate).
 const TABLE: [Row; 5] = [
     (
-        "toy-n1", 1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 555, 15, 14,
+        "toy-n1", 1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 558, 15, 14,
     ),
     (
-        "toy-n2", 2, 33554501, 13, 3, 2, 32, 832, 106496, 212992, 10, 785, 15, 14,
+        "toy-n2", 2, 33554501, 13, 3, 2, 32, 832, 106496, 212992, 10, 790, 15, 14,
     ),
     (
-        "toy-n3", 3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1547, 16, 14,
+        "toy-n3", 3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1554, 16, 14,
     ),
     (
-        "toy-n4", 4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1577, 16, 14,
+        "toy-n4", 4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1586, 16, 14,
     ),
     (
-        "toy-n8", 8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2177, 17, 14,
+        "toy-n8", 8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2194, 17, 14,
     ),
 ];
 
@@ -89,7 +89,7 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         let (p, _) = derive(&toy_choices(n)).unwrap();
         let big = |x: u128| BigUint::from(x);
         let (b, omega, d) = (big(4), big(2), big(16));
-        let (n_a, n_b, n_d, m_rho) = (big(1), big(1), big(1), big(2));
+        let (n_a, n_b, n_d, m_u, m_v) = (big(1), big(1), big(1), big(2), big(2));
         let nn = big(u128::from(n));
         let delta = big(u128::from(p.delta));
         let two = big(2);
@@ -109,9 +109,10 @@ fn toy_presets_match_the_formulas_with_big_integers() {
             + &nn * &delta
             + pow2(p.r) * &n_a * &delta
             + &nn * &n_a * &delta
-            + &nn * &m_rho
+            + &nn * &m_u
+            + &nn * &m_v
             + pow2(p.m) * &delta * BigUint::from(p.tau)
-            + 1u8;
+            + 2u8;
         assert_eq!(big(p.mu), mu);
         let n_prime = &n_a + &n_b + &n_d + 2u8;
         assert_eq!(BigUint::from(p.n_prime), n_prime);
@@ -122,10 +123,10 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         assert_eq!(p.d1, 3);
         assert_eq!(big(p.nu), &n_prime + &d + (big(p.mu) + &n_prime) * &d);
         assert_eq!(big(p.width_a), &delta * pow2(p.m));
-        assert_eq!(big(p.width_b), &n_a * &delta * pow2(p.r));
+        assert_eq!(big(p.width_b), &n_a * &delta * pow2(p.r) + &nn * &m_u);
         assert_eq!(
             big(p.width_d),
-            &delta * (pow2(p.r) + &nn + &nn * &n_a) + &nn * &m_rho
+            &delta * (pow2(p.r) + &nn + &nn * &n_a) + &nn * &m_v
         );
         assert_eq!(big(p.binding_guard), big(16) * &omega * &b_tau);
         assert_eq!(big(p.msis_bound_a), big(8) * &omega * &b_tau);

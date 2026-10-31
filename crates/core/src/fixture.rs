@@ -10,7 +10,7 @@
 
 use crate::{Context, Error, Layout, Matrix, PublicParams, Result};
 use hachi_co_math::{Ext, Poly};
-use hachi_co_params::{Params, TauRule, derive, presets::toy_choices};
+use hachi_co_params::{PadRule, Params, TauRule, derive, presets::toy_choices};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// the convention of the fixtures' digests of large objects (`ref/README.md`, "Encodings"; the
 /// oracle's `fixtures.digest`). The caller passes canonical residues in row-major order of the
 /// stated shape (the oracle reduces modulo $q$ before hashing); for $\mathbf M$ that is
-/// $n' \times \mu \times d$ (fixture key `ring_to_linear/M_sha256`).
+/// $n' \times (\mu - 1) \times d$ (fixture key `ring_to_linear/M_sha256`).
 pub fn sha256_residues<I: IntoIterator<Item = u64>>(residues: I) -> String {
     let mut h = Sha256::new();
     for r in residues {
@@ -235,7 +235,7 @@ impl Fixture {
                 other => bad.push(format!("{key}: fixture {other:?}, Rust {got}")),
             }
         };
-        let ints: [(&'static str, u128); 38] = [
+        let ints: [(&'static str, u128); 39] = [
             ("n", c.n.into()),
             ("ell", c.ell.into()),
             ("alpha", c.alpha.into()),
@@ -245,7 +245,8 @@ impl Fixture {
             ("n_A", c.n_a.into()),
             ("n_B", c.n_b.into()),
             ("n_D", c.n_d.into()),
-            ("m_rho", c.m_rho.into()),
+            ("m_u", c.m_u.into()),
+            ("m_v", c.m_v.into()),
             ("q", params.q.into()),
             ("d", params.d.into()),
             ("k", params.k.into()),
@@ -292,6 +293,11 @@ impl Fixture {
             TauRule::Ceil => "ceil",
         };
         text("tau_rule", rule.to_owned());
+        let pad = match c.pad {
+            PadRule::Field => "field",
+            PadRule::Residues => "residues",
+        };
+        text("pad", pad.to_owned());
         let ln_m = params.log2_rejection_m * core::f64::consts::LN_2;
         let acceptance = (-ln_m).exp();
         let abort = 1.0 - acceptance.powi(i32::try_from(n).unwrap_or(i32::MAX));

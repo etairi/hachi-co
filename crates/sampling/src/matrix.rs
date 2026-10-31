@@ -1,6 +1,6 @@
 //! Public matrices from a seed: $A \leftarrow R_q^{n_A \times \delta 2^m}$,
 //! $B \leftarrow R_q^{n_B \times n_A \delta 2^r}$ and $D \leftarrow R_q^{n_D \times (\delta(2^r + n + n n_A) + n m_\rho)}$
-//! of Setup (6_Collaborative_Hachi.tex:283-287), each entry uniform in $R_q$.
+//! of Setup (6_Collaborative_Hachi.tex:287-291), each entry uniform in $R_q$.
 //!
 //! Entry $(i, j)$ of a `rows` $\times$ `cols` matrix is read from its own stream,
 //! [`ShakePrg::new`]`(seed, domain, i * cols + j)` (row-major index), as $d$ residues of

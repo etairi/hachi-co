@@ -12,8 +12,8 @@ use hachi_co_core::{
 };
 use hachi_co_mpc::{Comm, Loopback, PartyId};
 use hachi_co_r2l::{
-    Error, MAX_ATTEMPTS, R2lOutput, linear_relation, relation_holds, run, run_with_cap, sum_shares,
-    verifier_challenges,
+    COMM_FAH_D, COMM_FAH_Z, Error, MAX_ATTEMPTS, R2lOutput, linear_relation, relation_holds, run,
+    run_with_cap, sum_shares, verifier_challenges,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -190,7 +190,7 @@ fn threaded_replay_reproduces_every_fixture() {
                 .collect();
         for (p, out) in (1..=n).zip(&outs) {
             compare_with_fixture(&fx, out, p);
-            // y sits at prover 1 only (5_Building_Blocks.tex:134).
+            // y sits at prover 1 only (5_Building_Blocks.tex:147).
             assert_eq!(
                 out.share.y.iter().any(|y| y.0.iter().any(|x| *x != 0)),
                 p == 1
@@ -451,9 +451,9 @@ enum Fault {
     FahShort,
     FahNonCanonical,
     AbortLies,
-    GatherNone,
-    GatherShort,
-    GatherHuge,
+    SumShort,
+    SumNonCanonical,
+    SumHuge,
     Prover1Lies,
 }
 
@@ -475,11 +475,15 @@ impl Comm for Faulty {
     }
     fn fah(&mut self, label: &'static str, local: &[u64]) -> hachi_co_mpc::Result<Vec<u64>> {
         let mut out = self.inner.fah(label, local)?;
-        match self.fault {
-            Fault::FahShort => {
+        let q = self.inner.modulus();
+        match (self.fault, label) {
+            (Fault::FahShort, COMM_FAH_D) | (Fault::SumShort, COMM_FAH_Z) => {
                 out.pop();
             }
-            Fault::FahNonCanonical => out[0] = self.inner.modulus(),
+            (Fault::FahNonCanonical, COMM_FAH_D) | (Fault::SumNonCanonical, COMM_FAH_Z) => {
+                out[0] = q;
+            }
+            (Fault::SumHuge, COMM_FAH_Z) => out[0] = (q - 1) / 2,
             _ => {}
         }
         Ok(out)
@@ -490,22 +494,7 @@ impl Comm for Faulty {
         to: PartyId,
         local: &[i64],
     ) -> hachi_co_mpc::Result<Option<Vec<Vec<i64>>>> {
-        let mut out = self.inner.gather(label, to, local)?;
-        match self.fault {
-            Fault::GatherNone => out = None,
-            Fault::GatherShort => {
-                if let Some(v) = out.as_mut() {
-                    v[0].pop();
-                }
-            }
-            Fault::GatherHuge => {
-                if let Some(v) = out.as_mut() {
-                    v[0][0] = i64::MAX;
-                }
-            }
-            _ => {}
-        }
-        Ok(out)
+        self.inner.gather(label, to, local)
     }
     fn any(&mut self, label: &'static str, local: bool) -> hachi_co_mpc::Result<bool> {
         let out = self.inner.any(label, local)?;
@@ -615,15 +604,15 @@ fn misbehaving_components_give_errors() {
         Err(Error::Protocol(_))
     ));
     assert!(matches!(
-        with_fault(Fault::GatherNone),
-        Err(Error::Protocol(_))
-    ));
-    assert!(matches!(
-        with_fault(Fault::GatherShort),
+        with_fault(Fault::SumShort),
         Err(Error::Shape { .. })
     ));
     assert!(matches!(
-        with_fault(Fault::GatherHuge),
+        with_fault(Fault::SumNonCanonical),
+        Err(Error::NonCanonical { .. })
+    ));
+    assert!(matches!(
+        with_fault(Fault::SumHuge),
         Err(Error::NormCheck { .. })
     ));
     assert!(matches!(
@@ -771,7 +760,16 @@ fn malformed_randomness_is_refused() {
         fn base_pcs(&mut self, _: u64) -> hachi_co_core::Result<[u8; 32]> {
             unreachable!()
         }
-        fn rho(&mut self, _: u64, b: u64, len: usize) -> hachi_co_core::Result<Vec<i64>> {
+        fn rho_u(&mut self, _: u64, _: usize) -> hachi_co_core::Result<Vec<i64>> {
+            unreachable!()
+        }
+        fn rho_w(&mut self, _: &Fqk<K>) -> hachi_co_core::Result<Ext<K>> {
+            unreachable!()
+        }
+        fn rho_w_residues(&mut self, _: u64, _: usize) -> hachi_co_core::Result<Vec<u64>> {
+            unreachable!()
+        }
+        fn rho_v(&mut self, _: u64, b: u64, len: usize) -> hachi_co_core::Result<Vec<i64>> {
             Ok(match self.0 {
                 2 => vec![0; len + 1],
                 3 => {

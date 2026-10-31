@@ -1,4 +1,4 @@
-//! The provers' quotient shares (`5_Building_Blocks.tex`:198-200; oracle
+//! The provers' quotient shares (`5_Building_Blocks.tex`:227-229; oracle
 //! `sumcheck.quotient_shares`).
 
 use crate::error::{Error, Result, check_len};
@@ -24,8 +24,8 @@ fn pad(p: &Poly, two_d: usize) -> Poly {
 /// Party $p$'s share of the quotient,
 /// $$\langle \mathbf r \rangle\_p = \tfrac12 (1 - X^d) \bigl(\mathbf M \langle \mathbf z' \rangle\_p -
 /// \lbrace \mathbf y \rbrace\_p\bigr) \bmod X^{2d} + 1$$
-/// (`5_Building_Blocks.tex`:198-200, with $\tfrac12 (1 - X^d) = (X^d + 1)^{-1}$ in
-/// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$, footnote at line 198), where the entries of $\mathbf M$,
+/// (`5_Building_Blocks.tex`:227-229, with $\tfrac12 (1 - X^d) = (X^d + 1)^{-1}$ in
+/// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$, footnote at line 227), where the entries of $\mathbf M$,
 /// $\langle \mathbf z' \rangle\_p$ and $\lbrace \mathbf y \rbrace\_p$ are read as polynomials of
 /// degree below $d$ (fixture convention `quotient`). Returns $n'$ polynomials of $2d$ residues
 /// (`ref/README.md`, "Encodings": a quotient share is a list of $2d$ residues).
@@ -44,7 +44,7 @@ fn pad(p: &Poly, two_d: usize) -> Poly {
 /// halves vanish iff $\mathbf M \mathbf z' = \mathbf y$ in $\mathcal R\_q$.
 ///
 /// # Errors
-/// [`Error::Shape`] unless $\mathbf M$ has $n'$ rows of $\mu$ polynomials and the share has the
+/// [`Error::Shape`] unless $\mathbf M$ has $n'$ rows of $\mu - 1$ polynomials and the share has the
 /// shape of [`LinearShare::validate`], every polynomial with $d$ coefficients.
 pub fn quotient_share<const K: usize>(
     ctx: &Context<K>,
@@ -54,13 +54,13 @@ pub fn quotient_share<const K: usize>(
     let l = &ctx.layout;
     let (d, q) = (l.d, ctx.q());
     let two_d = 2 * d;
-    check_matrix(m, l.n_prime, l.mu, d)?;
+    check_matrix(m, l.n_prime, l.len_z, d)?;
     share.validate(l)?;
     let zq = ctx.ring.zq();
     let inv2 = zq
         .inv(2)
         .ok_or_else(|| Error::Parameter("q must be odd".into()))?;
-    let nonzero: Vec<usize> = (0..l.mu)
+    let nonzero: Vec<usize> = (0..l.len_z)
         .filter(|j| !is_zero(&share.z_prime[*j], q))
         .collect();
     let mut out = Vec::with_capacity(l.n_prime);

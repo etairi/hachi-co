@@ -1,4 +1,4 @@
-//! Steps 1 and 2 of Commit (`6_Collaborative_Hachi.tex`:303-308): every party $i$ reshares its
+//! Steps 1 and 2 of Commit (`6_Collaborative_Hachi.tex`:308-313): every party $i$ reshares its
 //! initial share $\mathbf f\_i$ by $\mathsf{AS.Share}$ (`4_preliminaries.tex`:154), sends
 //! $\langle \mathbf f\_i \rangle\_j$ to party $j$, and every party $j$ adds what it received:
 //! $\langle \mathbf f \rangle\_j = \sum\_{i \in \[n\]} \langle \mathbf f\_i \rangle\_j$.
@@ -8,7 +8,7 @@ use hachi_co_core::{Context, PartyRandomness};
 use hachi_co_math::Ext;
 
 /// Step 1 for one party: $\langle \mathbf f\_i \rangle = \mathsf{AS.Share}(\mathbf f\_i, n)$
-/// (`6_Collaborative_Hachi.tex`:303-305; `4_preliminaries.tex`:154), drawn from `rng`
+/// (`6_Collaborative_Hachi.tex`:308-310; `4_preliminaries.tex`:154), drawn from `rng`
 /// ([`PartyRandomness::reshare`]: shares $1, \dots, n-1$ uniform, share $n$ the difference).
 /// Returns the $n$ shares in order; share $j$ goes to party $j$ (the party's own share
 /// included). The oracle's `commit.as_share`.
@@ -72,7 +72,7 @@ pub fn decode_received<const K: usize>(
 }
 
 /// Step 2 for party $p$: $\langle \mathbf f \rangle\_p = \sum\_{i \in \[n\]}
-/// \langle \mathbf f\_i \rangle\_p$ (`6_Collaborative_Hachi.tex`:306-308), from the $n$ received
+/// \langle \mathbf f\_i \rangle\_p$ (`6_Collaborative_Hachi.tex`:311-313), from the $n$ received
 /// shares (`received[i - 1]` from party $i$). The oracle's `f_shares[p - 1]`.
 ///
 /// # Errors

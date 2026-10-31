@@ -16,7 +16,13 @@ fn honest(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Poly>, Vec
             let share = fx
                 .exts::<K>(&format!("/commit/f_shares/{}", p - 1))
                 .unwrap();
-            party_state(ctx, p, share).unwrap()
+            let rho_u = fx
+                .int_rows(&format!("/commit/rho_u/{}", p - 1))
+                .unwrap()
+                .iter()
+                .map(|c| ctx.ring.from_i64(c).unwrap())
+                .collect();
+            party_state(ctx, p, share, rho_u).unwrap()
         })
         .collect();
     (
@@ -26,16 +32,19 @@ fn honest(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Poly>, Vec
     )
 }
 
-/// $\mathbf u = \mathbf B \hat{\mathbf t}$ for whatever the states hold.
+/// $\mathbf u = \mathbf B (\hat{\mathbf t}, \boldsymbol\rho^u)$ for whatever the states hold.
 fn commitment(ctx: &Context<K>, states: &[PartyState<K>]) -> Vec<Poly> {
     let ring = &ctx.ring;
-    let mut t_hat = vec![ring.zero(); ctx.layout.width_b];
+    let mut t_rho = vec![ring.zero(); ctx.layout.width_b];
     for st in states {
-        for (acc, x) in t_hat.iter_mut().zip(t_hat_slice(ctx, &st.blocks).unwrap()) {
+        for (acc, x) in t_rho.iter_mut().zip(t_hat_slice(ctx, &st.blocks).unwrap()) {
             *acc = ring.add(acc, &x).unwrap();
         }
     }
-    ring.mat_vec(&ctx.pp.b, &t_hat).unwrap()
+    let rho_u: Vec<Poly> = states.iter().flat_map(|s| s.rho_u.clone()).collect();
+    let start = ctx.layout.width_b - rho_u.len();
+    t_rho[start..].clone_from_slice(&rho_u);
+    ring.mat_vec(&ctx.pp.b, &t_rho).unwrap()
 }
 
 fn failing(
@@ -241,7 +250,7 @@ fn the_norm_conditions_at_their_bounds() {
 
 /// For $n = 3$ the slot $\mathbf p = 11$ is empty: blocks 6 and 7 are held by nobody and decode
 /// as zero. A state that adds block 6 changes $\bar f$, because $\bar f\_{\mathbf q}$ sums all
-/// $2^{\lceil \log n \rceil}$ slots (`6_Collaborative_Hachi.tex`:398).
+/// $2^{\lceil \log n \rceil}$ slots (`6_Collaborative_Hachi.tex`:410).
 #[test]
 fn a_block_of_the_empty_slot_is_decoded_into_f_bar() {
     let (fx, ctx) = load("toy-n3");

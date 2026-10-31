@@ -1,6 +1,6 @@
 //! Work package WP8 of Hachi-Co (`docs/m1-spec.md`, "WP8 `hachi-co-conv`"): the collaborative
 //! reduction $\Pi\_{\mathsf{conv}}$ from $\mathcal R\_{\mathsf{eval}, \mathbb F\_{q^k}}$ to
-//! $\mathcal R\_{\mathsf{eval}, \mathcal R\_q}$ (`field-to-ring-rok.tex`:89-169): the public
+//! $\mathcal R\_{\mathsf{eval}, \mathcal R\_q}$ (`field-to-ring-rok.tex`:118-198): the public
 //! vectors $\mathbf x', \mathbf b, \mathbf a, v, \mathbf d$, the shares $\langle u \rangle\_p$,
 //! $\mathcal F\_{\mathsf{AH}}(E)$ and the verifier's check $y = E(u)$; Sage oracle
 //! `ref/hachico_ref/conv.py`.
@@ -27,7 +27,7 @@
 //! labels [`LABEL_FAH_E`] and [`LABEL_E_U`].
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `625ced1`), cited by file and line; "the oracle" is the Sage reference in `ref/`.
+//! `8834c9f`), cited by file and line; "the oracle" is the Sage reference in `ref/`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 

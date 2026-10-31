@@ -111,7 +111,13 @@ fn local_run(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Vec<Pol
             );
         }
         // Step 4: s, t, t-hat of p's blocks.
-        let state = party_state(ctx, p, share).unwrap();
+        let rho_u: Vec<Poly> = fx
+            .int_rows(&format!("/commit/rho_u/{}", p - 1))
+            .unwrap()
+            .iter()
+            .map(|c| ring.from_i64(c).unwrap())
+            .collect();
+        let state = party_state(ctx, p, share, rho_u).unwrap();
         state.validate(l).unwrap();
         for block in &state.blocks {
             let (owner, s, t, t_hat) = &blocks_rec[&block.index];
@@ -126,8 +132,11 @@ fn local_run(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Vec<Pol
             );
         }
         // Step 5: the F_AH(B) input, against B times the slice (an independent path).
-        let input = fah_b_input(ctx, &state.blocks).unwrap();
-        let slice = t_hat_slice(ctx, &state.blocks).unwrap();
+        let input = fah_b_input(ctx, p, &state.blocks, &state.rho_u).unwrap();
+        let mut slice = t_hat_slice(ctx, &state.blocks).unwrap();
+        slice.resize(l.width_b, ring.zero());
+        let range = l.rho_u_range(p);
+        slice[range.start - l.t..range.end - l.t].clone_from_slice(&state.rho_u);
         assert_eq!(input, ring.mat_vec(&ctx.pp.b, &slice).unwrap());
         inputs.push(input);
         states.push(state);
@@ -165,7 +174,7 @@ fn party_local_values_match_the_fixtures() {
             }
         }
         // The slices of t-hat add up to t-hat, and the F_AH(B) inputs to u.
-        let mut t_hat = vec![ring.zero(); l.width_b];
+        let mut t_hat = vec![ring.zero(); l.n_blocks * l.n_a * l.delta];
         for state in &states {
             for (acc, x) in t_hat
                 .iter_mut()
@@ -182,10 +191,12 @@ fn party_local_values_match_the_fixtures() {
             }
         }
         assert_eq!(u, fx.polys("/commit/u").unwrap(), "{name}: u");
+        let mut t_rho = t_hat;
+        t_rho.extend(states.iter().flat_map(|s| s.rho_u.clone()));
         assert_eq!(
             u,
-            ring.mat_vec(&ctx.pp.b, &t_hat).unwrap(),
-            "{name}: u = B t-hat"
+            ring.mat_vec(&ctx.pp.b, &t_rho).unwrap(),
+            "{name}: u = B (t-hat, rho^u)"
         );
     }
 }
@@ -273,8 +284,8 @@ fn open_negative_tests_fail_exactly_as_recorded() {
         let recorded = fx.get("/negative_tests/open").unwrap().as_object().unwrap();
         assert_eq!(
             recorded.len(),
-            3,
-            "{name}: the oracle records three Open tests"
+            4,
+            "{name}: the oracle records four Open tests"
         );
         for key in recorded.keys() {
             let report = match key.as_str() {
@@ -282,6 +293,12 @@ fn open_negative_tests_fail_exactly_as_recorded() {
                     // Prover 1's first block, digit 0 of entry 0, coefficient 0, plus 1.
                     let mut st = states.clone();
                     let c = &mut st[0].blocks[0].s[0].0[0];
+                    *c = (*c + 1) % q;
+                    open(&ctx, &st, &u, &f, None).unwrap()
+                }
+                "open: one coefficient of rho^u changed" => {
+                    let mut st = states.clone();
+                    let c = &mut st[0].rho_u[0].0[0];
                     *c = (*c + 1) % q;
                     open(&ctx, &st, &u, &f, None).unwrap()
                 }

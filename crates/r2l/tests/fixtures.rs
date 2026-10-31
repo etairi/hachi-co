@@ -11,9 +11,9 @@ use hachi_co_core::{
     sha256_residues, short,
 };
 use hachi_co_r2l::{
-    AttemptSecrets, BlockW, Error, UnpackedWitness, aggregate, check_challenges, d_slice,
-    fah_d_input, fold, linear_relation, norm_check, owned_w, relation_holds, residual, respond,
-    response_len, row_block_checks, sample_attempt, sum_shares, y_share, z_hat, z_prime_share,
+    AttemptSecrets, BlockW, Error, UnpackedWitness, check_challenges, d_slice, fah_d_input, fold,
+    linear_relation, norm_check, owned_w, relation_holds, residual, respond, response_len,
+    row_block_checks, sample_attempt, sum_shares, y_share, z_hat, z_of_sum, z_prime_share,
 };
 
 /// Everything a test needs from one accepted run, recomputed by this crate.
@@ -87,9 +87,9 @@ fn replay_and_compare(name: &str) -> Run {
                 "{name} a={a} p={p}: mask"
             );
             assert_eq!(
-                s.rho,
-                fx.ints(&pk("rho")).unwrap(),
-                "{name} a={a} p={p}: rho"
+                s.rho_v,
+                fx.ints(&pk("rho_v")).unwrap(),
+                "{name} a={a} p={p}: rho_v"
             );
             assert_eq!(
                 s.images.t0,
@@ -170,7 +170,7 @@ fn replay_and_compare(name: &str) -> Run {
             continue;
         }
 
-        // The accepted attempt: the gather at prover 1 and prover 1's steps.
+        // The accepted attempt: the sum of F_AH(1^n) and prover 1's steps.
         for (p, z_p) in (1..=n).zip(&responses) {
             assert_eq!(
                 *z_p,
@@ -178,7 +178,14 @@ fn replay_and_compare(name: &str) -> Run {
                 "{name}: z_{p}"
             );
         }
-        let z = aggregate(&ctx, &responses).unwrap();
+        let zq = ctx.ring.zq();
+        let mut sum = vec![0u64; response_len(&ctx)];
+        for z_p in &responses {
+            for (s, x) in sum.iter_mut().zip(z_p) {
+                *s = zq.add(*s, zq.from_i64(*x));
+            }
+        }
+        let z = z_of_sum(&ctx, &sum).unwrap();
         assert_eq!(z, fx.ints(&key("z")).unwrap(), "{name}: z");
         assert_eq!(short::inf_norm(&z), fx.u64(&key("z_norm")).unwrap());
         assert_eq!(
@@ -392,7 +399,7 @@ fn relations_hold_and_fail_when_tampered() {
         );
         assert!(rel_key("r2l.M_z'_eq_y (Sage)").unwrap());
 
-        // The row blocks of 5_Building_Blocks.tex:182 on the unpacked values.
+        // The row blocks of 5_Building_Blocks.tex:196 on the unpacked values.
         let rows = row_block_checks(&ctx, &pv, &run.c, &run.witness).unwrap();
         assert!(
             rows.row_b && rows.row_c && rows.row_a && rows.all(),

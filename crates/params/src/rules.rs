@@ -12,7 +12,7 @@ use num_traits::{One, ToPrimitive, Zero};
 /// $\lceil \log_2 x \rceil$ for $x \ge 1$ (and $0$ for $x \le 1$).
 ///
 /// This is the draft's $\lceil \log n \rceil$ and $\lceil \log(\mu + n') \rceil$
-/// (6_Collaborative_Hachi.tex:274, 280); the draft's $\log$ is base 2.
+/// (6_Collaborative_Hachi.tex:276, 284); the draft's $\log$ is base 2.
 pub fn ceil_log2(x: u128) -> u32 {
     if x <= 1 {
         0
@@ -23,7 +23,7 @@ pub fn ceil_log2(x: u128) -> u32 {
 
 /// $\lceil \log_b x \rceil$, the least $t \ge 0$ with $b^t \ge x$.
 ///
-/// With $x = q$ this is $\delta = \lceil \log_b q \rceil$ (6_Collaborative_Hachi.tex:274). The
+/// With $x = q$ this is $\delta = \lceil \log_b q \rceil$ (6_Collaborative_Hachi.tex:276). The
 /// power is computed with saturation: once $b^t$ exceeds `u128::MAX` it is at least $x$, so the
 /// result is exact for every `u128` input.
 ///
@@ -83,7 +83,7 @@ pub fn j_inv_capacity(b: u64, tau: u32) -> Result<u128> {
 /// - [`TauRule::Tight`]: the least $\tau$ with
 ///   $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$ (user decision of 2026-10-17,
 ///   `docs/m0-spec.md`). Needs $b \ge 3$, otherwise [`Error::TightTauUndefined`].
-/// - [`TauRule::Draft`]: $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:276).
+/// - [`TauRule::Draft`]: $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:280).
 /// - [`TauRule::Ceil`]: $\tau = \lceil \log_b \beta \rceil$, which in general does *not* make
 ///   $\beta$ representable (balanced digits cover only about $b^\tau/2$); the report flags it.
 ///
@@ -198,7 +198,7 @@ fn binomial(n: u64, k: u64) -> BigUint {
 /// $\lvert C \rvert$ for the challenge set of radius $\omega$ in $\mathcal R$ of degree $d$.
 ///
 /// - [`ChallengeSet::L1Ball`]: the draft's $C = \lbrace c : \lVert c \rVert_1 \le \omega \rbrace$
-///   (5_Building_Blocks.tex:122), with
+///   (5_Building_Blocks.tex:134), with
 ///   $\lvert C \rvert = \sum_{i=0}^{\min(d, \omega)} 2^i \binom{d}{i} \binom{\omega}{i}$
 ///   (choose the support of size $i$, the signs, and a composition of a total $\le \omega$
 ///   into $i$ positive parts). This counts integer vectors; it is the size in $\mathcal R_q$ too
@@ -265,7 +265,7 @@ pub fn min_omega(set: ChallengeSet, d: u64, r: u32, lambda: u32) -> Result<u64> 
 }
 
 /// $\log_2 M$ for the rejection constant
-/// $M = \left((2\gamma + 1)/(2\gamma - 2\beta_1 + 1)\right)^N$ (6_Collaborative_Hachi.tex:275,
+/// $M = \left((2\gamma + 1)/(2\gamma - 2\beta_1 + 1)\right)^N$ (6_Collaborative_Hachi.tex:279,
 /// 4_preliminaries.tex:117), computed as $N \cdot \mathrm{ln1p}(2\beta_1/(2\gamma - 2\beta_1 + 1))
 /// / \ln 2$ in `f64`. Returns $+\infty$ if $\beta_1 > \gamma$ (the accepting box is empty).
 pub fn log2_rejection_constant(big_n: u128, gamma: u128, beta1: u128) -> f64 {
@@ -302,7 +302,7 @@ impl Ratio {
 pub const REJECTION_SERIES_CAP: u32 = 256;
 
 /// Whether $M = \left((2\gamma + 1)/(2\gamma - 2\beta_1 + 1)\right)^N \le e^{1/n}$, decided
-/// exactly (6_Collaborative_Hachi.tex:275).
+/// exactly (6_Collaborative_Hachi.tex:279).
 ///
 /// With $y = \beta_1/(2\gamma - \beta_1 + 1)$ one has $(1 + y)/(1 - y) = (2\gamma + 1)/(2\gamma -
 /// 2\beta_1 + 1)$, so

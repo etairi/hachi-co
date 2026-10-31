@@ -2,11 +2,13 @@
 //!
 //! The party code of every building block is written once against the [`Comm`] trait: the
 //! additively homomorphic functionality $\mathcal F\_{\mathsf{AH}}$ (draft
-//! `4_preliminaries.tex`:185-200), the gather of the masked responses $\mathbf z\_i$ at prover 1
-//! (`5_Building_Blocks.tex`:129-130), the agreement on an abort (`5_Building_Blocks.tex`:129, 131),
-//! the pairwise exchange of the resharing in Commit (`6_Collaborative_Hachi.tex`:303-305), and the
-//! publication of per-party values ([`Comm::all_gather`]). Nothing protocol-specific enters this
-//! crate (plan `docs/hachi-co-plan.md`, design rule 5).
+//! `4_preliminaries.tex`:185-200), the agreement on an abort (`5_Building_Blocks.tex`:141, 144),
+//! the pairwise exchange of the resharing in Commit (`6_Collaborative_Hachi.tex`:308-310), and the
+//! publication of per-party values ([`Comm::all_gather`]). [`Comm::gather`] collects vectors at
+//! one party; the protocol of the draft does not use it (it sums the responses with
+//! $\mathcal F\_{\mathsf{AH}}(1^n)$, `5_Building_Blocks.tex`:142-143), it serves the variant of
+//! `docs/optimizations.md`, item 34. Nothing protocol-specific enters this crate (plan
+//! `docs/hachi-co-plan.md`, design rule 5).
 //!
 //! Two implementations of [`Comm`]:
 //! - [`Loopback`], the network of a single party, where every call is the identity;
@@ -34,7 +36,7 @@
 //! party. Errors are values ([`Error`]); a [`Comm`] never panics on what other parties send.
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `625ced1`), cited by file and line.
+//! `8834c9f`), cited by file and line.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -92,10 +94,9 @@ pub trait Comm {
     /// [`Error::Transport`]) for a network failure.
     fn fah(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<u64>>;
 
-    /// Gathers one signed vector from every party at party `to` (draft
-    /// `5_Building_Blocks.tex`:129: every prover sends $\mathbf z\_i$ to prover 1). Party `to`
-    /// receives `Some(v)` with `v[p - 1]` the vector of party $p$ (its own included); every other
-    /// party receives `None`. The vectors are delivered unchanged.
+    /// Gathers one signed vector from every party at party `to`. Party `to` receives `Some(v)`
+    /// with `v[p - 1]` the vector of party $p$ (its own included); every other party receives
+    /// `None`. The vectors are delivered unchanged.
     ///
     /// # Errors
     /// [`Error::InvalidParty`] if `to` is not in $1, \dots, n$; a transport error for a network
@@ -107,7 +108,7 @@ pub trait Comm {
         local: &[i64],
     ) -> Result<Option<Vec<Vec<i64>>>>;
 
-    /// Agreement on an abort (draft `5_Building_Blocks.tex`:129, 131: a prover that aborts tells
+    /// Agreement on an abort (draft `5_Building_Blocks.tex`:141, 144: a prover that aborts tells
     /// the other provers and the verifier): every party passes a flag and every party receives
     /// `true` iff some party passed `true`.
     ///
@@ -115,7 +116,7 @@ pub trait Comm {
     /// A transport error for a network failure.
     fn any(&mut self, label: &'static str, local: bool) -> Result<bool>;
 
-    /// Pairwise exchange (draft `6_Collaborative_Hachi.tex`:303-305: every party $i$ sends
+    /// Pairwise exchange (draft `6_Collaborative_Hachi.tex`:308-310: every party $i$ sends
     /// $\langle \mathbf f\_i \rangle\_j$ to party $j$): `outgoing[j - 1]` goes to party $j$, this
     /// party included, and the result `incoming` has `incoming[j - 1]` = the vector that party $j$
     /// sent to this party. The vectors are delivered unchanged (not reduced).
@@ -128,8 +129,8 @@ pub trait Comm {
     /// Publication of per-party values: every party passes a vector and every party receives
     /// all of them, `result[p - 1]` being the vector of party $p$ (its own included), unchanged.
     /// The collaborative sumcheck uses it for the per-prover values that the draft has every
-    /// prover send to the verifier ($G\_{0,i}, G\_{1,i}$, defined at `5_Building_Blocks.tex`:218-219
-    /// and sent at line 241, and the final evaluations, lines 314-320).
+    /// prover send to the verifier ($G\_{0,i}, G\_{1,i}$, defined at `5_Building_Blocks.tex`:247-248
+    /// and sent at line 273, and the final evaluations, lines 346-352).
     ///
     /// # Errors
     /// [`Error::LengthMismatch`] if the parties' vectors differ in length; a transport error for

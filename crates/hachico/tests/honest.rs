@@ -252,38 +252,38 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
             })
             .collect();
         assert_eq!(begins, (0..=out.proof.attempt).collect::<Vec<_>>());
-        // The documented order: 15 parameter words, A, B, D, the digest of the base PCS's
+        // The documented order: 17 parameter words, A, B, D, the digest of the base PCS's
         // parameters, u, x, y, E(u), then the step.
         let l = &ctx.layout;
-        let head: Vec<String> = vch.log.iter().take(23).map(|c| format!("{c:?}")).collect();
+        let head: Vec<String> = vch.log.iter().take(25).map(|c| format!("{c:?}")).collect();
         for (k, label) in LABELS_PARAMS.iter().enumerate() {
             assert!(
                 matches!(&vch.log[k], Call::U64(lab, _) if lab == label),
                 "{k}"
             );
         }
-        assert!(is_polys(&vch.log[15], LABEL_PP_A, l.n_a * l.width_a));
+        assert!(is_polys(&vch.log[17], LABEL_PP_A, l.n_a * l.width_a));
         let digest = pcs
             .params_digest()
             .as_chunks::<8>()
             .0
             .iter()
             .fold(0u64, |acc, b| acc.wrapping_add(u64::from_le_bytes(*b)));
-        assert_eq!(vch.log[18], Call::Words(LABEL_PP_BASE, 1, digest));
-        assert!(is_polys(&vch.log[19], hachi_co_commit::LABEL_U, l.n_b));
-        assert!(is_polys(&vch.log[22], hachi_co_conv::LABEL_E_U, 1));
-        assert_eq!(vch.log[23], Call::Begin(out.proof.attempt));
-        assert!(is_polys(&vch.log[24], hachi_co_r2l::LABEL_V, l.n_d));
-        assert!(matches!(vch.log[25], Call::R2l(a, ..) if a == out.proof.attempt));
+        assert_eq!(vch.log[20], Call::Words(LABEL_PP_BASE, 1, digest));
+        assert!(is_polys(&vch.log[21], hachi_co_commit::LABEL_U, l.n_b));
+        assert!(is_polys(&vch.log[24], hachi_co_conv::LABEL_E_U, 1));
+        assert_eq!(vch.log[25], Call::Begin(out.proof.attempt));
+        assert!(is_polys(&vch.log[26], hachi_co_r2l::LABEL_V, l.n_d));
+        assert!(matches!(vch.log[27], Call::R2l(a, ..) if a == out.proof.attempt));
         // G0, G1, the three commitments, coins, l'' x (H0, H1, a_r), three final absorbs, three
         // contexts.
-        assert_eq!(vch.log.len(), 26 + 6 + 3 * l.ell_pp + 3 + 3);
+        assert_eq!(vch.log.len(), 28 + 6 + 3 * l.ell_pp + 3 + 3);
         let words =
             |k: usize, label: &str| matches!(&vch.log[k], Call::Words(lab, 1, _) if *lab == label);
-        assert!(words(28, hachi_co_sumcheck::LABEL_COMMIT_W));
-        assert!(words(29, hachi_co_sumcheck::LABEL_COMMIT_G0));
-        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_G1));
-        assert!(matches!(vch.log[31], Call::Coins(..)));
+        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_W));
+        assert!(words(31, hachi_co_sumcheck::LABEL_COMMIT_G0));
+        assert!(words(32, hachi_co_sumcheck::LABEL_COMMIT_G1));
+        assert!(matches!(vch.log[33], Call::Coins(..)));
         let tail = &vch.log[vch.log.len() - 3..];
         for (call, poly) in tail.iter().zip(ClaimedPoly::ORDER) {
             assert!(
@@ -295,7 +295,7 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
             "toy-n1 (setup {}, a* = {}): verifier's calls: {head:?} ... {:?}",
             100 + j,
             out.proof.attempt,
-            &vch.log[23..]
+            &vch.log[25..]
         );
         return;
     }

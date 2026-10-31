@@ -148,7 +148,7 @@ fn seed(preset: &str, parts: &[&[u8]]) -> [u8; 32] {
 /// locally (fresh `PrgRandomness` per party and run, the party's real fold for fresh uniform
 /// challenges, and this crate's Rej); an attempt aborts iff some party rejects. The observed
 /// fraction must lie within 3 sigma of the exact 1 - M^{-n}, M^{-1} from
-/// `hachi_co_sampling::rej::acceptance_probability` (5_Building_Blocks.tex:193).
+/// `hachi_co_sampling::rej::acceptance_probability` (5_Building_Blocks.tex:207).
 #[test]
 fn abort_rate_matches_one_minus_m_to_the_minus_n() {
     for name in Fixture::TOY {

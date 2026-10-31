@@ -1,4 +1,4 @@
-//! The blinding polynomials $g\_{0,p}$ and $g\_{1,p}$ (`5_Building_Blocks.tex`:209-219; oracle
+//! The blinding polynomials $g\_{0,p}$ and $g\_{1,p}$ (`5_Building_Blocks.tex`:238-248; oracle
 //! `sumcheck.Blinder`; `ref/README.md`, "Blinders"):
 //! $$g(V) = s\_0 + \sum\_{j=1}^{\ell''} \sum\_{k=1}^{D} s\_{j,k} V\_j^k,$$
 //! with $D = d\_0$ for $g\_{0,p}$ and $D = d\_1$ for $g\_{1,p}$. The coefficients live in
@@ -30,7 +30,7 @@ fn row_eval<const K: usize>(field: &Fqk<K>, row: &[Ext<K>], x: &Ext<K>) -> Ext<K
 }
 
 /// $G = \sum\_{\mathbf v \in \lbrace 0, 1 \rbrace^{\ell''}} g(\mathbf v) = 2^{\ell''} s\_0 +
-/// 2^{\ell'' - 1} \sum\_{j,k} s\_{j,k}$ (`5_Building_Blocks.tex`:218-219; the oracle's
+/// 2^{\ell'' - 1} \sum\_{j,k} s\_{j,k}$ (`5_Building_Blocks.tex`:247-248; the oracle's
 /// `Blinder.hypercube_sum`), with $\ell''$ the number of rows of the blinder (for $\ell'' = 0$,
 /// $G = s\_0$).
 pub fn hypercube_sum<const K: usize>(field: &Fqk<K>, g: &Blinder<K>) -> Ext<K> {
@@ -49,7 +49,7 @@ pub fn hypercube_sum<const K: usize>(field: &Fqk<K>, g: &Blinder<K>) -> Ext<K> {
 }
 
 /// $g(\mathbf a) = s\_0 + \sum\_j \sum\_k s\_{j,k} a\_j^k$ (the oracle's `Blinder.evaluate`),
-/// the value the provers open in `5_Building_Blocks.tex`:316-318.
+/// the value the provers open in `5_Building_Blocks.tex`:348-350.
 ///
 /// # Errors
 /// [`Error::Shape`](crate::Error::Shape) unless the point has one coordinate per row.
@@ -72,7 +72,7 @@ pub fn evaluate<const K: usize>(
 }
 
 /// The coefficient vector of a blinder as the base PCS commits it (the authors' answer 1 of
-/// 2026-10-21, plan `docs/hachi-co-plan.md`, §0; `5_Building_Blocks.tex`:220-221):
+/// 2026-10-21, plan `docs/hachi-co-plan.md`, §0; `5_Building_Blocks.tex`:249-250):
 /// $(s\_0, s\_{1,1}, \dots, s\_{1,D}, s\_{2,1}, \dots, s\_{\ell'',D})$, in the order of
 /// [`Blinder`] ($s\_0$, then row $j$ by row, degree $k$ within a row): $1 + \ell'' D$ entries.
 pub fn blinder_coefficients<const K: usize>(g: &Blinder<K>) -> Vec<Ext<K>> {
@@ -88,7 +88,7 @@ pub fn blinder_coefficients<const K: usize>(g: &Blinder<K>) -> Vec<Ext<K>> {
 /// a\_1^D, a\_2, \dots, a\_{\ell''}^D)$, $1 + \ell'' D$ entries in the order of
 /// [`blinder_coefficients`], so that $g(\mathbf a) = \langle \mathtt{blinder\\_coefficients}(g),
 /// \mathtt{blinder\\_weights}(\mathbf a, D) \rangle$ for a blinder $g$ of individual degree $D$
-/// in $\ell''$ = `point.len()` variables (`5_Building_Blocks.tex`:209-214, 316-318).
+/// in $\ell''$ = `point.len()` variables (`5_Building_Blocks.tex`:238-243, 348-350).
 pub fn blinder_weights<const K: usize>(
     field: &Fqk<K>,
     point: &[Ext<K>],

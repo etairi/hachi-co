@@ -1,5 +1,5 @@
 //! `build_m` and `build_y` against the oracle's fixtures: the digest of M, the vector y, and the
-//! draft's relation M z' = y (5_Building_Blocks.tex:154-182) checked directly on the recorded
+//! draft's relation M z' = y (5_Building_Blocks.tex:167-196) checked directly on the recorded
 //! witness, also through the parties' shares (ref/README.md, "Shares").
 #![cfg(feature = "fixtures")]
 
@@ -38,7 +38,7 @@ fn m_matches_the_digest_of_every_fixture() {
         let (b, a, c) = inputs(&fx, &ctx);
         let m = build_m(&ctx, &b, &a, &c).unwrap();
         assert_eq!(m.len(), ctx.layout.n_prime);
-        assert!(m.iter().all(|row| row.len() == ctx.layout.mu));
+        assert!(m.iter().all(|row| row.len() == ctx.layout.len_z));
         assert!(m.iter().flatten().all(|p| p.0.len() == ctx.layout.d));
         assert!(m.iter().flatten().flat_map(|p| &p.0).all(|x| *x < ctx.q()));
         assert_eq!(
@@ -76,7 +76,7 @@ fn y_matches_every_fixture_and_m_z_prime_equals_y() {
         // product of hachi-co-math, independent of the oracle's numpy code).
         let m = build_m(&ctx, &b, &a, &c).unwrap();
         let z_prime = fx.polys("/ring_to_linear/z_prime").unwrap();
-        assert_eq!(z_prime.len(), ctx.layout.mu);
+        assert_eq!(z_prime.len(), ctx.layout.len_z);
         assert_eq!(
             ctx.ring.mat_vec(&m, &z_prime).unwrap(),
             y,

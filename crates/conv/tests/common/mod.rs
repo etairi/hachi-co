@@ -28,7 +28,7 @@ pub fn recorded_state(fx: &Fixture, ctx: &Context<K>, p: PartyId) -> PartyState<
 }
 
 /// Party $p$'s state from its share $\langle \mathbf f \rangle\_p$, written out from the draft
-/// (`field-to-ring-rok.tex`:47-80, `6_Collaborative_Hachi.tex`:370-376) independently of
+/// (`field-to-ring-rok.tex`:76-109, `6_Collaborative_Hachi.tex`:375-381) independently of
 /// `hachi-co-commit`: entry $j$ of block $i$ is $\psi$ of $\hat f\[(i 2^m + j) g + \kappa'\]$,
 /// $\kappa' \lt g = d/k$, where $\hat f\[(p-1) 2^\ell + t\] = \langle f \rangle\_p\[t\]$.
 pub fn state_from_share(ctx: &Context<K>, p: PartyId, share: Vec<Ext<K>>) -> PartyState<K> {
@@ -63,6 +63,7 @@ pub fn state_from_share(ctx: &Context<K>, p: PartyId, share: Vec<Ext<K>>) -> Par
         party: p,
         share,
         blocks,
+        rho_u: vec![ctx.ring.zero(); ctx.layout.m_u],
     }
 }
 

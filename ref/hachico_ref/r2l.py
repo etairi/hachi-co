@@ -1,13 +1,13 @@
 """Ring evaluation claims to linear relations over R_q, with masks, rho and rejection sampling
-(5_BB:98-193), plus the verifier's public coins.
+(5_BB:98-207), plus the verifier's public coins.
 
-Layout of z' (5_BB:164-172), 0-indexed positions (the draft's 1-indexed position u is our u - 1):
-    [ w_hat (2^r delta) | w0_hat (n delta) | t0_hat (n n_A delta) | rho (n m_rho) | t_hat (2^r n_A delta)
-      | z_hat (2^m delta tau) | <u> (1) ],   mu = len(z')  (6_CH:278)
+Layout of z' (5_BB:177-186), 0-indexed positions (the draft's 1-indexed position u is our u - 1):
+    [ w_hat (2^r delta) | w0_hat (n delta) | t0_hat (n n_A delta) | rho_v (n m_v) | t_hat (2^r n_A delta)
+      | rho_u (n m_u) | z_hat (2^m delta tau) | <u> (1) ],   mu = len(z') + 1  (6_CH:282, 5_BB:226)
 Inside each block the gadget layout is element-major (m0-spec): w_hat_i = G^{-1}(w_i) at i*delta + e;
 t_hat_i at i*n_A*delta + a*delta + e; z_hat at (j*delta + e)*tau + t for the entry z[j*delta + e].
 
-Rows of M (5_BB:157-163): [ D (n_D) | B (n_B) | b^T G (1) | c^T (x) G_1 ... (1) | ... A J (n_A) ],
+Rows of M (5_BB:170-176): [ D (n_D) | B (n_B) | b^T G (1) | c^T (x) G_1 ... (1) | ... A J (n_A) ],
 n' = n_A + n_B + n_D + 2.  y = ({v}, {u_com}, 0, 0, 0).
 """
 import numpy as np
@@ -22,12 +22,15 @@ class Layout:
         self.w = 0
         self.w0 = self.w + 2 ** r * d
         self.t0 = self.w0 + P.n * d
-        self.rho = self.t0 + P.n * P.n_A * d
-        self.t = self.rho + P.n * P.m_rho
-        self.z = self.t + 2 ** r * P.n_A * d
+        self.rho_v = self.t0 + P.n * P.n_A * d
+        self.t = self.rho_v + P.n * P.m_v
+        self.rho_u = self.t + 2 ** r * P.n_A * d
+        self.z = self.rho_u + P.n * P.m_u
         self.u = self.z + 2 ** m * d * P.tau
-        assert self.u + 1 == P.mu, "layout must match mu of 6_CH:278"
-        assert self.t == P.width_D, "D acts on (w_hat, w0_hat, t0_hat, rho)"
+        assert self.u + 2 == P.mu, "layout must match mu of 6_CH:282: <u> at mu - 2, the pad's row at mu - 1"
+        assert self.t == P.width_D, "D acts on (w_hat, w0_hat, t0_hat, rho_v)"
+        assert self.z - self.t == P.width_B, "B acts on (t_hat, rho_u)"
+        self.pad = self.u + 1                   # the draft's row mu (5_BB:256), after z'
         # rows of M
         self.row_D = 0
         self.row_B = P.n_D
@@ -40,11 +43,12 @@ class Layout:
         """Named blocks (name, start, length) for documentation and fixtures."""
         P = self.P
         return [("w_hat", self.w, self.w0 - self.w), ("w0_hat", self.w0, self.t0 - self.w0),
-                ("t0_hat", self.t0, self.rho - self.t0), ("rho", self.rho, self.t - self.rho),
-                ("t_hat", self.t, self.z - self.t), ("z_hat", self.z, self.u - self.z), ("u", self.u, 1)]
+                ("t0_hat", self.t0, self.rho_v - self.t0), ("rho_v", self.rho_v, self.t - self.rho_v),
+                ("t_hat", self.t, self.rho_u - self.t), ("rho_u", self.rho_u, self.z - self.rho_u),
+                ("z_hat", self.z, self.u - self.z), ("u", self.u, 1)]
 
     def partition(self):
-        """S_p (5_BB:197) as sorted lists of 0-indexed positions in [0, mu-1), and the positions of all-zero
+        """S_p (5_BB:226) as sorted lists of 0-indexed positions in [0, mu-2), and the positions of all-zero
         blocks owned by nobody (non-empty only when n is not a power of two)."""
         P = self.P
         d = P.delta
@@ -58,12 +62,13 @@ class Layout:
         for p in range(1, P.n + 1):
             S[p].extend(range(self.w0 + (p - 1) * d, self.w0 + p * d))
             S[p].extend(range(self.t0 + (p - 1) * P.n_A * d, self.t0 + p * P.n_A * d))
-            S[p].extend(range(self.rho + (p - 1) * P.m_rho, self.rho + p * P.m_rho))
+            S[p].extend(range(self.rho_v + (p - 1) * P.m_v, self.rho_v + p * P.m_v))
+            S[p].extend(range(self.rho_u + (p - 1) * P.m_u, self.rho_u + p * P.m_u))
         S[1].extend(range(self.z, self.u))
         for p in S:
             S[p] = sorted(S[p])
         allpos = sorted(sum(S.values(), []) + unheld)
-        assert allpos == list(range(P.mu - 1)), "S_1..S_n and the unheld positions partition [mu-1]"
+        assert allpos == list(range(P.mu - 2)), "S_1..S_n and the unheld positions partition [mu-2]"
         return S, sorted(unheld)
 
 
@@ -80,7 +85,7 @@ class Coins:
         return Prg(self.ctx.seed, self.tag + "/" + name, index)
 
     def challenge(self, attempt):
-        """c in C^{2^r}, C = {c in R_q : ||c||_1 <= omega} (5_BB:122-126), uniform; signed coefficients."""
+        """c in C^{2^r}, C = {c in R_q : ||c||_1 <= omega} (5_BB:134-138), uniform; signed coefficients."""
         P = self.ctx.P
         prg = self._prg("r2l/c", attempt)
         return np.array([l1ball_sample(prg, P.d, P.omega) for _ in range(P.n_blocks)], dtype=np.int64)
@@ -138,11 +143,11 @@ def a_times_G(ctx, a_ring, vec):
 
 
 def build_M(ctx, pp, b_ring, a_ring, c):
-    """The public matrix M (5_BB:157-163) as an (n', mu, d) array of ring elements."""
+    """The public matrix M (5_BB:170-176) as an (n', len(z'), d) array of ring elements."""
     P, R = ctx.P, ctx.R
     L = Layout(P)
     q, d, b, delta, tau = P.q, P.d, P.b, P.delta, P.tau
-    M = np.zeros((P.n_prime, P.mu, d), dtype=np.int64)
+    M = np.zeros((P.n_prime, P.len_z, d), dtype=np.int64)
     bp = [pow(b, e, q) for e in range(delta + tau)]
     M[L.row_D:L.row_D + P.n_D, 0:P.width_D] = pp["D"]
     M[L.row_B:L.row_B + P.n_B, L.t:L.t + P.width_B] = pp["B"]
@@ -182,8 +187,8 @@ def build_y(ctx, v_msg, u_com):
 
 
 # ------------------------------------------------------------------ protocol ----
-def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
-    """The provers' side of 5_BB:102-182, looping over attempts (fresh r_i, rho_i, hence fresh v and c) until
+def ring_to_linear(ctx, pp, states, rho_u, conv, u_com, coins, max_attempts=64):
+    """The provers' side of 5_BB:114-205, looping over attempts (fresh r_i, rho^v_i, hence fresh v and c) until
     no prover aborts.  Returns a dict with every intermediate value and the attempt log."""
     P, R = ctx.P, ctx.R
     L = Layout(P)
@@ -200,13 +205,13 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
     attempts = []
     for att in range(max_attempts):
         rec = dict(attempt=att, provers={})
-        # step 2: masks r_i, rho_i, and their images
-        D_in = np.zeros((P.n, P.width_D, d), dtype=np.int64)     # slices of (w_hat, w0_hat, t0_hat, rho)
+        # step 2: masks r_i, rho^v_i, and their images
+        D_in = np.zeros((P.n, P.width_D, d), dtype=np.int64)     # slices of (w_hat, w0_hat, t0_hat, rho_v)
         for p in range(1, P.n + 1):
             mprg = Prg(ctx.seed, "r2l/mask/p%d" % p, att)
             mask = np.array(mprg.boxed(P.gamma, P.width_A * d), dtype=np.int64).reshape(P.width_A, d)
-            rprg = Prg(ctx.seed, "r2l/rho/p%d" % p, att)
-            rho = np.array(rprg.short(P.b, P.m_rho * d), dtype=np.int64).reshape(P.m_rho, d)
+            rprg = Prg(ctx.seed, "r2l/rho_v/p%d" % p, att)
+            rho_v = np.array(rprg.short(P.b, P.m_v * d), dtype=np.int64).reshape(P.m_v, d)
             mq = R.reduce(mask)
             t0 = R.matvec(pp["A"], mq)
             t0_hat = R.g_inv(t0, P.b, delta)
@@ -216,8 +221,8 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
                 D_in[p - 1, L.w + i * delta:L.w + (i + 1) * delta] = w_hat[i * delta:(i + 1) * delta]
             D_in[p - 1, L.w0 + (p - 1) * delta:L.w0 + p * delta] = w0_hat
             D_in[p - 1, L.t0 + (p - 1) * P.n_A * delta:L.t0 + p * P.n_A * delta] = t0_hat
-            D_in[p - 1, L.rho + (p - 1) * P.m_rho:L.rho + p * P.m_rho] = R.reduce(rho)
-            rec["provers"][p] = dict(mask=mask, rho=rho, t0=t0, t0_hat=t0_hat, w0=w0, w0_hat=w0_hat)
+            D_in[p - 1, L.rho_v + (p - 1) * P.m_v:L.rho_v + p * P.m_v] = R.reduce(rho_v)
+            rec["provers"][p] = dict(mask=mask, rho_v=rho_v, t0=t0, t0_hat=t0_hat, w0=w0, w0_hat=w0_hat)
         # step 3: F_AH(D) on the slices
         v_msg = R.matvec(pp["D"], D_in.sum(axis=0) % q)
         rec["D_input_slices"] = D_in
@@ -235,7 +240,7 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
                 fold += int_ring_mul_rows(c[i], R.centered(states[p][i]["s"]), d)
             fnorm = int(np.abs(fold).max())
             bound_text = len(P.blocks_of(p)) * P.omega * (P.b // 2)
-            assert fnorm <= bound_text <= P.beta1, "fold norm bound of 5_BB:129"
+            assert fnorm <= bound_text <= P.beta1, "fold norm bound of 5_BB:141"
             mask = rec["provers"][p]["mask"]
             zp = rej(fold, mask, P.gamma, P.beta1)
             ok = zp is not None
@@ -248,7 +253,7 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
         attempts.append(rec)
         if rec["abort"]:
             continue
-        # steps 5-6: gather at prover 1, norm check, z_hat
+        # steps 5-7: F_AH(1^n) on (z_1, ..., z_n), norm check at prover 1, z_hat (5_BB:142-146)
         z = sum(accepted.values())
         z_norm = int(np.abs(z).max())
         norm_ok = z_norm <= P.beta
@@ -264,16 +269,17 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
     for p in states:
         for i, st in states[p].items():
             t_hat[i * P.n_A * delta:(i + 1) * P.n_A * delta] = st["t_hat"]
-    zp_all = np.zeros((P.mu, d), dtype=np.int64)
+    zp_all = np.zeros((P.len_z, d), dtype=np.int64)
     zp_all[L.w:L.w0] = w_hat
     zp_all[L.w0:L.t0] = np.concatenate([acc["provers"][p]["w0_hat"] for p in range(1, P.n + 1)])
-    zp_all[L.t0:L.rho] = np.concatenate([acc["provers"][p]["t0_hat"] for p in range(1, P.n + 1)])
-    zp_all[L.rho:L.t] = R.reduce(np.concatenate([acc["provers"][p]["rho"] for p in range(1, P.n + 1)]))
-    zp_all[L.t:L.z] = t_hat
+    zp_all[L.t0:L.rho_v] = np.concatenate([acc["provers"][p]["t0_hat"] for p in range(1, P.n + 1)])
+    zp_all[L.rho_v:L.t] = R.reduce(np.concatenate([acc["provers"][p]["rho_v"] for p in range(1, P.n + 1)]))
+    zp_all[L.t:L.rho_u] = t_hat
+    zp_all[L.rho_u:L.z] = R.reduce(np.asarray(rho_u).reshape(P.n * P.m_u, d))
     zp_all[L.z:L.u] = R.reduce(z_hat)
     zp_all[L.u] = conv["u"]
     S, unheld = L.partition()
-    z_shares = np.zeros((P.n, P.mu, d), dtype=np.int64)
+    z_shares = np.zeros((P.n, P.len_z, d), dtype=np.int64)
     for p in range(1, P.n + 1):
         z_shares[p - 1, S[p]] = zp_all[S[p]]
         z_shares[p - 1, L.u] = conv["u_shares"][p - 1]
@@ -281,7 +287,7 @@ def ring_to_linear(ctx, pp, states, conv, u_com, coins, max_attempts=64):
     assert not zp_all[unheld].any()
     y_vec = build_y(ctx, acc["v"], u_com)
     y_shares = np.zeros((P.n, P.n_prime, d), dtype=np.int64)
-    y_shares[0] = y_vec                                 # prover 1 holds y; the others hold 0 (5_BB:134)
+    y_shares[0] = y_vec                                 # prover 1 holds y; the others hold 0 (5_BB:147)
     M = build_M(ctx, pp, b_ring, a_ring, acc["c"])
     return dict(w=w, w_hat=w_hat, attempts=attempts, accepted_attempt=acc["attempt"], z=z, z_norm=z_norm,
                 z_norm_ok=bool(norm_ok), z_hat=z_hat, t_hat=t_hat, z_prime=zp_all, z_shares=z_shares,

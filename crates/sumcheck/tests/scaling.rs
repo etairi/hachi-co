@@ -67,7 +67,7 @@ fn synthetic(ell: u32, seed: u64) -> Synthetic {
         .collect();
     let m = build_m(&ctx, &b_ring, &a_ring, &c).unwrap();
     let span = (2 * b - 1) as u64;
-    let mut z_prime: Vec<Poly> = (0..l.mu - 1)
+    let mut z_prime: Vec<Poly> = (0..l.u)
         .map(|_| {
             Poly(
                 (0..d)

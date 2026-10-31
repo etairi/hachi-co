@@ -58,16 +58,16 @@ pub fn verify_with<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
 ///    $a^\ast$ below the cap, one base-PCS commitment and proof per prover and polynomial), then
 ///    [`absorb_statement`];
 /// 2. $\Pi\_{\mathsf{conv}}$'s check $E(u) \in \mathcal R\_q^H$ and $y = E(u)$
-///    ([`hachi_co_conv::check`], `field-to-ring-rok.tex`:163-164); $E(u)$ is absorbed under
+///    ([`hachi_co_conv::check`], `field-to-ring-rok.tex`:192-193); $E(u)$ is absorbed under
 ///    [`LABEL_E_U`];
 /// 3. the public vectors of $\mathbf x$ ([`public_vectors`]), the challenges of the accepted
 ///    attempt ([`verifier_challenges`]: `begin_attempt(a*)`, absorb $\mathbf v$, draw
 ///    $\mathbf c$, check $\mathbf c \in \mathcal C^{2^r}$), and $\mathbf M$, $\mathbf y$
-///    ([`linear_relation`], `5_Building_Blocks.tex`:157-179);
+///    ([`linear_relation`], `5_Building_Blocks.tex`:170-193);
 /// 4. the matrix of $E$ at the point $v$ ([`e_matrix`]) and $y$ embedded in $\mathcal R\_q^H$
 ///    (`ref/README.md`, choice 12);
 /// 5. the sumcheck verifier with the base PCS ([`hachi_co_sumcheck::verify_claims`],
-///    `5_Building_Blocks.tex`:276-334): every round check, the $3n$ openings (each commitment,
+///    `5_Building_Blocks.tex`:308-366): every round check, the $3n$ openings (each commitment,
 ///    absorbed before the sumcheck's coins, opened to the final value at $\mathbf a$ under its
 ///    context) and both final checks.
 ///

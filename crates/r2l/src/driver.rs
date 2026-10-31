@@ -1,14 +1,14 @@
-//! The driver of the ring-to-linear step for one party (`5_Building_Blocks.tex`:102-182), with
+//! The driver of the ring-to-linear step for one party (`5_Building_Blocks.tex`:114-196), with
 //! the attempts of Fiat-Shamir with aborts (`ref/README.md`, choice 5; plan
 //! `docs/hachi-co-plan.md`, finding F5).
 
 use crate::local::{
     check_challenges, check_polys, d_slice, fah_d_input, fold, owned_w, respond, sample_attempt,
 };
-use crate::prover1::{aggregate, norm_check, z_hat};
+use crate::prover1::{norm_check, z_hat, z_of_sum};
 use crate::share::{y_share, z_prime_share};
 use crate::{
-    COMM_ABORT, COMM_FAH_D, COMM_GATHER_Z, COMM_PROVER1, Error, LABEL_V, MAX_ATTEMPTS, Result,
+    COMM_ABORT, COMM_FAH_D, COMM_FAH_Z, COMM_PROVER1, Error, LABEL_V, MAX_ATTEMPTS, Result,
 };
 use hachi_co_core::wire::{flatten_polys, unflatten_polys};
 use hachi_co_core::{
@@ -19,8 +19,8 @@ use hachi_co_mpc::Comm;
 /// The public record of one attempt, as this party saw it (for tests and diagnostics).
 ///
 /// It holds only what the protocol makes public: the first message $\mathbf v$ (sent to the
-/// verifier in every attempt, line 121), the challenges, this party's accept bit (a rejecting
-/// prover announces the abort, line 129) and the agreed abort. Masks, $\boldsymbol\rho$, folds,
+/// verifier in every attempt, line 133), the challenges, this party's accept bit (a rejecting
+/// prover announces the abort, line 141) and the agreed abort. Masks, $\boldsymbol\rho$, folds,
 /// norms and responses are never recorded: a rejected mask must never be revealed (plan,
 /// finding F5). Tests reproduce those through the party-local functions instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,14 +28,14 @@ pub struct AttemptRecord {
     /// The attempt index $a$.
     pub attempt: u64,
     /// $\mathbf v \in \mathcal R\_q^{n\_D}$, the output of $\mathcal F\_{\mathsf{AH}}(\mathbf D)$
-    /// (`5_Building_Blocks.tex`:120).
+    /// (`5_Building_Blocks.tex`:132).
     pub v: Vec<Poly>,
-    /// $\mathbf c \in \mathcal C^{2^r}$ (`5_Building_Blocks.tex`:126), $2^r$ vectors of $d$
+    /// $\mathbf c \in \mathcal C^{2^r}$ (`5_Building_Blocks.tex`:138), $2^r$ vectors of $d$
     /// signed coefficients.
     pub c: Vec<Vec<i64>>,
-    /// Whether this party's $\mathsf{Rej}$ accepted (line 128).
+    /// Whether this party's $\mathsf{Rej}$ accepted (line 140).
     pub accepted: bool,
-    /// Whether some party rejected, so that the attempt aborted (line 129).
+    /// Whether some party rejected, so that the attempt aborted (line 141).
     pub aborted: bool,
 }
 
@@ -43,7 +43,7 @@ pub struct AttemptRecord {
 /// composition (WP11) need.
 ///
 /// The proof carries only `accepted_attempt`, `v` and `c` (plan, finding F5: never
-/// $\mathbf z\_i$, $\hat{\mathbf z}$, $\mathbf r\_i$ or $\boldsymbol\rho\_i$); `share` is the
+/// $\mathbf z\_i$, $\hat{\mathbf z}$, $\mathbf r\_i$ or $\boldsymbol\rho^v\_i$); `share` is the
 /// party's private input to the sumcheck.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct R2lOutput {
@@ -83,7 +83,7 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     run_with_cap(ctx, comm, rng, ch, state, pv, u_share, u_com, MAX_ATTEMPTS)
 }
 
-/// The ring-to-linear step (`5_Building_Blocks.tex`:102-182) for the party `comm.id()`, with up
+/// The ring-to-linear step (`5_Building_Blocks.tex`:114-196) for the party `comm.id()`, with up
 /// to `max_attempts` attempts.
 ///
 /// Inputs: the party's state after Commit, the public vectors of $\Pi\_{\mathsf{conv}}$, its
@@ -93,26 +93,26 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
 ///
 /// Step 1 ($w\_i$, $\hat{\mathbf w}\_i$, [`owned_w`]) runs once. Then, for $a = 0, 1, \dots$:
 /// 1. [`Challenger::begin_attempt`]`(a)`;
-/// 2. [`sample_attempt`]: fresh $\mathbf r\_p$, $\boldsymbol\rho\_p$ (index $a$) and their images
-///    (lines 110-114);
+/// 2. [`sample_attempt`]: fresh $\mathbf r\_p$, $\boldsymbol\rho^v\_p$ (index $a$) and their images
+///    (lines 122-126);
 /// 3. $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ on the [`d_slice`] ([`fah_d_input`],
-///    [`Comm::fah`] with label [`COMM_FAH_D`]) gives $\mathbf v$ (lines 115-121); $\mathbf v$
+///    [`Comm::fah`] with label [`COMM_FAH_D`]) gives $\mathbf v$ (lines 127-133); $\mathbf v$
 ///    is absorbed under [`LABEL_V`];
 /// 4. $\mathbf c$ = [`Challenger::r2l_challenges`]`(a, 2^r, d, ω)`, checked by
-///    [`check_challenges`] (lines 122-126);
-/// 5. [`fold`] and [`respond`] ($\mathsf{Rej}$, line 128); the accept bits are agreed with
+///    [`check_challenges`] (lines 134-138);
+/// 5. [`fold`] and [`respond`] ($\mathsf{Rej}$, line 140); the accept bits are agreed with
 ///    [`Comm::any`] (label [`COMM_ABORT`]) before any response is sent (plan, finding F5). If
-///    some party rejected, the attempt aborts (line 129): its mask is wiped, its other values
+///    some party rejected, the attempt aborts (line 141): its mask is wiped, its other values
 ///    dropped, and the next attempt starts;
-/// 6. otherwise the responses are gathered at prover 1 ([`Comm::gather`], label
-///    [`COMM_GATHER_Z`]), which runs [`aggregate`], [`norm_check`] and [`z_hat`]
-///    (lines 129-133); prover 1 announces whether these succeeded ([`Comm::any`], label
+/// 6. otherwise the provers sum the responses with $\mathcal F\_{\mathsf{AH}}(1^n)$
+///    ([`Comm::fah`], label [`COMM_FAH_Z`]), and prover 1 runs [`z_of_sum`], [`norm_check`] and
+///    [`z_hat`] (lines 142-146) and announces whether these succeeded ([`Comm::any`], label
 ///    [`COMM_PROVER1`]);
 /// 7. every party assembles its [`LinearShare`] ([`z_prime_share`], [`y_share`],
-///    lines 134-179).
+///    lines 147-193).
 ///
 /// **Choices** (the draft is silent): a failure of prover 1's check is not retried (it never
-/// happens for honest provers, line 193) but ends the step with [`Error::NormCheck`] at prover 1
+/// happens for honest provers, line 207) but ends the step with [`Error::NormCheck`] at prover 1
 /// and [`Error::Prover1Abort`] elsewhere; attempts are capped (plan, finding F5). The verifier
 /// refuses an attempt index at or above [`MAX_ATTEMPTS`] ([`crate::verifier_challenges`]), so
 /// with a larger `max_attempts` an output accepted at such an index does not verify.
@@ -196,7 +196,7 @@ pub fn run_with_cap<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenge
             accepted,
             aborted,
         });
-        let z_p = match (aborted, response) {
+        let mut z_p = match (aborted, response) {
             (true, None) => continue,
             (true, Some(mut z_p)) => {
                 // Another party rejected: this response is never sent (plan, finding F5).
@@ -210,21 +210,11 @@ pub fn run_with_cap<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenge
                 )));
             }
         };
-        let gathered = comm.gather(COMM_GATHER_Z, 1, &z_p)?;
-        let at_prover1 = match (p, gathered) {
-            (1, Some(responses)) => Some(prover1_steps(ctx, &responses)),
-            (1, None) => {
-                return Err(Error::Protocol(
-                    "the gather delivered no responses to prover 1".into(),
-                ));
-            }
-            (_, None) => None,
-            (_, Some(_)) => {
-                return Err(Error::Protocol(format!(
-                    "the gather delivered the responses to party {p} instead of prover 1"
-                )));
-            }
-        };
+        let mut local: Vec<u64> = z_p.iter().map(|x| ctx.ring.zq().from_i64(*x)).collect();
+        let sum = comm.fah(COMM_FAH_Z, &local)?;
+        crate::ct::wipe(&mut z_p);
+        local.fill(0);
+        let at_prover1 = (p == 1).then(|| prover1_steps(ctx, &sum));
         let failed = matches!(at_prover1, Some(Err(_)));
         let some_failed = comm.any(COMM_PROVER1, failed)?;
         let z_hat_digits = match (at_prover1, some_failed) {
@@ -253,11 +243,11 @@ pub fn run_with_cap<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenge
     })
 }
 
-/// Prover 1's steps after the gather (`5_Building_Blocks.tex`:129-133): [`aggregate`],
-/// [`norm_check`] and [`z_hat`]; $\mathbf z$ itself is wiped (best effort), as $\hat{\mathbf z}$
-/// carries it on.
-fn prover1_steps<const K: usize>(ctx: &Context<K>, responses: &[Vec<i64>]) -> Result<Vec<Poly>> {
-    let mut z = aggregate(ctx, responses)?;
+/// Prover 1's steps after $\mathcal F\_{\mathsf{AH}}(1^n)$ (`5_Building_Blocks.tex`:142-146):
+/// [`z_of_sum`], [`norm_check`] and [`z_hat`]; $\mathbf z$ itself is wiped (best effort), as
+/// $\hat{\mathbf z}$ carries it on.
+fn prover1_steps<const K: usize>(ctx: &Context<K>, sum: &[u64]) -> Result<Vec<Poly>> {
+    let mut z = z_of_sum(ctx, sum)?;
     let digits = norm_check(ctx, &z).and_then(|()| z_hat(ctx, &z));
     crate::ct::wipe(&mut z);
     digits

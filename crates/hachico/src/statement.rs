@@ -2,17 +2,17 @@
 //! (`docs/m1-spec.md`, WP11; plan `docs/hachi-co-plan.md`, finding F5 and the risk "Weak
 //! Fiat-Shamir": the transcript absorbs the full statement before any coin).
 //!
-//! The statement is the public input of $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:408): the
+//! The statement is the public input of $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:426): the
 //! public parameters $\mathsf{pp}$ (the parameters and $\mathbf A, \mathbf B, \mathbf D$,
-//! lines 293-297), the commitment $\mathbf u$, the point $\mathbf x$ and the claimed evaluation
-//! $y$. The base PCS's own parameters (lines 289-292) enter through their digest
+//! lines 298-302), the commitment $\mathbf u$, the point $\mathbf x$ and the claimed evaluation
+//! $y$. The base PCS's own parameters (lines 294-297) enter through their digest
 //! ([`BasePcs::params_digest`](hachi_co_core::BasePcs::params_digest)). Its commitments are
 //! absorbed before the sumcheck's coins, and every opening is made under a context derived from
 //! the transcript.
 
 use crate::error::StatementError;
 use hachi_co_core::{Challenger, Context, Ext, Matrix, Poly};
-use hachi_co_params::{ChallengeSet, Params, TauRule};
+use hachi_co_params::{ChallengeSet, PadRule, Params, TauRule};
 
 /// The domain of the Fiat-Shamir transcript of one $\mathsf{Eval}$
 /// ([`hachi_co_core::FsChallenger::new`]): one fresh challenger per proof.
@@ -20,7 +20,7 @@ pub const EVAL_DOMAIN: &[u8] = b"hachi-co/eval/v1";
 
 /// The labels of the parameter words of the statement, in the order they are absorbed
 /// ([`statement_words`]).
-pub const LABELS_PARAMS: [&str; 15] = [
+pub const LABELS_PARAMS: [&str; 17] = [
     "hachi-co/eval/params/lambda",
     "hachi-co/eval/params/n",
     "hachi-co/eval/params/t",
@@ -34,13 +34,15 @@ pub const LABELS_PARAMS: [&str; 15] = [
     "hachi-co/eval/params/n_A",
     "hachi-co/eval/params/n_B",
     "hachi-co/eval/params/n_D",
-    "hachi-co/eval/params/m_rho",
+    "hachi-co/eval/params/m_u",
+    "hachi-co/eval/params/m_v",
+    "hachi-co/eval/params/pad",
     "hachi-co/eval/params/q",
 ];
 
 /// The label of $\mathbf A$ (row-major, $n\_A \cdot \delta 2^m$ ring elements).
 pub const LABEL_PP_A: &str = "hachi-co/eval/pp/A";
-/// The label of $\mathbf B$ (row-major, $n\_B \cdot n\_A \delta 2^r$ ring elements).
+/// The label of $\mathbf B$ (row-major, $n\_B \cdot (n\_A \delta 2^r + n m\_u)$ ring elements).
 pub const LABEL_PP_B: &str = "hachi-co/eval/pp/B";
 /// The label of $\mathbf D$ (row-major, $n\_D \cdot w\_D$ ring elements).
 pub const LABEL_PP_D: &str = "hachi-co/eval/pp/D";
@@ -56,12 +58,13 @@ pub const LABEL_Y: &str = "hachi-co/eval/y";
 /// 64-bit integers in a fixed order, each with its label from [`LABELS_PARAMS`]:
 /// $\lambda$, $n$, $t$, $\ell$, $\alpha$, $\kappa$, $b$, $\omega$ (`params.omega`), the challenge
 /// set (0 for the $\ell\_1$ ball, 1 for the sparse set), the $\tau$ rule (0 tight, 1 the draft's,
-/// 2 ceil), $n\_A$, $n\_B$, $n\_D$, $m\_\rho$, $q$ (`params.q`).
+/// 2 ceil), $n\_A$, $n\_B$, $n\_D$, $m\_u$, $m\_v$, the rule of the pad (0 for
+/// [`PadRule::Field`], 1 for [`PadRule::Residues`]), $q$ (`params.q`).
 ///
 /// [`hachi_co_params::derive`] computes every other parameter from these, so they fix the
 /// whole parameter set. (A [`Params`] value edited by hand after `derive` is outside this
 /// guarantee: build contexts from derived parameters.)
-pub fn statement_words(params: &Params) -> [(&'static str, u64); 15] {
+pub fn statement_words(params: &Params) -> [(&'static str, u64); 17] {
     let c = &params.choices;
     let challenge_set = match c.challenge_set {
         ChallengeSet::L1Ball => 0,
@@ -71,6 +74,10 @@ pub fn statement_words(params: &Params) -> [(&'static str, u64); 15] {
         TauRule::Tight => 0,
         TauRule::Draft => 1,
         TauRule::Ceil => 2,
+    };
+    let pad = match c.pad {
+        PadRule::Field => 0,
+        PadRule::Residues => 1,
     };
     let values = [
         u64::from(c.lambda),
@@ -86,7 +93,9 @@ pub fn statement_words(params: &Params) -> [(&'static str, u64); 15] {
         c.n_a,
         c.n_b,
         c.n_d,
-        c.m_rho,
+        c.m_u,
+        c.m_v,
+        pad,
         params.q,
     ];
     core::array::from_fn(|i| (LABELS_PARAMS[i], values[i]))
@@ -101,9 +110,9 @@ fn rows(m: &Matrix) -> Vec<Poly> {
 /// Absorbs the statement of $\mathsf{Eval}$ into `ch`, before any coin is drawn
 /// (`docs/m1-spec.md`, WP11), in this order:
 ///
-/// 1. the 15 parameter words of [`statement_words`], each with
+/// 1. the 17 parameter words of [`statement_words`], each with
 ///    [`Challenger::absorb_u64`] under its label;
-/// 2. $\mathbf A$, $\mathbf B$, $\mathbf D$ (`6_Collaborative_Hachi.tex`:283-288), each as one
+/// 2. $\mathbf A$, $\mathbf B$, $\mathbf D$ (`6_Collaborative_Hachi.tex`:287-292), each as one
 ///    message of ring elements, row-major ([`Challenger::absorb_polys`] under [`LABEL_PP_A`],
 ///    [`LABEL_PP_B`], [`LABEL_PP_D`]);
 /// 3. the digest of the base PCS's parameters under [`LABEL_PP_BASE`]

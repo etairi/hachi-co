@@ -1,4 +1,4 @@
-//! The verifier of the collaborative sumcheck (`5_Building_Blocks.tex`:276-334; oracle
+//! The verifier of the collaborative sumcheck (`5_Building_Blocks.tex`:308-366; oracle
 //! `sumcheck.verify` and `sumcheck.mstar_eval_factorized`), with the openings of the base PCS.
 
 use crate::blinder::blinder_weights;
@@ -15,12 +15,13 @@ use crate::transcript::{Claim, ClaimedPoly, FinalClaims, SumcheckTranscript};
 use core::ops::Range;
 use hachi_co_core::{BasePcs, Challenger, Context, Layout, Poly};
 use hachi_co_math::{Ext, Fqk};
+use hachi_co_params::PadRule;
 
 /// The public inputs of the verifier, all computed from public data
-/// (`5_Building_Blocks.tex`:154-182, 251-266; the oracle's `oracle.verifier_public`).
+/// (`5_Building_Blocks.tex`:167-196, 283-298; the oracle's `oracle.verifier_public`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInput<'a> {
-    /// $\mathbf M \in \mathcal R\_q^{n' \times \mu}$ of the accepted attempt
+    /// $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of the accepted attempt
     /// ([`hachi_co_core::build_m`]).
     pub m: &'a [Vec<Poly>],
     /// $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$
@@ -54,7 +55,7 @@ impl<'a> PublicInput<'a> {
         }
     }
 
-    /// Checks every shape ($\mathbf M$: $n' \times \mu$; $\mathbf y$: $n'$; $E$: $d \times d$; $d$
+    /// Checks every shape ($\mathbf M$: $n' \times (\mu - 1)$; $\mathbf y$: $n'$; $E$: $d \times d$; $d$
     /// coefficients per polynomial; $n$ lists of ranges inside $\[0, 2^{\ell\_U})$) and that every
     /// residue is canonical.
     ///
@@ -62,7 +63,7 @@ impl<'a> PublicInput<'a> {
     /// [`VerifyError::Shape`] or [`VerifyError::NonCanonical`].
     pub fn validate(&self, layout: &Layout, q: u64) -> core::result::Result<(), VerifyError> {
         let d = layout.d;
-        check_matrix(self.m, layout.n_prime, layout.mu, d)?;
+        check_matrix(self.m, layout.n_prime, layout.len_z, d)?;
         check_len("y (one entry per row of M)", layout.n_prime, self.y.len())?;
         check_len("E matrix (rows)", d, self.e_matrix.len())?;
         check_len("y as a ring element", d, self.y_ring.0.len())?;
@@ -117,7 +118,7 @@ pub struct Check {
     pub passed: bool,
 }
 
-/// One base-PCS opening as the verifier checked it (`5_Building_Blocks.tex`:321-326; the
+/// One base-PCS opening as the verifier checked it (`5_Building_Blocks.tex`:353-358; the
 /// oracle's check `pcs_open_<poly>_p<party>`, [`Claim::check_name`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpeningCheck<const K: usize> {
@@ -150,7 +151,7 @@ pub struct VerifierReport<const K: usize> {
     pub openings: Vec<OpeningCheck<K>>,
     /// The point $\mathbf a$ and the $3n$ evaluation claims that the openings check.
     pub claims: FinalClaims<K>,
-    /// The claimed sum $a$ (`5_Building_Blocks.tex`:263-264; fixture key `sumcheck/a_claim`).
+    /// The claimed sum $a$ (`5_Building_Blocks.tex`:295-296; fixture key `sumcheck/a_claim`).
     pub claimed_sum: Ext<K>,
     /// $\widetilde M^\ast(\mathbf a)$ (fixture key `sumcheck/mstar_at_a`).
     pub mstar_at_a: Ext<K>,
@@ -221,9 +222,9 @@ pub fn round_check_name(r: usize, which: usize) -> String {
     format!("round_{r:02}_H{which}")
 }
 
-/// The name of the final check of $H\_0$ (`5_Building_Blocks.tex`:331).
+/// The name of the final check of $H\_0$ (`5_Building_Blocks.tex`:363).
 pub const FINAL_H0: &str = "final_H0";
-/// The name of the final check of $H\_1$ (`5_Building_Blocks.tex`:332).
+/// The name of the final check of $H\_1$ (`5_Building_Blocks.tex`:364).
 pub const FINAL_H1: &str = "final_H1";
 
 /// Every check of the oracle's verifier of the sumcheck, in its order
@@ -255,14 +256,14 @@ pub fn check_names(layout: &Layout) -> Vec<String> {
 
 /// $\widetilde M^\ast(\mathbf a)$, the multilinear extension of the table of
 /// [`mstar_table`](crate::mstar_table) at $\mathbf a = (\mathbf a\_U, \mathbf a\_L)$, evaluated from
-/// the definition (`5_Building_Blocks.tex`:254-260) term by term with
+/// the definition (`5_Building_Blocks.tex`:286-292) term by term with
 /// $\widetilde{eq}(\mathbf a\_U, \cdot)$ and $\widetilde{eq}(\mathbf a\_L, \cdot)$ factored out, without
 /// the $2^{\ell''}$ table (the oracle's `mstar_eval_factorized`): with
 /// $A\_L = \sum\_{l\_0 \lt 2d} \widetilde{eq}(\mathbf a\_L, \mathsf{bit}(l\_0)) \alpha^{l\_0} =
 /// \prod\_{j=1}^{\ell\_L} \bigl(1 - a\_{L,j} + a\_{L,j} \alpha^{2^{\ell\_L - j}}\bigr)$,
-/// $$\widetilde M^\ast(\mathbf a) = A\_L \sum\_{u \lt \mu} \mathrm{eq}\_U\[u\] c\_u -
+/// $$\widetilde M^\ast(\mathbf a) = A\_L \sum\_{u \lt \mu - 1} \mathrm{eq}\_U\[u\] c\_u -
 /// (\alpha^d + 1) A\_L \sum\_{i\_0 \lt n'} \mathrm{eq}\_1\[i\_0\] \mathrm{eq}\_U\[\mu + i\_0\] +
-/// \mathrm{eq}\_U\[\mu - 1\] \sum\_{j\_0 \lt d} \mathrm{eq}\_1\[n' + j\_0\] \sum\_{l\_0 \lt d}
+/// \mathrm{eq}\_U\[\mu - 2\] \sum\_{j\_0 \lt d} \mathrm{eq}\_1\[n' + j\_0\] \sum\_{l\_0 \lt d}
 /// E\[j\_0\]\[l\_0\] \mathrm{eq}\_L\[l\_0\] +
 /// \sum\_{d \le l\_0 \lt 2d} \mathrm{eq}\_L\[l\_0\] \sum\_{u \lt \mu + n'} \mathrm{eq}\_U\[u\]
 /// \mathrm{eq}\_1\[n' + d + u + (l\_0 - d)(\mu + n')\],$$
@@ -284,7 +285,7 @@ pub fn mstar_eval_factorized<const K: usize>(
     let l = &ctx.layout;
     let f = ctx.field();
     let (d, mu, np) = (l.d, l.mu, l.n_prime);
-    check_matrix(m, np, mu, d)?;
+    check_matrix(m, np, l.len_z, d)?;
     check_len("E matrix (rows)", d, e_matrix.len())?;
     for row in e_matrix {
         check_len("E matrix (columns)", d, row.len())?;
@@ -314,7 +315,7 @@ pub fn mstar_eval_factorized<const K: usize>(
             .zip(y)
             .fold(f.zero(), |acc, (a, b)| f.add(&acc, &f.mul(a, b)))
     };
-    let t1a = f.mul(&dot(&eq_u[..mu], &c), &a_sum);
+    let t1a = f.mul(&dot(&eq_u[..l.len_z], &c), &a_sum);
     let ad1 = f.add(&apow[d], &one);
     let t1b = f.neg(&f.mul(&f.mul(&ad1, &a_sum), &dot(&eq1[..np], &eq_u[mu..mu + np])));
     let zq = f.zq();
@@ -329,7 +330,7 @@ pub fn mstar_eval_factorized<const K: usize>(
         }
         inner = f.add(&inner, &f.mul(&eq1[np + j0], &row_sum));
     }
-    let t2 = f.mul(&eq_u[mu - 1], &inner);
+    let t2 = f.mul(&eq_u[l.u], &inner);
     let mut t3 = f.zero();
     for (l0, el) in eq_l.iter().enumerate().skip(d) {
         let start = np + d + (l0 - d) * (mu + np);
@@ -351,6 +352,7 @@ fn sum<const K: usize>(f: &Fqk<K>, values: &[Ext<K>]) -> Ext<K> {
 #[allow(clippy::too_many_arguments)] // one opening's instance
 fn check_opening<const K: usize, P: BasePcs<K>>(
     pcs: &P,
+    pad_rule: PadRule,
     poly: ClaimedPoly,
     com_words: &[u64],
     proof_words: &[u64],
@@ -366,14 +368,21 @@ fn check_opening<const K: usize, P: BasePcs<K>>(
         .proof_from_words(proof_words)
         .map_err(|e| format!("the proof does not decode: {e}"))?;
     match poly {
-        ClaimedPoly::W => pcs.verify_multilinear(&com, point.len(), point, value, &proof, context),
+        ClaimedPoly::W => match pad_rule {
+            PadRule::Field => {
+                pcs.verify_multilinear_ext(&com, point.len(), point, value, &proof, context)
+            }
+            PadRule::Residues => {
+                pcs.verify_multilinear(&com, point.len(), point, value, &proof, context)
+            }
+        },
         ClaimedPoly::G0 | ClaimedPoly::G1 => {
             pcs.verify_inner_product(&com, weights.len(), weights, value, &proof, context)
         }
     }
 }
 
-/// The verifier of `5_Building_Blocks.tex`:276-334 with the base PCS `pcs`, returning every
+/// The verifier of `5_Building_Blocks.tex`:308-366 with the base PCS `pcs`, returning every
 /// named check.
 ///
 /// It makes the same challenger calls as [`prove`](crate::prove): absorb $G\_{0,\cdot}$,
@@ -382,15 +391,15 @@ fn check_opening<const K: usize, P: BasePcs<K>>(
 /// absorb the final values; derive the context of every opening ([`Challenger::context`] with
 /// [`opening_label`]). It computes:
 /// - $H\_{0,0} = \rho \sum\_p G\_{0,p}$ and $H\_{1,0} = a + \rho \sum\_p G\_{1,p}$, with the claimed sum
-///   $a$ of [`claimed_sum`] (lines 276-280);
+///   $a$ of [`claimed_sum`] (lines 308-312);
 /// - for every round, `round_<r>_H0`: $H\_{0,r-1}(a\_{r-1}) = H\_{0,r}(0) + H\_{0,r}(1)$, and
 ///   `round_<r>_H1` likewise, with $H\_{i,r}(0)$ and $H\_{i,r}(a\_r)$ interpolated from the values at
-///   $1, \dots, d\_i + 1$ ([`Nodes`]; lines 301-311);
-/// - the $3n$ openings `pcs_open_<poly>_p<p>` (lines 321-326), party by party in the order
+///   $1, \dots, d\_i + 1$ ([`Nodes`]; lines 333-343);
+/// - the $3n$ openings `pcs_open_<poly>_p<p>` (lines 353-358), party by party in the order
 ///   [`ClaimedPoly::ORDER`]: the words of the commitment and of the proof are decoded with
 ///   `pcs` ([`BasePcs::commitment_from_words`], [`BasePcs::proof_from_words`]), and the proof
 ///   must open the commitment to the final value: $\langle \widetilde w \rangle\_p(\mathbf a)$ by
-///   [`BasePcs::verify_multilinear`] in $\ell''$ variables at $\mathbf a$, $g\_{b,p}(\mathbf a)$ by
+///   [`BasePcs::verify_multilinear_ext`] in $\ell''$ variables at $\mathbf a$, $g\_{b,p}(\mathbf a)$ by
 ///   [`BasePcs::verify_inner_product`] with the weights $(1, (a\_j^k)\_{j,k})$ of
 ///   [`blinder_weights`] ($1 + \ell'' d\_b$ entries);
 /// - `final_H0`: $H\_{0,\ell''}(a\_{\ell''}) = \sum\_p \bigl(F\_{0,p}(\mathbf a) + \rho\,
@@ -400,7 +409,7 @@ fn check_opening<const K: usize, P: BasePcs<K>>(
 ///   \sum\_{u \in S\_p} \widetilde{eq}(\mathbf a\_U, \mathsf{bit}(u))$ and $\mathrm{ind}$ likewise over
 ///   [`ind_rows`]; `final_H1`: $H\_{1,\ell''}(a\_{\ell''}) = \sum\_p \bigl(w\_p
 ///   \widetilde M^\ast(\mathbf a) + \rho\, g\_{1,p}(\mathbf a)\bigr)$ with
-///   [`mstar_eval_factorized`] (lines 327-333).
+///   [`mstar_eval_factorized`] (lines 359-365).
 ///
 /// Every check is evaluated, also after a failure, so that the set of failing checks can be
 /// compared with the oracle's (whose ideal PCS accepts an opening exactly when the value is the
@@ -486,6 +495,7 @@ pub fn verify_checks<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
             };
             let error = check_opening(
                 pcs,
+                l.pad_rule,
                 poly,
                 &transcript.commitments.of(poly)[p0],
                 &transcript.openings.of(poly)[p0],
@@ -543,7 +553,7 @@ pub fn verify_checks<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
 }
 
 /// The verifier of the collaborative sumcheck with the base PCS `pcs`
-/// (`5_Building_Blocks.tex`:276-334): [`verify_claims`] without the claims. It accepts if every
+/// (`5_Building_Blocks.tex`:308-366): [`verify_claims`] without the claims. It accepts if every
 /// round check, every opening of the base PCS and both final checks hold.
 ///
 /// # Errors
@@ -560,7 +570,7 @@ pub fn verify<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
 
 /// The verifier of [`verify`], returning the point $\mathbf a$ and the $3n$ claims
 /// $g\_{0,p}(\mathbf a)$, $g\_{1,p}(\mathbf a)$, $\langle \widetilde w \rangle\_p(\mathbf a)$
-/// (`5_Building_Blocks.tex`:316-326) that the base PCS checked ([`verify_checks`], then
+/// (`5_Building_Blocks.tex`:348-358) that the base PCS checked ([`verify_checks`], then
 /// [`VerifierReport::verdict`]): for tests and diagnostics.
 ///
 /// # Errors

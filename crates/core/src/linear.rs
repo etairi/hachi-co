@@ -1,26 +1,28 @@
 //! The public matrix $\mathbf M$ and vector $\mathbf y$ of the linear relation
 //! $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ produced by the ring-to-linear step
-//! (`5_Building_Blocks.tex`:154-182; oracle `ref/hachico_ref/r2l.py`, `build_M` and `build_y`).
+//! (`5_Building_Blocks.tex`:167-196; oracle `ref/hachico_ref/r2l.py`, `build_M` and `build_y`).
 //! The provers and the verifier compute both from public data.
 
 use crate::data::{Matrix, check_len, check_polys};
 use crate::{Context, Result};
 use hachi_co_math::Poly;
 
-/// The matrix $\mathbf M \in \mathcal R\_q^{n' \times \mu}$ of `5_Building_Blocks.tex`:157-163,
+/// The matrix $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of `5_Building_Blocks.tex`:170-176,
 /// dense and row-major, for the public vectors $\mathbf b$ and $\mathbf a$ embedded in
 /// $\mathcal R\_q$ ([`PublicVectors::b_ring`](crate::PublicVectors::b_ring) and
 /// [`PublicVectors::a_ring`](crate::PublicVectors::a_ring)) and the challenges
-/// $\mathbf c \in \mathcal C^{2^r}$ (signed coefficients, `5_Building_Blocks.tex`:122-126).
+/// $\mathbf c \in \mathcal C^{2^r}$ (signed coefficients, `5_Building_Blocks.tex`:134-138).
 ///
 /// With the positions of [`Layout`](crate::Layout) (0-indexed; $b^e$ is the constant polynomial
 /// $b^e \bmod q$, $i \lt 2^r$, $p \in \lbrace 1, \dots, n \rbrace$, $j \lt 2^m$, $e \lt \delta$,
 /// $\theta \lt \tau$, $a \lt n\_A$), and zero everywhere else:
 /// - rows $\mathrm{row}\_D + \cdot$: $\mathbf D$ on the columns $\[0, t)$, i.e.
 ///   $\mathbf D\_{\hat{\mathbf w}} \mid \mathbf D\_0 \mid \mathbf D\_1 \mid \mathbf D\_\rho$;
-/// - rows $\mathrm{row}\_B + \cdot$: $\mathbf B$ on the columns of $\hat{\mathbf t}$;
+/// - rows $\mathrm{row}\_B + \cdot$: $\mathbf B$ on the columns $\[t, z)$ of
+///   $(\hat{\mathbf t}, \boldsymbol\rho^u)$, i.e. $\mathbf B\_{\hat{\mathbf t}} \mid
+///   \mathbf B\_{\boldsymbol\rho}$;
 /// - row $\mathrm{row}\_{bG}$ ($\mathbf b^T \mathbf G\_{2^r} \mid -1$): $b\_i b^e$ at
-///   $w + i\delta + e$, and $-1$ at $u = \mu - 1$;
+///   $w + i\delta + e$, and $-1$ at $u = \mu - 2$;
 /// - row $\mathrm{row}\_c$ ($\mathbf c^T \otimes \mathbf G\_1 \mid \mathbf 1\_n^T \otimes
 ///   \mathbf G\_1 \mid -\mathbf a^T \mathbf G\_{2^m} \mathbf J\_{\delta 2^m}$): $c\_i b^e$ at
 ///   $w + i\delta + e$, $b^e$ at $w\_0 + (p-1)\delta + e$, and $-a\_j b^{e + \theta}$ at
@@ -32,7 +34,7 @@ use hachi_co_math::Poly;
 ///
 /// The fourth and fifth row blocks state $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T
 /// \mathbf G\_{2^m} \mathbf z$ and $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p} = \mathbf A
-/// \mathbf z$ (`5_Building_Blocks.tex`:182). The challenges are reduced modulo $q$; checking
+/// \mathbf z$ (`5_Building_Blocks.tex`:196). The challenges are reduced modulo $q$; checking
 /// $\mathbf c \in \mathcal C^{2^r}$ is the caller's job (the ring-to-linear step checks it).
 /// Every residue of the result is canonical.
 ///
@@ -70,12 +72,12 @@ pub fn build_m<const K: usize>(
         .map(|ci| ring.from_i64(ci))
         .collect::<hachi_co_math::Result<Vec<Poly>>>()?;
 
-    let mut m = vec![vec![ring.zero(); l.mu]; l.n_prime];
-    // D (n_D rows) on (w_hat, w0_hat, t0_hat, rho) = z'[0..t).
+    let mut m = vec![vec![ring.zero(); l.len_z]; l.n_prime];
+    // D (n_D rows) on (w_hat, w0_hat, t0_hat, rho_v) = z'[0..t).
     for (i, row) in ctx.pp.d.iter().enumerate() {
         m[l.row_d + i][..l.width_d].clone_from_slice(row);
     }
-    // B (n_B rows) on t_hat.
+    // B (n_B rows) on (t_hat, rho_u) = z'[t..z).
     for (i, row) in ctx.pp.b.iter().enumerate() {
         m[l.row_b + i][l.t..l.t + l.width_b].clone_from_slice(row);
     }
@@ -127,7 +129,7 @@ pub fn build_m<const K: usize>(
 }
 
 /// The vector $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$ of
-/// `5_Building_Blocks.tex`:173-179: the first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the
+/// `5_Building_Blocks.tex`:187-193: the first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the
 /// accepted attempt at rows $\mathrm{row}\_D + \cdot$, the commitment
 /// $\mathbf u \in \mathcal R\_q^{n\_B}$ at rows $\mathrm{row}\_B + \cdot$, and zeros in the
 /// $\mathbf b^T \mathbf G$, $\mathbf c$ and $\mathbf A$ rows. Residues are returned reduced.

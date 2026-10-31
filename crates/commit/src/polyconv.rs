@@ -1,4 +1,4 @@
-//! $\mathsf{PConv}$ (`field-to-ring-rok.tex`:36-87; the oracle's `commit.pconv`): the secret-shared
+//! $\mathsf{PConv}$ (`field-to-ring-rok.tex`:65-116; the oracle's `commit.pconv`): the secret-shared
 //! coefficient vector $\langle \mathbf f \rangle$ over $\mathbb F\_{q^k}$ becomes the vector
 //! $\mathbf f' \in \mathcal R\_q^{2^{\ell'}}$, whose block $\mathbf f'\_{\mathbf i}$ is held by a
 //! single prover.
@@ -11,7 +11,7 @@
 //! f'\[t\] = \psi\bigl(\hat f\[t g\], \dots, \hat f\[t g + g - 1\]\bigr).$$
 //! Block $i$ of $\mathbf f'$ is $f'\[i 2^m .. (i+1) 2^m)$. Since $\lceil \log n \rceil \le r$, the
 //! top $\lceil \log n \rceil$ bits of $i$ name the slot $\mathbf p$ that the whole block comes
-//! from (`field-to-ring-rok.tex`:74), so prover $p$ computes its blocks
+//! from (`field-to-ring-rok.tex`:103), so prover $p$ computes its blocks
 //! ([`hachi_co_core::Layout::blocks_of`]) from $\langle \mathbf f \rangle\_p$ alone
 //! ([`pconv_blocks`]); the blocks of the empty slots ($n$ not a power of two) are zero and held by
 //! nobody. The other functions are the global view, for tests and for Open's decoding.
@@ -44,10 +44,10 @@ fn sizes(l: &Layout) -> Result<Sizes> {
     let f_prime = pow2(l.ell_prime, "2^l'")?;
     // Context::new guarantees k | d/2 (hachi_co_math::Subfield::new).
     let g = l.d / l.k.max(1);
-    // field-to-ring-rok.tex:75: l-hat - l' = alpha - kappa, i.e. 2^l' g = 2^l-hat.
+    // field-to-ring-rok.tex:104: l-hat - l' = alpha - kappa, i.e. 2^l' g = 2^l-hat.
     if f_prime.checked_mul(g) != Some(f_hat) {
         return Err(Error::Shape {
-            what: "2^l' d/k (must equal 2^(ceil(log n) + l), field-to-ring-rok.tex:75)",
+            what: "2^l' d/k (must equal 2^(ceil(log n) + l), field-to-ring-rok.tex:104)",
             expected: f_hat,
             actual: f_prime.saturating_mul(g),
         });
@@ -73,7 +73,7 @@ fn sizes(l: &Layout) -> Result<Sizes> {
 }
 
 /// $\hat{\mathbf f} \in \mathbb F\_{q^k}^{2^{\hat\ell}}$ from all $n$ shares
-/// (`field-to-ring-rok.tex`:47-59): share $p$ in slot $p - 1$, zeros in the slots $\ge n$. The
+/// (`field-to-ring-rok.tex`:76-88): share $p$ in slot $p - 1$, zeros in the slots $\ge n$. The
 /// oracle's `f_hat` (fixture key `commit/f_hat`). Coordinates are reduced modulo $q$.
 ///
 /// # Errors
@@ -94,7 +94,7 @@ pub fn f_hat<const K: usize>(ctx: &Context<K>, shares: &[Vec<Ext<K>>]) -> Result
 }
 
 /// $\mathbf f'$ from $\hat{\mathbf f}$: $f'\[t\] = \psi(\hat f\[tg .. tg + g))$
-/// (`field-to-ring-rok.tex`:70-80), for all $2^{\ell'}$ entries.
+/// (`field-to-ring-rok.tex`:99-109), for all $2^{\ell'}$ entries.
 ///
 /// # Errors
 /// [`Error::Shape`] unless $\hat{\mathbf f}$ has $2^{\hat\ell}$ entries.
@@ -121,8 +121,8 @@ pub fn pconv<const K: usize>(
     Ok((f_hat, f_prime))
 }
 
-/// Party $p$'s part of $\mathsf{PConv}$ (`field-to-ring-rok.tex`:64-80;
-/// `6_Collaborative_Hachi.tex`:310-313): the blocks $\mathbf f'\_i \in \mathcal R\_q^{2^m}$ for $i$
+/// Party $p$'s part of $\mathsf{PConv}$ (`field-to-ring-rok.tex`:93-109;
+/// `6_Collaborative_Hachi.tex`:315-318): the blocks $\mathbf f'\_i \in \mathcal R\_q^{2^m}$ for $i$
 /// in [`Layout::blocks_of`]`(p)`, in increasing order, computed from $\langle \mathbf f \rangle\_p$
 /// alone: entry $j$ of block $i$ is $\psi$ of the $g$ entries of $\langle \mathbf f \rangle\_p$
 /// from $(i 2^m + j) g - (p - 1) 2^\ell$ on.
@@ -163,7 +163,7 @@ pub fn pconv_blocks<const K: usize>(
 /// $\hat{\mathbf f}$ from $\mathbf f'$ by $\psi^{-1}$ entry by entry: $(\hat f\[tg + j\])\_{j \lt
 /// g} = \psi^{-1}(f'\[t\])$, which inverts [`f_prime_of_f_hat`] because $\psi$ is a bijection
 /// (`4_preliminaries.tex`:81-84, Hachi Theorem 2); the decoding step of Open
-/// (`6_Collaborative_Hachi.tex`:398).
+/// (`6_Collaborative_Hachi.tex`:410).
 ///
 /// # Errors
 /// [`Error::Shape`] unless there are $2^{\ell'}$ entries; [`Error::Math`] for an entry without
@@ -180,7 +180,7 @@ pub fn f_hat_of_f_prime<const K: usize>(ctx: &Context<K>, f_prime: &[Poly]) -> R
 
 /// $\bar f\_{\mathbf q} = \sum\_{\mathbf p \in \lbrace 0,1 \rbrace^{\lceil \log n \rceil}} \hat
 /// f\_{\mathbf p \Vert \mathbf q}$ for every $\mathbf q \in \lbrace 0,1 \rbrace^\ell$
-/// (`6_Collaborative_Hachi.tex`:398): the sum of the slots, over all $2^{\lceil \log n \rceil}$
+/// (`6_Collaborative_Hachi.tex`:410): the sum of the slots, over all $2^{\lceil \log n \rceil}$
 /// of them.
 ///
 /// # Errors

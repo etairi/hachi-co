@@ -5,7 +5,7 @@
 //! a stand-in for $\Pi\_{\mathsf{conv}}$'s check $y = E(u)$.
 #![allow(dead_code)]
 
-use hachi_co_core::base_pcs::mobius;
+use hachi_co_core::base_pcs::{mobius, mobius_ext};
 use hachi_co_core::{
     BasePcs, BlinderKind, Challenger, ClearPcs, Context, Fixture, LinearShare, Matrix,
     PartyRandomness, Poly, ReplayChallenger, ReplayRandomness, build_m, build_y, sha256_residues,
@@ -60,9 +60,18 @@ pub fn attach_openings<H: Challenger<K>>(
     let mut commitments = PcsWords::default();
     let mut openings = PcsWords::default();
     for private in privates {
-        let mut coeffs = private.w_table.clone();
-        mobius(field.zq(), &mut coeffs).unwrap();
-        let (com_w, st_w) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        let (com_w, st_w) = match private.pad {
+            Some(_) => {
+                let mut coeffs = private.w_field_table(field);
+                mobius_ext(field, &mut coeffs).unwrap();
+                pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap()
+            }
+            None => {
+                let mut coeffs = private.w_table.clone();
+                mobius(field.zq(), &mut coeffs).unwrap();
+                pcs.commit_multilinear(&coeffs, &SEED).unwrap()
+            }
+        };
         let (com_g0, st_g0) = pcs
             .commit_vector(&blinder_coefficients(&private.g0), &SEED)
             .unwrap();
@@ -79,6 +88,9 @@ pub fn attach_openings<H: Challenger<K>>(
         for poly in [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1] {
             let context = ch.context(&opening_label(private.party, poly));
             let (_, proof) = match poly {
+                ClaimedPoly::W if private.pad.is_some() => pcs
+                    .prove_multilinear_ext(&st_w, point, &context, &SEED)
+                    .unwrap(),
                 ClaimedPoly::W => pcs
                     .prove_multilinear(&st_w, point, &context, &SEED)
                     .unwrap(),
@@ -250,6 +262,16 @@ pub fn run_parties(
     shares: &[LinearShare],
     quotients: Option<&[Vec<Poly>]>,
 ) -> Run {
+    run_parties_with_pads(inst, shares, quotients, None)
+}
+
+/// [`run_parties`], with the pads `pads` instead of the recorded ones.
+pub fn run_parties_with_pads(
+    inst: &Instance,
+    shares: &[LinearShare],
+    quotients: Option<&[Vec<Poly>]>,
+    pads: Option<&[Ext<K>]>,
+) -> Run {
     let ctx = &inst.ctx;
     let l = &ctx.layout;
     let f = ctx.field();
@@ -266,7 +288,8 @@ pub fn run_parties(
         let mut rng = ReplayRandomness::new(&inst.fx, p).unwrap();
         let g0 = rng.blinder(f, BlinderKind::G0, l.ell_pp, l.d0).unwrap();
         let g1 = rng.blinder(f, BlinderKind::G1, l.ell_pp, l.d1).unwrap();
-        provers.push(PartyProver::new(ctx, p, table, g0, g1).unwrap());
+        let pad = pads.map_or_else(|| rng.rho_w(f).unwrap(), |pads| pads[p - 1]);
+        provers.push(PartyProver::new(ctx, p, table, Some(pad), g0, g1).unwrap());
         quotient_list.push(quotient);
     }
     let g0_sums: Vec<Ext<K>> = provers.iter().map(|p| p.hypercube_sums().0).collect();
@@ -325,11 +348,12 @@ pub fn run_parties(
         .zip(values)
         .enumerate()
         .map(|(p0, ((prover, quotient), rounds))| {
-            let (w_table, g0, g1, point) = prover.into_parts();
+            let (w_table, pad, g0, g1, point) = prover.into_parts();
             SumcheckPrivate {
                 party: p0 + 1,
                 quotient,
                 w_table,
+                pad,
                 g0,
                 g1,
                 coins: coins.clone(),
@@ -376,11 +400,11 @@ pub fn ideal_pcs(
             let private = &privates[claim.party - 1];
             let value = match claim.poly {
                 ClaimedPoly::W => private
-                    .w_table
+                    .w_field_table(field)
                     .iter()
                     .zip(&eq)
                     .fold(field.zero(), |acc, (w, e)| {
-                        field.add(&acc, &field.scale(e, *w))
+                        field.add(&acc, &field.mul(e, w))
                     }),
                 ClaimedPoly::G0 | ClaimedPoly::G1 => {
                     let g = if claim.poly == ClaimedPoly::G0 {
@@ -403,7 +427,7 @@ pub fn ideal_pcs(
         .collect()
 }
 
-/// A stand-in for V's check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:164; the
+/// A stand-in for V's check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:193; the
 /// oracle's `conv.verify_conv`; WP8 implements it in `hachi-co-conv`, which this crate does not
 /// depend on): $E(u) \in \mathcal R\_q^H$ and its coordinates equal $y$.
 pub fn conv_check(ctx: &Context<K>, y: &Ext<K>, e_u: &Poly) -> bool {

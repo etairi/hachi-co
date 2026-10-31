@@ -79,7 +79,7 @@ fn fresh_multi_party_runs_pass_open_on_the_network() {
             let len = 1usize << ctx.layout.ell;
             let mut rng = ChaCha8Rng::seed_from_u64(100 + seed);
             let f = random_vector(&mut rng, q, len);
-            // The initial additive shares f_1, ..., f_n of f (6_CH:301).
+            // The initial additive shares f_1, ..., f_n of f (6_CH:306).
             let field = ctx.field();
             let mut f_init: Vec<Vec<Ext<K>>> =
                 (1..n).map(|_| random_vector(&mut rng, q, len)).collect();

@@ -49,7 +49,7 @@ pub enum Error {
         n: usize,
     },
     /// The value that the base PCS opened differs from the party's final value of the sumcheck
-    /// (`5_Building_Blocks.tex`:314-318): a fault of the base PCS or of the conversion of the
+    /// (`5_Building_Blocks.tex`:346-350): a fault of the base PCS or of the conversion of the
     /// polynomial before committing. An honest run never gives it; the provers stop rather
     /// than send an opening the verifier would reject.
     #[error(
@@ -103,7 +103,7 @@ pub enum VerifyError {
     #[error("challenger: {0}")]
     Challenger(hachi_co_core::Error),
     /// The transcript is well formed but some round or final checks of the sumcheck failed
-    /// (`5_Building_Blocks.tex`:301-311, 327-333); their names are those of the oracle
+    /// (`5_Building_Blocks.tex`:333-343, 359-365); their names are those of the oracle
     /// (`round_01_H0`, …, `final_H1`; see [`check_names`](crate::check_names)). The verifier
     /// reports these before the openings ([`VerifyError::Opening`]).
     #[error("rejected: the checks {failing:?} failed")]
@@ -112,7 +112,7 @@ pub enum VerifyError {
         failing: Vec<String>,
     },
     /// The round and final checks hold, but the base PCS rejected the opening of the polynomial
-    /// `poly` of party `party` (`5_Building_Blocks.tex`:321-326; the oracle's check
+    /// `poly` of party `party` (`5_Building_Blocks.tex`:353-358; the oracle's check
     /// `pcs_open_<poly>_p<party>`): its commitment or its proof does not decode, or the proof
     /// does not open the commitment to the final value at the point $\mathbf a$. The first
     /// failing opening is reported, in the order of [`check_names`](crate::check_names).

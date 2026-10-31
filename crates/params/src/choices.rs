@@ -1,12 +1,12 @@
 //! The free choices of $\mathsf{Setup}(1^\lambda, 1^n, 1^t, 1^{2^\ell})$
-//! (6_Collaborative_Hachi.tex:263-281).
+//! (6_Collaborative_Hachi.tex:265-285).
 //!
-//! The draft fixes only the asymptotic behaviour of these quantities (lines 266-273); a concrete
+//! The draft fixes only the asymptotic behaviour of these quantities (lines 268-275); a concrete
 //! parameter set picks them, and [`derive`](fn@crate::derive) computes everything else.
 
 use serde::{Deserialize, Serialize};
 
-/// The radius $\omega$ of the challenge set (6_Collaborative_Hachi.tex:271, "$\omega = O(d)$").
+/// The radius $\omega$ of the challenge set (6_Collaborative_Hachi.tex:273, "$\omega = O(d)$").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Omega {
     /// A fixed radius $\omega \ge 1$.
@@ -21,7 +21,7 @@ pub enum Omega {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChallengeSet {
     /// The draft's $\ell_1$ ball $C = \lbrace c \in \mathcal R_q : \lVert c \rVert_1 \le \omega
-    /// \rbrace$ (5_Building_Blocks.tex:122).
+    /// \rbrace$ (5_Building_Blocks.tex:134).
     #[default]
     L1Ball,
     /// Exactly $\omega$ nonzero coefficients in $\lbrace \pm 1 \rbrace$ (the single-prover
@@ -39,7 +39,7 @@ pub enum TauRule {
     /// `docs/m0-spec.md`). The default.
     #[default]
     Tight,
-    /// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:276).
+    /// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:280).
     Draft,
     /// $\tau = \lceil \log_b \beta \rceil$, which does not represent $\beta$ in general
     /// (balanced digits cover only about $b^\tau/2$); kept to show the failure in the report.
@@ -59,8 +59,23 @@ pub enum QChoice {
     Smallest,
 }
 
+/// The form of the witness pad $\rho^w_i$ of the collaborative sumcheck, which hides each
+/// prover's final value $\langle \widetilde w \rangle\_i(\mathbf a)$ (t-hiding.tex:55-76).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PadRule {
+    /// One uniform element of $\mathbb F_{q^k}$ at table entry $(\mu, 1)$
+    /// (5_Building_Blocks.tex:252-256). The polynomial $\langle \widetilde w \rangle\_i$ then has
+    /// coefficients in $\mathbb F_{q^k}$.
+    #[default]
+    Field,
+    /// $2k$ uniform residues in row $\mu$; $\langle \widetilde w \rangle\_i$ keeps coefficients
+    /// in $\mathbb Z_q$. Not the draft's construction.
+    #[doc(hidden)]
+    Residues,
+}
+
 /// The inputs of [`derive`](fn@crate::derive): the arguments of $\mathsf{Setup}$ and the free
-/// choices of 6_Collaborative_Hachi.tex:266-273.
+/// choices of 6_Collaborative_Hachi.tex:268-275.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Choices {
@@ -93,10 +108,17 @@ pub struct Choices {
     pub n_b: u64,
     /// The height $n_D \ge 1$ of $\mathbf D$.
     pub n_d: u64,
-    /// The number $m_\rho$ of ring elements of each prover's commitment randomness
-    /// $\boldsymbol\rho_i \in S_b^{m_\rho}$ (5_Building_Blocks.tex:110); the draft requires
-    /// $m_\rho > n_D$.
-    pub m_rho: u64,
+    /// The number $m_u$ of ring elements of each prover's randomness
+    /// $\boldsymbol\rho^u_i \in S_b^{m_u}$ of the commitment (6_Collaborative_Hachi.tex:382); the
+    /// draft requires $m_u > n_B$ (line 278).
+    pub m_u: u64,
+    /// The number $m_v$ of ring elements of each prover's randomness
+    /// $\boldsymbol\rho^v_i \in S_b^{m_v}$ of the first message (5_Building_Blocks.tex:122); the
+    /// draft requires $m_v > n_D$ (6_Collaborative_Hachi.tex:278).
+    pub m_v: u64,
     /// The modulus.
     pub q: QChoice,
+    /// The witness pad; absent from a file means the draft's.
+    #[serde(default)]
+    pub pad: PadRule,
 }

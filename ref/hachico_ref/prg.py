@@ -91,7 +91,7 @@ def l1ball_count(d, omega):
 
 
 def l1ball_sample(prg, d, omega):
-    """Exactly uniform c in {c in Z^d : ||c||_1 <= omega} (the challenge set C of 5_BB:122).
+    """Exactly uniform c in {c in Z^d : ||c||_1 <= omega} (the challenge set C of 5_BB:134).
 
     Support size i with weight 2^i C(d,i) C(omega,i) (exact integer draw); a uniform i-subset of positions;
     uniform signs; magnitudes = the gaps of a uniform i-subset {p_1 < ... < p_i} of [1, omega]

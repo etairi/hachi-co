@@ -46,7 +46,7 @@
 //!
 //! that is $18 + L + 8m$ bytes, of which [`Stats`](crate::Stats) counts the $8m$ of the payload.
 //! A frame of $2^{28}$ words (2 GiB) carries the resharing of Commit up to $\ell = 26$ with
-//! $k = 4$ ($2^\ell k$ words to each party, `6_Collaborative_Hachi.tex`:303-305); larger
+//! $k = 4$ ($2^\ell k$ words to each party, `6_Collaborative_Hachi.tex`:308-310); larger
 //! witnesses need a streaming transfer, which this transport does not do. The receiver checks
 //! both bounds before it allocates anything, and it allocates the payload as its words arrive,
 //! so a peer cannot make it reserve memory for words that it does not send. A frame that breaks

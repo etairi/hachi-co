@@ -325,7 +325,7 @@ fn exceeds_matches_the_naive_comparison() {
 fn toy_presets_accept_with_probability_near_e_to_the_minus_half() {
     // (n, N, gamma, beta1) of the toy presets (docs/m0-spec.md). With gamma = 2nN beta1, each
     // prover accepts with probability 1/M ~ e^{-1/(2n)}, so all n provers together accept with
-    // probability M^{-n} ~ e^{-1/2} >= 1/e (6_Collaborative_Hachi.tex:275, 522).
+    // probability M^{-n} ~ e^{-1/2} >= 1/e (6_Collaborative_Hachi.tex:279, 540).
     for (n, big_n, gamma, beta1) in [
         (1u32, 768usize, 49152u64, 32u64),
         (2, 832, 106496, 32),

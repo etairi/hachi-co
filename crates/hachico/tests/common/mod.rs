@@ -9,16 +9,17 @@
 pub mod net;
 
 use hachi_co::{BasePcsWords, EvalProof, FinalClaims, HachiBase, HachiChoices};
-use hachi_co_core::base_pcs::mobius;
+use hachi_co_core::base_pcs::mobius_ext;
 use hachi_co_core::{
     BasePcs, Blinder, BlinderKind, Challenger, ClearPcs, Context, Ext, Fixture, Fqk, Layout,
     LinearShare, PartyRandomness, PartyState, Poly, ReplayChallenger, ReplayRandomness,
     SumcheckCoins, build_m,
 };
-use hachi_co_params::{Params, derive, preset};
+use hachi_co_params::{PadRule, Params, derive, preset};
 use hachi_co_sumcheck::{
     Claim, ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
-    blinder_coefficients, blinder_weights, eq_table, opening_label, quotient_share, w_table,
+    blinder_coefficients, blinder_weights, eq_table, opening_label, pad_index, quotient_share,
+    w_table,
 };
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -48,7 +49,11 @@ pub fn clear_words(l: &Layout) -> BasePcsWords {
         commitment_w: c,
         commitment_g0: c,
         commitment_g1: c,
-        proof_w: Pcs::multilinear_proof_words(l.ell_pp).unwrap() as u128,
+        proof_w: match l.pad_rule {
+            PadRule::Field => Pcs::multilinear_ext_proof_words(l.ell_pp),
+            PadRule::Residues => Pcs::multilinear_proof_words(l.ell_pp),
+        }
+        .unwrap() as u128,
         proof_g0: vector(l.d0),
         proof_g1: vector(l.d1),
     }
@@ -219,12 +224,12 @@ pub fn fixture_proof_without_pcs(fx: &Fixture) -> EvalProof<K> {
 /// The parties' committed polynomials as the oracle records them, rebuilt from the recorded
 /// inputs: the table of $\langle \widetilde w \rangle\_p$ from $\mathbf z'$ (`ring_to_linear/
 /// z_prime`), $\mathbf y$, the shares $\langle u \rangle\_p$ (`conv/u_shares`) and $\mathbf M$
-/// ([`LinearShare::slice`], [`quotient_share`], [`w_table`]), and the recorded blinders
+/// ([`LinearShare::slice`], [`quotient_share`], [`w_table`]), with the recorded pad and blinders
 /// ([`ReplayRandomness`]), party by party.
 pub fn recorded_polynomials(
     fx: &Fixture,
     ctx: &Context<K>,
-) -> Vec<(Vec<u64>, Blinder<K>, Blinder<K>)> {
+) -> Vec<(Vec<Ext<K>>, Blinder<K>, Blinder<K>)> {
     let l = &ctx.layout;
     let m = fixture_m(fx, ctx);
     let z_prime = fx.polys("/ring_to_linear/z_prime").unwrap();
@@ -236,6 +241,8 @@ pub fn recorded_polynomials(
             let quotient = quotient_share(ctx, &m, &share).unwrap();
             let table = w_table(ctx, &share.z_prime, &quotient).unwrap();
             let mut rng = ReplayRandomness::new(fx, p).unwrap();
+            let mut table: Vec<Ext<K>> = table.iter().map(|x| ctx.field().from_base(*x)).collect();
+            table[pad_index(l)] = rng.rho_w(ctx.field()).unwrap();
             let g0 = rng
                 .blinder(ctx.field(), BlinderKind::G0, l.ell_pp, l.d0)
                 .unwrap();
@@ -253,7 +260,7 @@ pub fn recorded_polynomials(
 /// the driver.
 pub fn clear_pcs_words<H: Challenger<K>>(
     ctx: &Context<K>,
-    polynomials: &[(Vec<u64>, Blinder<K>, Blinder<K>)],
+    polynomials: &[(Vec<Ext<K>>, Blinder<K>, Blinder<K>)],
     point: &[Ext<K>],
     ch: &mut H,
 ) -> (PcsWords, PcsWords) {
@@ -262,8 +269,8 @@ pub fn clear_pcs_words<H: Challenger<K>>(
     let (mut commitments, mut openings) = (PcsWords::default(), PcsWords::default());
     for (p0, (table, g0, g1)) in polynomials.iter().enumerate() {
         let mut coeffs = table.clone();
-        mobius(field.zq(), &mut coeffs).unwrap();
-        let (cw, sw) = pcs.commit_multilinear(&coeffs, &SEED).unwrap();
+        mobius_ext(field, &mut coeffs).unwrap();
+        let (cw, sw) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
         let (c0, s0) = pcs.commit_vector(&blinder_coefficients(g0), &SEED).unwrap();
         let (c1, s1) = pcs.commit_vector(&blinder_coefficients(g1), &SEED).unwrap();
         for (poly, com) in [
@@ -274,7 +281,9 @@ pub fn clear_pcs_words<H: Challenger<K>>(
             commitments.of_mut(poly).push(pcs.commitment_to_words(&com));
             let context = ch.context(&opening_label(p0 + 1, poly));
             let (_, proof) = match poly {
-                ClaimedPoly::W => pcs.prove_multilinear(&sw, point, &context, &SEED).unwrap(),
+                ClaimedPoly::W => pcs
+                    .prove_multilinear_ext(&sw, point, &context, &SEED)
+                    .unwrap(),
                 ClaimedPoly::G0 => pcs
                     .prove_inner_product(&s0, &blinder_weights(field, point, l.d0), &context, &SEED)
                     .unwrap(),
@@ -355,11 +364,11 @@ pub fn ideal_pcs(
             assert_eq!(private.point, claims.point, "the provers' point");
             let value = match claim.poly {
                 ClaimedPoly::W => private
-                    .w_table
+                    .w_field_table(field)
                     .iter()
                     .zip(&eq)
                     .fold(field.zero(), |acc, (w, e)| {
-                        field.add(&acc, &field.scale(e, *w))
+                        field.add(&acc, &field.mul(e, w))
                     }),
                 ClaimedPoly::G0 | ClaimedPoly::G1 => {
                     let g = if claim.poly == ClaimedPoly::G0 {

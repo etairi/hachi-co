@@ -40,7 +40,7 @@ def run_instance(P, seed, setup_seed=None, log=print):
 
     t = time.time()
     u_com, states, cdata = commit(ctx, pp, inp["f_init"])
-    open_bit, open_info = open_check(ctx, pp, states, u_com, inp["f"])
+    open_bit, open_info = open_check(ctx, pp, states, cdata["rho_u"], u_com, inp["f"])
     rel["open(pp, st, u, f, c*) = 1"] = bool(open_bit)
     for k_, v_ in open_info["checks"].items():
         rel["open." + k_] = v_
@@ -59,7 +59,7 @@ def run_instance(P, seed, setup_seed=None, log=print):
 
     t = time.time()
     coins = Coins(ctx)
-    r2l = ring_to_linear(ctx, pp, states, conv, u_com, coins)
+    r2l = ring_to_linear(ctx, pp, states, cdata["rho_u"], conv, u_com, coins)
     rel["r2l.challenges_in_C"] = all(a["c_in_C"] for a in r2l["attempts"])
     rel["r2l.prover1_norm_check_z_le_beta"] = r2l["z_norm_ok"]
     rel["r2l.J_z_hat_eq_z"] = bool(np.array_equal(ctx.R.j_apply_int(r2l["z_hat"], P.b, P.tau), r2l["z"]))
@@ -79,7 +79,7 @@ def run_instance(P, seed, setup_seed=None, log=print):
     rel["sc.(X^d+1) r = M z' - y over Z_q[X] (Sage)"] = ok_rel
     rel["sc.quotient_share_1_matches_literal_formula (Sage)"] = sc.check_quotient_formula(
         ctx, r2l["M"], r2l["z_shares"][0], r2l["y_shares"][0], r_shares[0])
-    hc = sc.hypercube_checks(ctx, r2l, r_shares, E_mat, ctx.embed(inp["y"]), coins)
+    hc = sc.hypercube_checks(ctx, r2l, r_shares, E_mat, ctx.embed(inp["y"]), coins, priv["pads"])
     rel["sc.zero_check_P_p(x)=0_on_hypercube"] = hc["zero_check_all_points"]
     rel["sc.sum_x sum_p w~_p(x) M*(x) = a"] = hc["linear_sum_equals_a"]
     # degree audit of the unblinded round polynomials (the draft sizes messages by d0, d1)
@@ -111,7 +111,7 @@ def run_instance(P, seed, setup_seed=None, log=print):
 
 
 def check_z_decomposition(ctx, states, r2l):
-    """z = sum_{i'} c_{i'} s_{i'} + sum_p r_p over the integers (5_BB:130), recomputed block by block."""
+    """z = sum_{i'} c_{i'} s_{i'} + sum_p r_p over the integers (5_BB:143), recomputed block by block."""
     from .r2l import int_ring_mul_rows
     P, R = ctx.P, ctx.R
     acc = r2l["attempts"][-1]
@@ -125,7 +125,7 @@ def check_z_decomposition(ctx, states, r2l):
 
 
 def row_block_checks(ctx, pp, states, conv, u_com, r2l):
-    """The meaning of each row block of M (5_BB:182), checked directly on the unpacked values."""
+    """The meaning of each row block of M (5_BB:196), checked directly on the unpacked values."""
     P, R = ctx.P, ctx.R
     out = OrderedDict()
     acc = r2l["attempts"][-1]

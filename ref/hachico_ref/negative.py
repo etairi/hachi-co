@@ -102,10 +102,10 @@ def transcript_tests(res):
     return out
 
 
-def _prove_verify(res, z_shares=None, r_shares=None):
+def _prove_verify(res, z_shares=None, r_shares=None, pads=None):
     ctx = res["ctx"]
     tr, priv = sc.prove(ctx, res["r2l"], res["conv"], res["E_mat"], res["coins"], z_shares=z_shares,
-                        r_shares=r_shares)
+                        r_shares=r_shares, pads=pads)
     checks, _ = sc.verify(ctx, res["public"], tr, res["coins"], sc.IdealPCS(ctx, priv))
     return checks
 
@@ -168,7 +168,7 @@ def witness_tests(res):
         checks = _prove_verify(res, zs, rs)
         out["witness: re-randomized <u> shares are accepted"] = dict(
             passed=all(checks.values()), failing_checks=_failing(checks),
-            note="<u> (position mu) is not range- or zero-checked per prover (S_i is inside [mu-1])")
+            note="<u> (1-indexed position mu - 1) is not range- or zero-checked per prover")
         rs = sc.quotient_shares(ctx, res["r2l"]["M"], zs0, res["r2l"]["y_shares"]).copy()
         rs[0, 0, P.d + 2] = (rs[0, 0, P.d + 2] + 11) % q
         rs[1, 0, P.d + 2] = (rs[1, 0, P.d + 2] - 11) % q
@@ -176,6 +176,12 @@ def witness_tests(res):
         out["witness: re-randomized quotient shares are accepted"] = dict(
             passed=all(checks.values()), failing_checks=_failing(checks),
             note="the quotient rows mu+1..mu+n' are not checked per prover; only their sum")
+    # (d') the pad leaves both Boolean sums unchanged (tH:65): another pad is accepted, whatever its value
+    pads = [(np.asarray(t) + 1 + i) % q for i, t in enumerate(res["private"]["pads"])]
+    checks = _prove_verify(res, pads=pads)
+    out["witness: any pad is accepted"] = dict(
+        passed=all(checks.values()), failing_checks=_failing(checks),
+        note="the pad's row is exempt from the range check and has no column in M (5_BB:287-292, 302)")
     # (e) quotient with a nonzero high half in the sum (a 'quotient' that is not one)
     rs = sc.quotient_shares(ctx, res["r2l"]["M"], zs0, res["r2l"]["y_shares"]).copy()
     rs[0, 1, P.d + 1] = (rs[0, 1, P.d + 1] + 1) % q
@@ -194,17 +200,23 @@ def open_tests(res):
     s = st[p0][i0]["s"].copy()
     s[0, 0] = (s[0, 0] + 1) % P.q
     st[p0][i0]["s"] = s
-    bit, info = open_check(ctx, res["pp"], st, res["u_com"], res["inp"]["f"])
+    rho_u = res["cdata"]["rho_u"]
+    bit, info = open_check(ctx, res["pp"], st, rho_u, res["u_com"], res["inp"]["f"])
     out["open: one digit of s_i changed"] = dict(passed=not bit, failing=[k for k, v in info["checks"].items() if not v])
+    rho_bad = rho_u.copy()
+    rho_bad[0, 0, 0] = rho_bad[0, 0, 0] + 1
+    bit, info = open_check(ctx, res["pp"], res["states"], rho_bad, res["u_com"], res["inp"]["f"])
+    out["open: one coefficient of rho^u changed"] = dict(passed=not bit,
+                                                        failing=[k for k, v in info["checks"].items() if not v])
     f_bad = res["inp"]["f"].copy()
     f_bad[5, 1] = (f_bad[5, 1] + 1) % P.q
-    bit, info = open_check(ctx, res["pp"], res["states"], res["u_com"], f_bad)
+    bit, info = open_check(ctx, res["pp"], res["states"], rho_u, res["u_com"], f_bad)
     out["open: f changed in one coordinate"] = dict(passed=not bit,
                                                    failing=[k for k, v in info["checks"].items() if not v])
     c = np.zeros((P.n_blocks, P.d), dtype=np.int64)
     c[:, 0] = 1
     c[0, 1] = P.omega_bar          # ||c_0||_1 = omega_bar + 1
-    bit, info = open_check(ctx, res["pp"], res["states"], res["u_com"], res["inp"]["f"], c=c)
+    bit, info = open_check(ctx, res["pp"], res["states"], rho_u, res["u_com"], res["inp"]["f"], c=c)
     out["open: c outside the slack space"] = dict(passed=not bit,
                                                  failing=[k for k, v in info["checks"].items() if not v])
     return out

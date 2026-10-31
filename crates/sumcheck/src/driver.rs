@@ -1,4 +1,4 @@
-//! The driver of one party: the whole sumcheck of `5_Building_Blocks.tex`:195-326 against a
+//! The driver of one party: the whole sumcheck of `5_Building_Blocks.tex`:209-358 against a
 //! [`Comm`], a [`PartyRandomness`], a [`Challenger`] (`docs/m1-spec.md`, "Randomness and
 //! coins") and a base PCS ([`BasePcs`]), with the absorb labels and the collective calls of the
 //! crate.
@@ -8,17 +8,18 @@ use crate::eq::eq_table;
 use crate::error::{Error, Result, check_len};
 use crate::prover::PartyProver;
 use crate::quotient::quotient_share;
-use crate::tables::{mstar_table, w_table};
+use crate::tables::{mstar_table, put_pad_residues, w_table};
 use crate::transcript::{
     ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
 };
-use hachi_co_core::base_pcs::mobius;
+use hachi_co_core::base_pcs::{mobius, mobius_ext};
 use hachi_co_core::wire::{flatten_exts, join_words, split_words, unflatten_exts};
 use hachi_co_core::{
     BasePcs, BlinderKind, Challenger, Context, LinearShare, PartyRandomness, Poly,
 };
 use hachi_co_math::Ext;
 use hachi_co_mpc::{Comm, PartyId};
+use hachi_co_params::PadRule;
 
 /// The absorb label of the hypercube sums $G\_{0,1}, \dots, G\_{0,n}$ (absorbed before
 /// [`Challenger::sumcheck_coins`]).
@@ -51,7 +52,7 @@ pub const ALL_GATHER_SUMS: &str = "hachi-co/sumcheck/all-gather/G";
 /// commitments public.
 pub const ALL_GATHER_COMMITMENTS: &str = "hachi-co/sumcheck/all-gather/commitments";
 /// The label of the $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ call of each round
-/// (`5_Building_Blocks.tex`:293-300).
+/// (`5_Building_Blocks.tex`:325-332).
 pub const FAH_ROUND: &str = "hachi-co/sumcheck/fah/I";
 /// The label of the [`Comm::all_gather`] call that makes every party's final values public.
 pub const ALL_GATHER_FINAL: &str = "hachi-co/sumcheck/all-gather/final";
@@ -124,7 +125,7 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
     rows.iter().map(|row| row[index]).collect()
 }
 
-/// Party $p$ = `comm.id()` runs the collaborative sumcheck (`5_Building_Blocks.tex`:195-326) on
+/// Party $p$ = `comm.id()` runs the collaborative sumcheck (`5_Building_Blocks.tex`:209-358) on
 /// its shares $\langle \mathbf z' \rangle\_p, \lbrace \mathbf y \rbrace\_p$ of the relation
 /// $\mathbf M \mathbf z' = \mathbf y$, with the public $\mathbf M$ ([`hachi_co_core::build_m`]),
 /// the $d \times d$ matrix of $E$ ([`hachi_co_math::Subfield::e_matrix`] at the point $v$ of
@@ -134,34 +135,35 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 /// **Steps** (each party; the coins come from `ch`; the blinders and the base PCS's six seeds,
 /// [`PartyRandomness::base_pcs`] at [`ClaimedPoly::seed_index`], from `rng`):
 /// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share`]) and the table of
-///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), lines 198-229;
+///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), with the pad $\rho^w\_p$
+///    ([`PartyRandomness::rho_w`]), lines 227-259;
 /// 2. $g\_{0,p}, g\_{1,p}$ from [`PartyRandomness::blinder`] ($\ell'' \times d\_0$ and
-///    $\ell'' \times d\_1$) and their hypercube sums, lines 209-219;
-/// 3. the commitments (lines 220-221, 230): $\langle \widetilde w \rangle\_p$ by its monomial
-///    coefficients ([`mobius`] of the table) with [`BasePcs::commit_multilinear`], and
+///    $\ell'' \times d\_1$) and their hypercube sums, lines 238-248;
+/// 3. the commitments (lines 249-250, 260): $\langle \widetilde w \rangle\_p$ by its monomial
+///    coefficients ([`mobius_ext`] of the table) with [`BasePcs::commit_multilinear_ext`], and
 ///    $g\_{0,p}$, $g\_{1,p}$ by their coefficient vectors ([`blinder_coefficients`]) with
 ///    [`BasePcs::commit_vector`];
 /// 4. [`Comm::all_gather`] (label [`ALL_GATHER_SUMS`]) of $(G\_{0,p}, G\_{1,p})$ and
 ///    (label [`ALL_GATHER_COMMITMENTS`]) of the three commitments in words
 ///    ([`BasePcs::commitment_to_words`]), so that every party learns them all: they are the
-///    public messages of line 241, and the transcript holds them per party; absorb
+///    public messages of line 273, and the transcript holds them per party; absorb
 ///    $G\_{0,1..n}$ ([`LABEL_G0`]), $G\_{1,1..n}$ ([`LABEL_G1`]) and the commitments
 ///    ([`Challenger::absorb_words`]: [`LABEL_COMMIT_W`], [`LABEL_COMMIT_G0`],
 ///    [`LABEL_COMMIT_G1`], one word vector per party each); draw $\alpha, \rho, \tau\_0,
-///    \tau\_1$ ([`Challenger::sumcheck_coins`]), lines 243-250;
+///    \tau\_1$ ([`Challenger::sumcheck_coins`]), lines 275-282;
 /// 5. the tables $\widetilde{eq}(\tau\_1, \cdot)$ and $M^\ast$ ([`mstar_table`]);
 /// 6. for $r = 1, \dots, \ell''$: the round values ([`PartyProver::round_values`]),
 ///    $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ on $H\_{0,p,r}(1..d\_0+1) \Vert H\_{1,p,r}(1..d\_1+1)$
-///    (label [`FAH_ROUND`], lines 293-300), absorb $H\_{0,r}$ ([`LABEL_H0`]) and $H\_{1,r}$
+///    (label [`FAH_ROUND`], lines 325-332), absorb $H\_{0,r}$ ([`LABEL_H0`]) and $H\_{1,r}$
 ///    ([`LABEL_H1`]), draw $a\_r$ ([`Challenger::round_coin`]), bind;
 /// 7. the final values $\langle \widetilde w \rangle\_p(\mathbf a), g\_{0,p}(\mathbf a),
 ///    g\_{1,p}(\mathbf a)$ through [`Comm::all_gather`] (label [`ALL_GATHER_FINAL`]), absorbed
-///    with [`LABEL_FINAL_W`], [`LABEL_FINAL_G0`], [`LABEL_FINAL_G1`] (lines 314-320);
-/// 8. the openings (lines 314-318), in the order [`ClaimedPoly::ORDER`] ($g\_0$, $g\_1$,
+///    with [`LABEL_FINAL_W`], [`LABEL_FINAL_G0`], [`LABEL_FINAL_G1`] (lines 346-352);
+/// 8. the openings (lines 346-350), in the order [`ClaimedPoly::ORDER`] ($g\_0$, $g\_1$,
 ///    $\widetilde w$): for each, the context [`Challenger::context`]`(`[`opening_label`]`(p,
 ///    poly))`, then $g\_{b,p}(\mathbf a)$ by [`BasePcs::prove_inner_product`] with the weights
 ///    $(1, (a\_j^k)\_{j,k})$ ([`blinder_weights`]) and $\langle \widetilde w \rangle\_p(\mathbf a)$
-///    by [`BasePcs::prove_multilinear`] at $\mathbf a$; each opened value must equal the final
+///    by [`BasePcs::prove_multilinear_ext`] at $\mathbf a$; each opened value must equal the final
 ///    value of step 7 ([`Error::OpeningMismatch`] otherwise); the proofs in words
 ///    ([`BasePcs::proof_to_words`]) through [`Comm::all_gather`] (label
 ///    [`ALL_GATHER_OPENINGS`]). Nothing follows them in the transcript, so they are not
@@ -203,16 +205,33 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     }
     // Steps 1-2.
     let quotient = quotient_share(ctx, m, share)?;
-    let table = w_table(ctx, &share.z_prime, &quotient)?;
+    let mut table = w_table(ctx, &share.z_prime, &quotient)?;
     let g0 = rng.blinder(field, BlinderKind::G0, l.ell_pp, l.d0)?;
     let g1 = rng.blinder(field, BlinderKind::G1, l.ell_pp, l.d1)?;
-    let mut prover = PartyProver::new(ctx, party, table, g0, g1)?;
+    let pad = match l.pad_rule {
+        PadRule::Field => Some(rng.rho_w(field)?),
+        PadRule::Residues => {
+            let residues = rng.rho_w_residues(ctx.q(), 2 * l.k)?;
+            put_pad_residues(l, &mut table, &residues)?;
+            None
+        }
+    };
+    let mut prover = PartyProver::new(ctx, party, table, pad, g0, g1)?;
     // Step 3.
     let (st_w, com_w) = {
-        let mut coeffs = prover.w_table().to_vec();
-        mobius(field.zq(), &mut coeffs)?;
         let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
-        let (com, st) = pcs.commit_multilinear(&coeffs, &seed)?;
+        let (com, st) = match l.pad_rule {
+            PadRule::Field => {
+                let mut coeffs = prover.w_field_table();
+                mobius_ext(field, &mut coeffs)?;
+                pcs.commit_multilinear_ext(&coeffs, &seed)?
+            }
+            PadRule::Residues => {
+                let mut coeffs = prover.w_table().to_vec();
+                mobius(field.zq(), &mut coeffs)?;
+                pcs.commit_multilinear(&coeffs, &seed)?
+            }
+        };
         (st, pcs.commitment_to_words(&com))
     };
     let (g0, g1) = prover.blinders();
@@ -282,7 +301,10 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         let seed = rng.base_pcs(poly.seed_index(true))?;
         let (value, words) = match poly {
             ClaimedPoly::W => {
-                let (value, proof) = pcs.prove_multilinear(&st_w, &point, &context, &seed)?;
+                let (value, proof) = match l.pad_rule {
+                    PadRule::Field => pcs.prove_multilinear_ext(&st_w, &point, &context, &seed)?,
+                    PadRule::Residues => pcs.prove_multilinear(&st_w, &point, &context, &seed)?,
+                };
                 (value, pcs.proof_to_words(&proof))
             }
             ClaimedPoly::G0 | ClaimedPoly::G1 => {
@@ -302,7 +324,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         proofs[slot(poly)] = words;
     }
     let openings = all_gather_words(comm, ALL_GATHER_OPENINGS, n, &proofs)?;
-    let (w_table, g0, g1, point) = prover.into_parts();
+    let (w_table, pad, g0, g1, point) = prover.into_parts();
     Ok((
         SumcheckTranscript {
             g0_sums,
@@ -316,6 +338,7 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
             party,
             quotient,
             w_table,
+            pad,
             g0,
             g1,
             coins,

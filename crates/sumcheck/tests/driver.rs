@@ -109,7 +109,7 @@ fn loopback_driver_reproduces_toy_n1() {
     }
     assert_eq!(
         Some(transcript.openings.w[0].len()),
-        Pcs::multilinear_proof_words(l.ell_pp)
+        Pcs::multilinear_ext_proof_words(l.ell_pp)
     );
     assert_eq!(
         Some(transcript.openings.g0[0].len()),
@@ -448,6 +448,14 @@ impl BasePcs<K> for FaultyPcs {
         self.inner.commit_multilinear(coeffs, seed)
     }
 
+    fn commit_multilinear_ext(
+        &self,
+        coeffs: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(ClearCommitment, ClearPolynomial<K>)> {
+        self.inner.commit_multilinear_ext(coeffs, seed)
+    }
+
     fn commit_vector(
         &self,
         v: &[Ext<K>],
@@ -467,6 +475,20 @@ impl BasePcs<K> for FaultyPcs {
         seed: &[u8; 32],
     ) -> hachi_co_core::Result<(Ext<K>, ClearOpening<K>)> {
         let (mut value, proof) = self.inner.prove_multilinear(st, point, context, seed)?;
+        if self.wrong == Some(ClaimedPoly::W) {
+            value.0[0] ^= 1;
+        }
+        Ok((value, proof))
+    }
+
+    fn prove_multilinear_ext(
+        &self,
+        st: &ClearPolynomial<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, ClearOpening<K>)> {
+        let (mut value, proof) = self.inner.prove_multilinear_ext(st, point, context, seed)?;
         if self.wrong == Some(ClaimedPoly::W) {
             value.0[0] ^= 1;
         }
@@ -498,6 +520,19 @@ impl BasePcs<K> for FaultyPcs {
     ) -> Result<(), String> {
         self.inner
             .verify_multilinear(com, num_vars, point, value, proof, context)
+    }
+
+    fn verify_multilinear_ext(
+        &self,
+        com: &ClearCommitment,
+        num_vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &ClearOpening<K>,
+        context: &[u8; 32],
+    ) -> Result<(), String> {
+        self.inner
+            .verify_multilinear_ext(com, num_vars, point, value, proof, context)
     }
 
     fn verify_inner_product(

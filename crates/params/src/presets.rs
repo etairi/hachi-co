@@ -8,7 +8,7 @@
 //! requires exact agreement.
 
 use crate::cascade::{Params, derive};
-use crate::choices::{ChallengeSet, Choices, Omega, QChoice, TauRule};
+use crate::choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, TauRule};
 use crate::error::{Error, Result};
 use crate::report::Report;
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,8 @@ pub enum PresetKind {
     /// [`dev_presets`].
     Dev,
     /// Meets the $\lambda$-bit target according to the lattice estimator's estimates for the
-    /// $\mathsf{MSIS}$ and $\mathsf{MLWE}$ instances of the draft (6_Collaborative_Hachi.tex:563,
-    /// 5_Building_Blocks.tex:193), satisfies every condition of the report, and has
+    /// $\mathsf{MSIS}$ and $\mathsf{MLWE}$ instances of the draft (6_Collaborative_Hachi.tex:581,
+    /// 5_Building_Blocks.tex:207), satisfies every condition of the report, and has
     /// $q < 2^{63}$. Estimates, not proofs (the draft's security proofs are unfinished).
     Secure,
 }
@@ -80,11 +80,11 @@ pub struct MsisEstimate {
     pub method: String,
 }
 
-/// The estimate for the $\mathsf{MLWE}_{q, d, n_D, m_\rho - n_D, b}$ instance of the hiding
-/// argument (5_Building_Blocks.tex:193), as computed by `parameters.sage`.
+/// The estimate for the $\mathsf{MLWE}_{q, d, n_D, m_v - n_D, b}$ instance of the hiding
+/// argument (5_Building_Blocks.tex:207), as computed by `parameters.sage`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MlweEstimate {
-    /// The secret dimension over $\mathbb Z$, $(m_\rho - n_D) d$.
+    /// The secret dimension over $\mathbb Z$, $(m_v - n_D) d$.
     pub secret_dim: u64,
     /// The number of samples over $\mathbb Z$, $n_D d$.
     pub samples: u64,
@@ -103,12 +103,14 @@ pub struct SecurityEstimates {
     /// The target $\lambda$.
     pub lambda: u32,
     /// $\mathsf{MSIS}$ for $\mathbf A$ with bound $2\bar\omega\bar\beta$
-    /// (6_Collaborative_Hachi.tex:563).
+    /// (6_Collaborative_Hachi.tex:581).
     pub msis_a: MsisEstimate,
-    /// $\mathsf{MSIS}$ for $\mathbf B$ with bound $2\bar\gamma$ (6_Collaborative_Hachi.tex:563).
+    /// $\mathsf{MSIS}$ for $\mathbf B$ with bound $2\bar\gamma$ (6_Collaborative_Hachi.tex:581).
     pub msis_b: MsisEstimate,
-    /// $\mathsf{MLWE}$ for the hiding of the first message (5_Building_Blocks.tex:193).
+    /// $\mathsf{MLWE}$ for the hiding of the first message (5_Building_Blocks.tex:207).
     pub mlwe: MlweEstimate,
+    /// $\mathsf{MLWE}_{q, d, n_B, m_u - n_B, b}$, hiding the commitment (t-hiding.tex:20-26).
+    pub mlwe_u: MlweEstimate,
 }
 
 /// The lattice estimator that produced `secure.json`.
@@ -152,7 +154,7 @@ pub struct SecurePresetFile {
 
 /// The toy choices for $n$ provers (`docs/m0-spec.md`, "Toy presets"): $\ell = 6$, $\alpha = 4$,
 /// $\kappa = 2$, $b = 4$, $\omega = 2$ in the $\ell_1$ ball, $n_A = n_B = n_D = 1$,
-/// $m_\rho = 2$, the tight $\tau$ and the smallest admissible $q$.
+/// $m_u = m_v = 2$, the tight $\tau$, the smallest admissible $q$ and the draft's pad.
 ///
 /// The brief leaves $\lambda$ and $t$ open. They do not affect any derived value here; $t$ is
 /// the largest threshold below $n/2$, and $\lambda = 115$ as for the secure presets, so the
@@ -172,8 +174,10 @@ pub fn toy_choices(n: u64) -> Choices {
         n_a: 1,
         n_b: 1,
         n_d: 1,
-        m_rho: 2,
+        m_u: 2,
+        m_v: 2,
         q: QChoice::Smallest,
+        pad: PadRule::Field,
     }
 }
 
@@ -205,7 +209,7 @@ pub const DEV_ELLS: [u32; 3] = [12, 16, 20];
 
 /// The development choices with $\ell$ variables (`docs/m1-spec.md`, WP11): the toy choices
 /// of [`toy_choices`]`(1)` with this $\ell$, that is $n = 1$, $\alpha = 4$, $\kappa = 2$, $b = 4$,
-/// $\omega = 2$ (fixed) in the $\ell\_1$ ball, $n\_A = n\_B = n\_D = 1$, $m\_\rho = 2$, the tight
+/// $\omega = 2$ (fixed) in the $\ell\_1$ ball, $n\_A = n\_B = n\_D = 1$, $m\_u = m\_v = 2$, the tight
 /// $\tau$ and the smallest admissible $q$.
 ///
 /// **Not secure.** Like the toys, these choices miss the knowledge-error target by far

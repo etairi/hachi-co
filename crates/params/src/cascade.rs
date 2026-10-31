@@ -1,4 +1,4 @@
-//! The Setup cascade of the draft, 6_Collaborative_Hachi.tex:265-281, evaluated exactly.
+//! The Setup cascade of the draft, 6_Collaborative_Hachi.tex:267-285, evaluated exactly.
 
 use crate::choices::{Choices, Omega, QChoice, TauRule};
 use crate::error::{Error, Result};
@@ -6,7 +6,7 @@ use crate::report::Report;
 use crate::rules;
 use serde::{Deserialize, Serialize};
 
-/// Every quantity of $\mathsf{Setup}$ (6_Collaborative_Hachi.tex:265-288), computed by
+/// Every quantity of $\mathsf{Setup}$ (6_Collaborative_Hachi.tex:267-292), computed by
 /// [`derive`](fn@crate::derive) from a [`Choices`].
 ///
 /// Integers are exact (`u64`/`u128`, every operation checked); only the rejection constant $M$
@@ -19,86 +19,86 @@ pub struct Params {
     /// [`QChoice::Smallest`] unresolved; the resolved values are [`Params::omega`] and
     /// [`Params::q`]).
     pub choices: Choices,
-    /// The challenge radius $\omega$ (line 271).
+    /// The challenge radius $\omega$ (line 273).
     pub omega: u64,
-    /// The modulus $q$ (line 272).
+    /// The modulus $q$ (line 274).
     pub q: u64,
-    /// The ring degree $d = 2^\alpha$ (line 270).
+    /// The ring degree $d = 2^\alpha$ (line 272).
     pub d: u64,
-    /// The extension degree $k = 2^\kappa$ (line 274).
+    /// The extension degree $k = 2^\kappa$ (line 276).
     pub k: u64,
-    /// $\delta = \lceil \log_b q \rceil$, the number of digits of $\mathbf G^{-1}$ (line 274).
+    /// $\delta = \lceil \log_b q \rceil$, the number of digits of $\mathbf G^{-1}$ (line 276).
     pub delta: u32,
-    /// $\lceil \log n \rceil$ (line 274).
+    /// $\lceil \log n \rceil$ (line 276).
     pub log_n: u32,
-    /// $\ell' = \lceil \log n \rceil + \ell - \alpha + \kappa$ (line 274).
+    /// $\ell' = \lceil \log n \rceil + \ell - \alpha + \kappa$ (line 276).
     pub ell_prime: u32,
     /// $r = \max(\lceil \ell'/2 \rceil, \lceil \log n \rceil)$: the witness has $2^r$ blocks
-    /// (line 274).
+    /// (line 276).
     pub r: u32,
-    /// $m = \ell' - r$: each block has $2^m$ ring elements (line 274).
+    /// $m = \ell' - r$: each block has $2^m$ ring elements (line 276).
     pub m: u32,
     /// $\beta_1 = 2^{r - \lceil \log n \rceil} \omega b$, the bound on each prover's share of the
-    /// folded witness (line 275).
+    /// folded witness (line 279).
     pub beta1: u128,
-    /// $N = d \delta 2^m$, the number of integer coefficients of a mask (line 275).
+    /// $N = d \delta 2^m$, the number of integer coefficients of a mask (line 279).
     pub big_n: u128,
-    /// $\gamma = 2nN\beta_1$, the width of the masks (line 275).
+    /// $\gamma = 2nN\beta_1$, the width of the masks (line 279).
     pub gamma: u128,
     /// The rejection constant $M = \left((2\gamma + 1)/(2\gamma - 2\beta_1 + 1)\right)^N$
-    /// (line 275; 4_preliminaries.tex:117), as `f64`.
+    /// (line 279; 4_preliminaries.tex:117), as `f64`.
     pub rejection_m: f64,
     /// $\log_2 M$, as `f64`.
     pub log2_rejection_m: f64,
-    /// $\beta = n\gamma$, the bound on the folded witness $z$ (line 275).
+    /// $\beta = n\gamma$, the bound on the folded witness $z$ (line 279).
     pub beta: u128,
-    /// $\tau$, the number of digits of $\mathbf J^{-1}$, by [`Choices::tau_rule`] (line 276 for
+    /// $\tau$, the number of digits of $\mathbf J^{-1}$, by [`Choices::tau_rule`] (line 280 for
     /// the draft's rule).
     pub tau: u32,
-    /// $\bar\beta = 2b^\tau$ (line 277).
+    /// $\bar\beta = 2b^\tau$ (line 281).
     pub beta_bar: u128,
-    /// $\bar\omega = 2\omega$ (line 277).
+    /// $\bar\omega = 2\omega$ (line 281).
     pub omega_bar: u64,
-    /// $\bar\gamma = b$ (line 277).
+    /// $\bar\gamma = b$ (line 281).
     pub gamma_bar: u64,
-    /// $\mu = 2^r\delta + n\delta + 2^r n_A\delta + n n_A\delta + n m_\rho + 2^m\delta\tau + 1$,
-    /// the length of $\mathbf z'$ (line 278; 5_Building_Blocks.tex:164-172).
+    /// $\mu = 2^r\delta + n\delta + 2^r n_A\delta + n n_A\delta + n m_u + n m_v + 2^m\delta\tau + 2$,
+    /// the length of $\mathbf z'$ (line 282; 5_Building_Blocks.tex:177-186).
     pub mu: u128,
-    /// $n' = n_A + n_B + n_D + 2$ (line 279).
+    /// $n' = n_A + n_B + n_D + 2$ (line 283).
     pub n_prime: u64,
-    /// $\ell'' = \lceil \log(\mu + n') \rceil + \log 2d$ (line 280).
+    /// $\ell'' = \lceil \log(\mu + n') \rceil + \log 2d$ (line 284).
     pub ell_dprime: u32,
-    /// $d_0 = 2b + n' + 1$ (line 281).
+    /// $d_0 = 2b + n' + 1$ (line 285).
     pub d0: u64,
-    /// $d_1 = 3$ (line 281).
+    /// $d_1 = 3$ (line 285).
     pub d1: u64,
-    /// $\nu = n' + d + (\mu + n') d$ (line 281).
+    /// $\nu = n' + d + (\mu + n') d$ (line 285).
     pub nu: u128,
-    /// The width of $\mathbf A \in \mathcal R_q^{n_A \times \delta 2^m}$ (line 285).
+    /// The width of $\mathbf A \in \mathcal R_q^{n_A \times \delta 2^m}$ (line 289).
     pub width_a: u128,
-    /// The width of $\mathbf B \in \mathcal R_q^{n_B \times n_A \delta 2^r}$ (line 286).
+    /// The width of $\mathbf B \in \mathcal R_q^{n_B \times (n_A \delta 2^r + n m_u)}$ (line 290).
     pub width_b: u128,
     /// The width of $\mathbf D \in \mathcal R_q^{n_D \times (\delta(2^r + n + n n_A) + n
-    /// m_\rho)}$ (line 287).
+    /// m_v)}$ (line 291).
     pub width_d: u128,
-    /// $4\bar\omega\bar\beta = 16\omega b^\tau$, the binding guard of line 272 ($q$ must exceed
+    /// $4\bar\omega\bar\beta = 16\omega b^\tau$, the binding guard of line 274 ($q$ must exceed
     /// it).
     pub binding_guard: u128,
-    /// $1 + 2^{\ell+3} n \omega^2 b$, the other lower bound on $q$ of line 272.
+    /// $1 + 2^{\ell+3} n \omega^2 b$, the other lower bound on $q$ of line 274.
     pub range_guard: u128,
     /// $2\bar\omega\bar\beta = 8\omega b^\tau$, the $\infty$-norm bound of the
-    /// $\mathsf{MSIS}$ instance for $\mathbf A$ (line 563).
+    /// $\mathsf{MSIS}$ instance for $\mathbf A$ (line 581).
     pub msis_bound_a: u128,
     /// $2\bar\gamma = 2b$, the $\infty$-norm bound of the $\mathsf{MSIS}$ instance for
-    /// $\mathbf B$ (line 563).
+    /// $\mathbf B$ (line 581).
     pub msis_bound_b: u128,
     /// $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1)$, the largest value $\mathbf J^{-1}$
     /// represents with $\tau$ digits ([`rules::j_inv_capacity`]).
     pub j_inv_capacity: u128,
 }
 
-/// The part of the cascade that depends on $\delta$ (lines 275-276) and the bounds on $q$ it
-/// implies (line 272 and `docs/m0-spec.md`).
+/// The part of the cascade that depends on $\delta$ (lines 279-280) and the bounds on $q$ it
+/// implies (line 274 and `docs/m0-spec.md`).
 struct DeltaDependent {
     beta1: u128,
     big_n: u128,
@@ -109,7 +109,7 @@ struct DeltaDependent {
 }
 
 impl DeltaDependent {
-    /// Lines 275-277 for a given $\delta$.
+    /// Lines 279-281 for a given $\delta$.
     fn new(c: &Choices, s: &Structure, omega: u64, delta: u32) -> Result<Self> {
         let n = u128::from(c.n);
         let b = u128::from(c.b);
@@ -154,7 +154,7 @@ impl DeltaDependent {
     }
 }
 
-/// The part of the cascade that depends neither on $\omega$ nor on $q$ (lines 270, 274).
+/// The part of the cascade that depends neither on $\omega$ nor on $q$ (lines 272, 276).
 struct Structure {
     d: u64,
     k: u64,
@@ -178,7 +178,7 @@ impl Structure {
         if ell_prime < 0 {
             return Err(Error::NegativeExponent(format!(
                 "l' = ceil(log n) + l - alpha + kappa = {ell_prime} < 0, which needs alpha - kappa > l \
-                 (6_Collaborative_Hachi.tex:273 requires 1 <= alpha - kappa <= l)"
+                 (6_Collaborative_Hachi.tex:275 requires 2 <= alpha - kappa <= l)"
             )));
         }
         let ell_prime = u32::try_from(ell_prime).map_err(|_| Error::Overflow("l'"))?;
@@ -186,7 +186,7 @@ impl Structure {
         let m = ell_prime.checked_sub(r).ok_or_else(|| {
             Error::NegativeExponent(format!(
                 "m = l' - r = {ell_prime} - {r} < 0, which needs alpha - kappa > l \
-                 (6_Collaborative_Hachi.tex:273 requires 1 <= alpha - kappa <= l)"
+                 (6_Collaborative_Hachi.tex:275 requires 2 <= alpha - kappa <= l)"
             ))
         })?;
         Ok(Self {
@@ -200,7 +200,7 @@ impl Structure {
     }
 }
 
-/// $1 + 2^{\ell+3} n \omega^2 b$ (line 272).
+/// $1 + 2^{\ell+3} n \omega^2 b$ (line 274).
 fn range_guard(c: &Choices, omega: u64) -> Result<u128> {
     let omega = u128::from(omega);
     let ell3 = c.ell.checked_add(3).ok_or(Error::Overflow("l + 3"))?;
@@ -258,13 +258,13 @@ fn smallest_q(c: &Choices, s: &Structure, omega: u64, range_guard: u128) -> Resu
     ))
 }
 
-/// Evaluates $\mathsf{Setup}$ (6_Collaborative_Hachi.tex:265-288) on `choices`.
+/// Evaluates $\mathsf{Setup}$ (6_Collaborative_Hachi.tex:267-292) on `choices`.
 ///
-/// The cascade is followed verbatim, in the draft's order: $d, k$ (lines 270, 274); $\omega$
-/// (line 271, or [`Omega::MinForTarget`]); $\delta, \ell', r, m$ (line 274); $\beta_1, N,
-/// \gamma, M, \beta$ (line 275); $\tau$ (line 276, or the chosen [`TauRule`]);
-/// $(\bar\beta, \bar\omega, \bar\gamma)$ (line 277); $\mu, n'$ (lines 278-279); $\ell''$
-/// (line 280); $d_0, d_1, \nu$ (line 281); the matrix widths (lines 285-287). $q$ is either
+/// The cascade is followed verbatim, in the draft's order: $d, k$ (lines 272, 276); $\omega$
+/// (line 273, or [`Omega::MinForTarget`]); $\delta, \ell', r, m$ (line 276); $\beta_1, N,
+/// \gamma, M, \beta$ (line 279); $\tau$ (line 280, or the chosen [`TauRule`]);
+/// $(\bar\beta, \bar\omega, \bar\gamma)$ (line 281); $\mu, n'$ (lines 282-283); $\ell''$
+/// (line 284); $d_0, d_1, \nu$ (line 285); the matrix widths (lines 289-291). $q$ is either
 /// fixed or chosen by the rule of `docs/m0-spec.md` ([`QChoice::Smallest`]).
 ///
 /// The [`Report`] lists every condition of the draft and of `docs/m0-spec.md` with whether it
@@ -305,17 +305,18 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
 
     let two_r = rules::checked_pow(2, s.r, "2^r")?;
     let two_m = rules::checked_pow(2, s.m, "2^m")?;
-    // mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_rho + 2^m delta tau + 1.
+    // mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_u + n m_v + 2^m delta tau + 2.
     let mu_terms = [
         two_r.checked_mul(delta128),
         n.checked_mul(delta128),
         two_r.checked_mul(n_a).and_then(|x| x.checked_mul(delta128)),
         n.checked_mul(n_a).and_then(|x| x.checked_mul(delta128)),
-        n.checked_mul(u128::from(c.m_rho)),
+        n.checked_mul(u128::from(c.m_u)),
+        n.checked_mul(u128::from(c.m_v)),
         two_m
             .checked_mul(delta128)
             .and_then(|x| x.checked_mul(u128::from(dd.tau))),
-        Some(1),
+        Some(2),
     ];
     let mu = mu_terms
         .into_iter()
@@ -349,14 +350,15 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
     let width_b = n_a
         .checked_mul(delta128)
         .and_then(|x| x.checked_mul(two_r))
+        .and_then(|x| x.checked_add(n.checked_mul(u128::from(c.m_u))?))
         .ok_or_else(overflow("width of B"))?;
-    // delta (2^r + n + n n_A) + n m_rho.
+    // delta (2^r + n + n n_A) + n m_v.
     let width_d = n
         .checked_mul(n_a)
         .and_then(|x| x.checked_add(two_r))
         .and_then(|x| x.checked_add(n))
         .and_then(|x| x.checked_mul(delta128))
-        .and_then(|x| x.checked_add(n.checked_mul(u128::from(c.m_rho))?))
+        .and_then(|x| x.checked_add(n.checked_mul(u128::from(c.m_v))?))
         .ok_or_else(overflow("width of D"))?;
 
     let msis_bound_a = dd.binding_guard / 2;

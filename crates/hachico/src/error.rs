@@ -143,7 +143,7 @@ pub enum Error {
     #[error("statement: {0}")]
     Statement(#[from] StatementError),
     /// The claimed evaluation $y$ fails the check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ with the
-    /// $E(u)$ the provers computed (`field-to-ring-rok.tex`:160-164), so the verifier would
+    /// $E(u)$ the provers computed (`field-to-ring-rok.tex`:189-193), so the verifier would
     /// reject; the provers stop before the ring-to-linear step.
     #[error("the claimed evaluation fails y = E(u): {0}")]
     ClaimMismatch(hachi_co_conv::VerifyError),
@@ -161,7 +161,7 @@ pub enum VerifyError {
     #[error(transparent)]
     Proof(#[from] ProofError),
     /// $\Pi\_{\mathsf{conv}}$'s check failed: $E(u) \notin \mathcal R\_q^H$ or $y \ne E(u)$
-    /// (`field-to-ring-rok.tex`:163-164).
+    /// (`field-to-ring-rok.tex`:192-193).
     #[error("Pi_conv: {0}")]
     Conv(hachi_co_conv::VerifyError),
     /// The public vectors of $\Pi\_{\mathsf{conv}}$ or the matrix of $E$ could not be computed (not
@@ -169,11 +169,11 @@ pub enum VerifyError {
     #[error("public vectors: {0}")]
     PublicVectors(hachi_co_conv::Error),
     /// The ring-to-linear step: the challenges of the accepted attempt, $\mathbf c \in
-    /// \mathcal C^{2^r}$, or $\mathbf M$ and $\mathbf y$ (`5_Building_Blocks.tex`:122-126,
+    /// \mathcal C^{2^r}$, or $\mathbf M$ and $\mathbf y$ (`5_Building_Blocks.tex`:134-138,
     /// 157-179).
     #[error("ring-to-linear: {0}")]
     RingToLinear(hachi_co_r2l::Error),
-    /// The sumcheck verifier rejected (`5_Building_Blocks.tex`:276-334): a failing round or final
+    /// The sumcheck verifier rejected (`5_Building_Blocks.tex`:308-366): a failing round or final
     /// check ([`Rejected`](hachi_co_sumcheck::VerifyError::Rejected)), a base-PCS opening that
     /// the base PCS rejects ([`Opening`](hachi_co_sumcheck::VerifyError::Opening), with the
     /// party and the polynomial), or a failing challenger.

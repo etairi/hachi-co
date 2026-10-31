@@ -1,5 +1,5 @@
 //! The collaborative polynomial commitment scheme of the Hachi-Co draft
-//! (`6_Collaborative_Hachi.tex`:262-419), composed from the building blocks with Fiat-Shamir:
+//! (`6_Collaborative_Hachi.tex`:264-437), composed from the building blocks with Fiat-Shamir:
 //! $\mathsf{Setup}$, $\mathsf{Commit}$, $\mathsf{Eval}$ ($\Pi\_{\mathsf{conv}}$, then the
 //! ring-to-linear step with retries, then the collaborative sumcheck with the base PCS's
 //! commitments and openings) and $\mathsf{Verify}$, with Hachi as the base PCS
@@ -7,10 +7,10 @@
 //!
 //! | Item | Contents | Draft |
 //! |---|---|---|
-//! | [`setup`] | $\mathsf{Setup}$: [`Context::setup`] ($\mathbf A, \mathbf B, \mathbf D$ from a seed) | `6_Collaborative_Hachi.tex`:263-298 |
+//! | [`setup`] | $\mathsf{Setup}$: [`Context::setup`] ($\mathbf A, \mathbf B, \mathbf D$ from a seed) | `6_Collaborative_Hachi.tex`:265-303 |
 //! | [`commit`] | $\mathsf{Commit}$ of one party: [`hachi_co_commit::commit`] | 300-391 |
 //! | [`eval`], [`eval_with`], [`EvalOutput`] | $\mathsf{Eval}$ of one party with Fiat-Shamir and a base PCS ([`BasePcs`]) | 408-419 |
-//! | [`verify`], [`verify_with`], [`verify_claims_with`] | the verifier, with the $3n$ openings of the base PCS | 408-419; `5_Building_Blocks.tex`:276-334 |
+//! | [`verify`], [`verify_with`], [`verify_claims_with`] | the verifier, with the $3n$ openings of the base PCS | 408-419; `5_Building_Blocks.tex`:308-366 |
 //! | [`EvalProof`], [`encoded_len`], [`EvalProof::encoded_len`] | the proof, its canonical encoding and its length | — |
 //! | [`absorb_statement`], [`check_statement`], [`EVAL_DOMAIN`] | the statement in the transcript | — |
 //! | [`hachi_co_params::sizes_with_base`], [`hachi_co_params::sizes`](fn@hachi_co_params::sizes) | the size of the encoding, per component, with and without the base PCS's items | — |
@@ -33,9 +33,9 @@
 //! polynomial $\langle \widetilde w \rangle\_p$ and its blinders $g\_{0,p}, g\_{1,p}$ before the
 //! sumcheck's coins: the commitments are absorbed into the Fiat-Shamir transcript after
 //! $G\_{0,\cdot}, G\_{1,\cdot}$ and before $\alpha, \rho, \tau\_0, \tau\_1$ are drawn
-//! (`5_Building_Blocks.tex`:209-241). After the last round, the verifier checks the $3n$
+//! (`5_Building_Blocks.tex`:238-273). After the last round, the verifier checks the $3n$
 //! openings of these commitments at the point $\mathbf a$ against the final values that its
-//! final checks use (lines 314-333); every check must hold. The final values are therefore
+//! final checks use (lines 346-365); every check must hold. The final values are therefore
 //! evaluations of polynomials fixed before the coins, which is what the sumcheck's soundness
 //! argument needs; the forgery that the protocol without a base PCS allowed (choose
 //! $\langle \widetilde w \rangle\_p(\mathbf a)$ freely after the last coin and solve the two
@@ -44,7 +44,7 @@
 //!
 //! What this does not say:
 //! - **Proof status.** Soundness of the composition is the draft's claim, not a theorem here:
-//!   the draft's knowledge-soundness proof is unwritten (`6_Collaborative_Hachi.tex`:588), and
+//!   the draft's knowledge-soundness proof is unwritten (`6_Collaborative_Hachi.tex`:618), and
 //!   that Hachi's knowledge soundness with relaxed openings suffices for the extractor is the
 //!   authors' intuition (answer 4 of 2026-10-21, plan `docs/hachi-co-plan.md`, §0). The tests
 //!   check completeness, every check of the verifier, the rejection of every tampered
@@ -59,10 +59,11 @@
 //!   base PCS's parameters ([`BasePcs::params_digest`]) is part of the statement
 //!   ([`absorb_statement`]), and the base PCS's commitments are absorbed before the sumcheck's
 //!   coins.
-//! - **Not hiding.** The commitment $\mathbf u$ is not hiding (plan, finding F2); the final
-//!   values reveal one evaluation of each party's share polynomial (finding F4; revealed for now
-//!   by the authors' answer 7 of 2026-10-21); the base PCS's commitments and openings reveal
-//!   whatever the base PCS reveals (`ClearPcs`: the polynomials themselves).
+//! - **Not hiding yet.** $\mathbf u$ and the final values are masked as the draft prescribes
+//!   ($\boldsymbol\rho^u$ and the pad $\rho^w$), and its theorem covers several adaptive
+//!   evaluations for a base PCS with evaluation hiding (`t-hiding.tex`:19, 297). No base PCS here
+//!   has it: `ClearPcs` reveals the polynomials themselves, and every opening of [`HachiBase`]
+//!   sends its last witness in the clear.
 //!
 //! # Fiat-Shamir
 //!
@@ -74,7 +75,7 @@
 //!
 //! | # | Call | Label | Data |
 //! |---|---|---|---|
-//! | 1 | `absorb_u64` × 15 | `hachi-co/eval/params/<name>` ([`LABELS_PARAMS`]) | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega, $ challenge set, $\tau$ rule, $n\_A, n\_B, n\_D, m\_\rho, q$ ([`statement_words`]) |
+//! | 1 | `absorb_u64` × 17 | `hachi-co/eval/params/<name>` ([`LABELS_PARAMS`]) | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega, $ challenge set, $\tau$ rule, $n\_A, n\_B, n\_D, m\_\rho, q$ ([`statement_words`]) |
 //! | 2 | `absorb_polys` × 3 | [`LABEL_PP_A`], [`LABEL_PP_B`], [`LABEL_PP_D`] | $\mathbf A$, $\mathbf B$, $\mathbf D$, row-major |
 //! | 3 | `absorb_words` | [`LABEL_PP_BASE`] | the digest of the base PCS's parameters ([`BasePcs::params_digest`]), as four little-endian words |
 //! | 4 | `absorb_polys` | [`hachi_co_commit::LABEL_U`] | $\mathbf u$ |
@@ -141,7 +142,7 @@
 //!   [`verify_claims_with`] also returns the checked claims.
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `625ced1`), cited by file and line; "the oracle" is the Sage reference in `ref/`.
+//! `8834c9f`), cited by file and line; "the oracle" is the Sage reference in `ref/`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 

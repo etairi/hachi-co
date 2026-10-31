@@ -51,7 +51,7 @@ pub enum Error {
         /// The modulus.
         q: u64,
     },
-    /// A coefficient of a short vector is outside its range (for example $\boldsymbol\rho\_p$
+    /// A coefficient of a short vector is outside its range (for example $\boldsymbol\rho^v\_p$
     /// outside $S\_b$, `4_preliminaries.tex`:88).
     #[error("{what}: a coefficient is outside [{min}, {max}]")]
     OutOfRange {
@@ -70,7 +70,7 @@ pub enum Error {
     #[error("invalid parameter: {0}")]
     Parameter(String),
     /// A challenge $c\_i$ is not in $\mathcal C = \lbrace c \in \mathcal R\_q : \Vert c \Vert\_1
-    /// \le \omega \rbrace$ (`5_Building_Blocks.tex`:122). Every prover checks the challenges
+    /// \le \omega \rbrace$ (`5_Building_Blocks.tex`:134). Every prover checks the challenges
     /// before using them (plan `docs/hachi-co-plan.md`, finding F5), and so does the verifier.
     #[error("challenge c_{index} has l1 norm {l1_norm} > omega = {omega}")]
     ChallengeNotInC {
@@ -92,14 +92,13 @@ pub enum Error {
         /// The value of the communication layer.
         actual: usize,
     },
-    /// The communication layer broke its contract (for example a gather that delivers the
-    /// responses to a party other than prover 1, or an abort agreement that contradicts the
-    /// party's own flag); the message names it.
+    /// The communication layer broke its contract (for example an abort agreement that
+    /// contradicts the party's own flag); the message names it.
     #[error("protocol: {0}")]
     Protocol(String),
     /// Prover 1's check $\Vert \mathbf z \Vert\_\infty \le \beta$ failed
-    /// (`5_Building_Blocks.tex`:131), returned at prover 1. It never fails for honest provers
-    /// (`5_Building_Blocks.tex`:193), so it is not retried: the step stops with this error.
+    /// (`5_Building_Blocks.tex`:144), returned at prover 1. It never fails for honest provers
+    /// (`5_Building_Blocks.tex`:207), so it is not retried: the step stops with this error.
     #[error("prover 1's norm check failed: ||z||_inf = {norm} > beta = {beta}")]
     NormCheck {
         /// $\Vert \mathbf z \Vert\_\infty$.
@@ -107,13 +106,13 @@ pub enum Error {
         /// $\beta = n\gamma$.
         beta: u64,
     },
-    /// Returned at the provers $p \gt 1$ when prover 1 announces that its steps after the gather
+    /// Returned at the provers $p \gt 1$ when prover 1 announces that its steps after the sum
     /// failed ([`Error::NormCheck`], a malformed response, or $\mathbf J^{-1}$).
-    #[error("prover 1 aborted the protocol after the gather")]
+    #[error("prover 1 aborted the protocol after the sum of the responses")]
     Prover1Abort,
-    /// Every one of the `attempts` attempts aborted (`5_Building_Blocks.tex`:129). For honest
+    /// Every one of the `attempts` attempts aborted (`5_Building_Blocks.tex`:141). For honest
     /// provers each attempt aborts with probability $1 - M^{-n} \le 1 - 1/e$
-    /// (`6_Collaborative_Hachi.tex`:275), so [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) attempts all
+    /// (`6_Collaborative_Hachi.tex`:279), so [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) attempts all
     /// abort with probability below $2^{-42}$.
     #[error("all {attempts} attempts of the ring-to-linear step aborted")]
     TooManyAttempts {
@@ -122,7 +121,7 @@ pub enum Error {
     },
     /// The index $a^\ast$ of the accepted attempt, a proof value, is at or beyond the cap
     /// [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) on the attempts of [`run`](crate::run)
-    /// (`5_Building_Blocks.tex`:129); honest provers never produce it.
+    /// (`5_Building_Blocks.tex`:141); honest provers never produce it.
     /// [`verifier_challenges`](crate::verifier_challenges) refuses it.
     #[error("attempt index {attempt} is not below the cap {cap}")]
     AttemptOutOfRange {

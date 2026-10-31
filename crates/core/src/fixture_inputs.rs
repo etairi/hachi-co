@@ -7,12 +7,12 @@
 use crate::{BlockState, Context, Error, Fixture, PartyState, Poly, PublicVectors, Result};
 
 impl Fixture {
-    /// Party $p$'s state after Commit (`6_Collaborative_Hachi.tex`:390) as recorded: its share
+    /// Party $p$'s state after Commit (`6_Collaborative_Hachi.tex`:400) as recorded: its share
     /// $\langle \mathbf f \rangle\_p$ (`commit/f_shares`), and for every block $i$ it owns
     /// ([`Layout::blocks_of`](crate::Layout::blocks_of)) the slice of $\mathbf f'$
     /// (`commit/f_prime`) and $\mathbf s\_i, \mathbf t\_i, \hat{\mathbf t}\_i$ from the entry of
-    /// `commit/blocks` with that index. Every recorded block of $p$ must be one it owns and vice
-    /// versa; the state is validated.
+    /// `commit/blocks` with that index, and its $\boldsymbol\rho^u\_p$ (`commit/rho_u`). Every
+    /// recorded block of $p$ must be one it owns and vice versa; the state is validated.
     ///
     /// # Errors
     /// [`Error::Fixture`] for a missing or misattributed block; the decoders' and
@@ -59,10 +59,16 @@ impl Fixture {
                 blocks.len()
             )));
         }
+        let rho_u = self
+            .int_rows(&format!("/commit/rho_u/{}", p - 1))?
+            .iter()
+            .map(|c| ctx.ring.from_i64(c))
+            .collect::<core::result::Result<Vec<_>, _>>()?;
         let state = PartyState {
             party: p,
             share: self.exts(&format!("/commit/f_shares/{}", p - 1))?,
             blocks,
+            rho_u,
         };
         state.validate(l)?;
         Ok(state)

@@ -17,6 +17,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+from hachico_ref import hiding_checks  # noqa: E402
 from hachico_ref import negative as neg  # noqa: E402
 from hachico_ref.fixtures import build_fixture, write_fixture  # noqa: E402
 from hachico_ref.oracle import run_instance  # noqa: E402
@@ -105,6 +106,12 @@ def main():
         print("  info  degree of sum_p F_0 round polys: U rounds %s, L rounds %s (2b+1 = %d, draft d0 = %d); "
               "F_1: max %d (d1 = %d)" % (sorted(set(d0s[:P.ell_U])), sorted(set(d0s[P.ell_U:])), 2 * P.b + 1,
                                          P.d0, max(d1s), P.d1))
+        t = time.time()
+        for name, ok in hiding_checks.run(res).items():
+            print("  %s  t-hiding formula  %s" % ("PASS" if ok else "FAIL", name))
+            if not ok:
+                failures.append("%s t-hiding formula %s" % (P.name, name))
+        print("  (t-hiding formulas %.1fs)" % (time.time() - t))
         negres = {}
         if not args.no_negative:
             t = time.time()
@@ -146,6 +153,17 @@ def main():
             path = os.path.join(args.out, P.name + ".json")
             size = write_fixture(fx, path)
             print("  wrote %s (%.0f KB)" % (os.path.relpath(path, os.path.dirname(HERE)), size / 1024))
+        # The other pad: 2k entries of Z_q in row mu.  No fixture; the relations and the verifier must hold.
+        rr = run_instance(toy_preset(n, pad="residues"), seed_for(P, 0))
+        okr = all(rr["relations"].values()) and rr["verifier_accept"]
+        print("  %s  pad of Z_q entries: relations and verifier, accept=%s" % ("PASS" if okr else "FAIL",
+                                                                               rr["verifier_accept"]))
+        if not okr:
+            failures.append("%s residues pad" % P.name)
+        for name, ok in hiding_checks.run(rr).items():
+            if not ok:
+                print("  FAIL  t-hiding formula (Z_q pad)  %s" % name)
+                failures.append("%s t-hiding formula (Z_q pad) %s" % (P.name, name))
         for s in range(1, args.sweep + 1):
             t = time.time()
             rs = run_instance(P, seed_for(P, s))

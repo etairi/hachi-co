@@ -1,4 +1,4 @@
-//! Party $p$'s side of the collaborative sumcheck (`5_Building_Blocks.tex`:209-320; oracle
+//! Party $p$'s side of the collaborative sumcheck (`5_Building_Blocks.tex`:238-352; oracle
 //! `sumcheck.prove`), as a state machine that the driver [`prove`](crate::prove) runs against a
 //! [`Comm`](hachi_co_mpc::Comm) and that tests can run for several emulated parties.
 
@@ -7,7 +7,7 @@ use crate::blinder::{BlinderRounds, evaluate, hypercube_sum};
 use crate::eq::{eq_point, eq_table, msb_bits};
 use crate::error::{Error, Result, check_len};
 use crate::interp::Extrapolation;
-use crate::tables::{RangeProduct, ind_rows, row_indicator, table_size};
+use crate::tables::{RangeProduct, ind_rows, pad_index, row_indicator, table_size};
 use crate::transcript::RoundValues;
 use hachi_co_core::{Blinder, Context, SumcheckCoins};
 use hachi_co_math::{Ext, Fqk};
@@ -77,7 +77,7 @@ impl<const K: usize> Accumulators<K> {
 /// [`PartyProver::bind`] with the coin $a\_r$; finally [`PartyProver::final_values`]. Calls out
 /// of order are [`Error::State`].
 ///
-/// **Round values** (`5_Building_Blocks.tex`:267-275, 283-300; fixture conventions `F0` and
+/// **Round values** (`5_Building_Blocks.tex`:299-307, 315-332; fixture conventions `F0` and
 /// `rounds`). With $\widetilde{eq}\_0 = \widetilde{eq}(\tau\_0, (U, L, \mathsf{bit}(p)))$,
 /// $$F\_{0,p} = \widetilde{eq}\_0 \Bigl(e\_p \prod\_{c=-b+1}^{b-1} (\langle \widetilde w \rangle\_p -
 /// c) + (1 - e\_p - \mathrm{ind}) \langle \widetilde w \rangle\_p\Bigr), \qquad
@@ -121,6 +121,9 @@ pub struct PartyProver<const K: usize> {
     /// field is used; both give the same values).
     mont: Option<Montgomery<K>>,
     w_base: Vec<u64>,
+    /// The table index and the value of a pad in $\mathbb F\_{q^K}$, the one entry of the table
+    /// outside $\mathbb Z\_q$; `w_base` has 0 there.
+    pad: Option<(usize, Ext<K>)>,
     g0: Blinder<K>,
     g1: Blinder<K>,
     sums: (Ext<K>, Ext<K>),
@@ -131,7 +134,8 @@ pub struct PartyProver<const K: usize> {
 
 impl<const K: usize> PartyProver<K> {
     /// The prover of party `party` with the hypercube table `w_table` of
-    /// $\langle \widetilde w \rangle\_p$ ([`w_table`](crate::w_table)) and the blinders `g0`, `g1`
+    /// $\langle \widetilde w \rangle\_p$ ([`w_table`](crate::w_table)), the pad $\rho^w\_p$ if it
+    /// is a field element, and the blinders `g0`, `g1`
     /// (coefficients from [`PartyRandomness::blinder`](hachi_co_core::PartyRandomness::blinder)).
     /// Computes $G\_{0,p}$ and $G\_{1,p}$ ([`hypercube_sum`]).
     ///
@@ -144,6 +148,7 @@ impl<const K: usize> PartyProver<K> {
         ctx: &Context<K>,
         party: PartyId,
         w_table: Vec<u64>,
+        pad: Option<Ext<K>>,
         g0: Blinder<K>,
         g1: Blinder<K>,
     ) -> Result<Self> {
@@ -182,6 +187,7 @@ impl<const K: usize> PartyProver<K> {
             mont: Montgomery::new(zq.modulus()),
             e_rows: row_indicator(l, &l.s_ranges(party))?,
             ind_rows: row_indicator(l, &[ind_rows(l)])?,
+            pad: pad.map(|p| (pad_index(l), field.reduce(&p))),
             field,
             party,
             n: l.n,
@@ -208,14 +214,30 @@ impl<const K: usize> PartyProver<K> {
         self.party
     }
 
-    /// $(G\_{0,p}, G\_{1,p})$, the hypercube sums of the blinders (`5_Building_Blocks.tex`:218-219).
+    /// $(G\_{0,p}, G\_{1,p})$, the hypercube sums of the blinders (`5_Building_Blocks.tex`:247-248).
     pub fn hypercube_sums(&self) -> (Ext<K>, Ext<K>) {
         self.sums
     }
 
-    /// The hypercube table of $\langle \widetilde w \rangle\_p$ (base field).
+    /// The hypercube table of $\langle \widetilde w \rangle\_p$ without a field pad (base field).
     pub fn w_table(&self) -> &[u64] {
         &self.w_base
+    }
+
+    /// The pad $\rho^w\_p \in \mathbb F\_{q^K}$, if the pad is a field element.
+    pub fn pad(&self) -> Option<Ext<K>> {
+        self.pad.map(|(_, value)| value)
+    }
+
+    /// The hypercube table of $\langle \widetilde w \rangle\_p$ over $\mathbb F\_{q^K}$, the pad
+    /// included.
+    pub fn w_field_table(&self) -> Vec<Ext<K>> {
+        let f = &self.field;
+        let mut table: Vec<Ext<K>> = self.w_base.iter().map(|x| f.from_base(*x)).collect();
+        if let Some((at, value)) = self.pad {
+            table[at] = value;
+        }
+        table
     }
 
     /// The blinders $g\_{0,p}$ and $g\_{1,p}$.
@@ -228,10 +250,19 @@ impl<const K: usize> PartyProver<K> {
         self.run.as_ref().map_or(&[], |run| &run.point)
     }
 
-    /// The table, the blinders and the point, consuming the prover.
-    pub fn into_parts(self) -> (Vec<u64>, Blinder<K>, Blinder<K>, Vec<Ext<K>>) {
+    /// The table, the pad, the blinders and the point, consuming the prover.
+    #[allow(clippy::type_complexity)] // the prover's parts, in order
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<u64>,
+        Option<(usize, Ext<K>)>,
+        Blinder<K>,
+        Blinder<K>,
+        Vec<Ext<K>>,
+    ) {
         let point = self.run.map(|run| run.point).unwrap_or_default();
-        (self.w_base, self.g0, self.g1, point)
+        (self.w_base, self.pad, self.g0, self.g1, point)
     }
 
     /// Starts the rounds with the verifier's coins and the table of $M^\ast$
@@ -295,7 +326,7 @@ impl<const K: usize> PartyProver<K> {
 
     /// Party $p$'s values of the current round $r$: its input
     /// $\bigl(H\_{0,p,r}(t)\bigr)\_{t \le d\_0 + 1} \Vert \bigl(H\_{1,p,r}(t)\bigr)\_{t \le d\_1 + 1}$ to
-    /// $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ (`5_Building_Blocks.tex`:294) and the unblinded
+    /// $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ (`5_Building_Blocks.tex`:326) and the unblinded
     /// $F\_{0,p,r}(t)$, $F\_{1,p,r}(t)$.
     ///
     /// # Errors
@@ -330,7 +361,10 @@ impl<const K: usize> PartyProver<K> {
     ) -> (Vec<Ext<K>>, Vec<Ext<K>>) {
         if r == 1 {
             let (f, wb) = (&self.field, &self.w_base);
-            self.kernel(arith, run, r, wb.len(), |x| f.from_base(wb[x]))
+            let (at, value) = self.pad.unwrap_or((usize::MAX, f.zero()));
+            self.kernel(arith, run, r, wb.len(), |x| {
+                if x == at { value } else { f.from_base(wb[x]) }
+            })
         } else {
             let w = &run.w;
             self.kernel(arith, run, r, w.len(), |x| w[x])
@@ -489,11 +523,21 @@ impl<const K: usize> PartyProver<K> {
             return Err(Error::State("bind before start".into()));
         };
         match &self.mont {
-            Some(mont) => fold_tables(mont, &self.field, &self.w_base, run, r, self.ell_u, &a),
+            Some(mont) => fold_tables(
+                mont,
+                &self.field,
+                &self.w_base,
+                self.pad.as_ref(),
+                run,
+                r,
+                self.ell_u,
+                &a,
+            ),
             None => fold_tables(
                 &self.field,
                 &self.field,
                 &self.w_base,
+                self.pad.as_ref(),
                 run,
                 r,
                 self.ell_u,
@@ -507,7 +551,7 @@ impl<const K: usize> PartyProver<K> {
         Ok(())
     }
 
-    /// The openings of `5_Building_Blocks.tex`:316-318 after the last round:
+    /// The openings of `5_Building_Blocks.tex`:348-350 after the last round:
     /// $(\langle \widetilde w \rangle\_p(\mathbf a), g\_{0,p}(\mathbf a), g\_{1,p}(\mathbf a))$. The first
     /// is the fully folded table, the others [`evaluate`].
     ///
@@ -570,14 +614,17 @@ fn fold<const K: usize, A: Arith<K>>(
         *lo = f.add(lo, &arith.mul(coin, &f.sub(hi, lo)));
     }
     table.truncate(h);
+    table.shrink_to_fit();
 }
 
 /// Binds round $r$'s variable to $a$ in every table of `run` (the witness table from the
-/// base-field `w_base` in round 1).
+/// base-field `w_base` and the pad in round 1).
+#[allow(clippy::too_many_arguments)] // the tables and the coin
 fn fold_tables<const K: usize, A: Arith<K>>(
     arith: &A,
     f: &Fqk<K>,
     w_base: &[u64],
+    pad: Option<&(usize, Ext<K>)>,
     run: &mut Running<K>,
     r: usize,
     ell_u: usize,
@@ -592,6 +639,17 @@ fn fold_tables<const K: usize, A: Arith<K>>(
             .zip(high)
             .map(|(lo, hi)| f.add(&f.from_base(*lo), &arith.scale_out(&coin, zq.sub(*hi, *lo))))
             .collect();
+        // The pad's pair has one entry outside the base field.
+        if let Some((at, value)) = pad {
+            let h = w_base.len() / 2;
+            let x = at % h;
+            let (lo, hi) = if *at < h {
+                (*value, f.from_base(w_base[x + h]))
+            } else {
+                (f.from_base(w_base[x]), *value)
+            };
+            run.w[x] = f.add(&lo, &arith.mul(&coin, &f.sub(&hi, &lo)));
+        }
     } else {
         fold(arith, f, &mut run.w, &coin);
     }
@@ -720,7 +778,7 @@ mod tests {
                 let mstar: Vec<Ext<4>> = (0..size).map(|_| rng.ext(q)).collect();
                 let point: Vec<Ext<4>> = (0..l.ell_pp).map(|_| rng.ext(q)).collect();
                 let mut fast =
-                    PartyProver::new(&ctx, p, w.clone(), g0.clone(), g1.clone()).unwrap();
+                    PartyProver::new(&ctx, p, w.clone(), None, g0.clone(), g1.clone()).unwrap();
                 assert!(fast.mont.is_some());
                 let mut slow = fast.clone();
                 slow.mont = None;
@@ -789,7 +847,7 @@ mod tests {
             tau0: vec![f.one(); l.ell_pp + l.log_n],
             tau1: vec![f.one(); l.log_nu],
         };
-        let new = |p, w: Vec<u64>, g0, g1| PartyProver::new(&ctx, p, w, g0, g1);
+        let new = |p, w: Vec<u64>, g0, g1| PartyProver::new(&ctx, p, w, None, g0, g1);
         assert!(matches!(
             new(0, vec![0; size], blinder(l.d0), blinder(l.d1)),
             Err(Error::InvalidParty { .. })
@@ -840,7 +898,7 @@ mod tests {
         small.d0 = 2 * small.choices.b;
         let ctx = Context::<4>::new(small, ctx.pp.clone()).unwrap();
         let l = &ctx.layout;
-        let r = PartyProver::new(&ctx, 1, vec![0; size], blinder(l.d0), blinder(l.d1));
+        let r = PartyProver::new(&ctx, 1, vec![0; size], None, blinder(l.d0), blinder(l.d1));
         assert!(matches!(r, Err(Error::Parameter(_))));
     }
 }

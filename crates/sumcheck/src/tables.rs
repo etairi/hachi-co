@@ -1,4 +1,4 @@
-//! The hypercube tables and public values of the sumcheck (`5_Building_Blocks.tex`:205-275;
+//! The hypercube tables and public values of the sumcheck (`5_Building_Blocks.tex`:234-307;
 //! oracle `ref/hachico_ref/sumcheck.py`): the witness table $\langle \widetilde w \rangle\_p$, the
 //! row indicators $e\_p$ and $\mathrm{ind}$, the range product, the table of
 //! $\widetilde M^\ast$, and the claimed sum $a$.
@@ -24,14 +24,15 @@ pub fn table_size(layout: &Layout) -> Result<usize> {
 }
 
 /// The hypercube values of party $p$'s witness polynomial $\langle \widetilde w \rangle\_p(U, L)$
-/// (`5_Building_Blocks.tex`:225-229; the oracle's `w_table`; fixture convention `hypercube`), over
-/// $\mathbb Z\_q$, $2^{\ell''}$ entries: the entry $(u\_0, l\_0)$ is coefficient $l\_0$ of
-/// $\langle z'\_{u\_0} \rangle\_p$ for $u\_0 \lt \mu$, $l\_0 \lt d$; coefficient $l\_0$ of
-/// $\langle r\_{u\_0 - \mu} \rangle\_p$ for $\mu \le u\_0 \lt \mu + n'$, $l\_0 \lt 2d$; and $0$
-/// otherwise. Residues are reduced modulo $q$.
+/// (`5_Building_Blocks.tex`:254-259; the oracle's `w_table`; fixture convention `hypercube`), over
+/// $\mathbb Z\_q$, $2^{\ell''}$ entries, without the pad: the entry $(u\_0, l\_0)$ is coefficient
+/// $l\_0$ of $\langle z'\_{u\_0} \rangle\_p$ for $u\_0 \lt \mu - 1$, $l\_0 \lt d$; coefficient
+/// $l\_0$ of $\langle r\_{u\_0 - \mu} \rangle\_p$ for $\mu \le u\_0 \lt \mu + n'$,
+/// $l\_0 \lt 2d$; and $0$ otherwise, in particular in the pad's row $\mu - 1$. Residues are
+/// reduced modulo $q$.
 ///
 /// # Errors
-/// [`Error::Shape`] unless `z_share` has $\mu$ polynomials of $d$ coefficients and `r_share` $n'$
+/// [`Error::Shape`] unless `z_share` has $\mu - 1$ polynomials of $d$ coefficients and `r_share` $n'$
 /// polynomials of $2d$ coefficients; [`Error::Parameter`] for a hypercube larger than `usize`.
 pub fn w_table<const K: usize>(
     ctx: &Context<K>,
@@ -41,7 +42,7 @@ pub fn w_table<const K: usize>(
     let l = &ctx.layout;
     let q = ctx.q();
     let two_d = 2 * l.d;
-    check_len("<z'>_p", l.mu, z_share.len())?;
+    check_len("<z'>_p", l.len_z, z_share.len())?;
     check_len("<r>_p", l.n_prime, r_share.len())?;
     let mut table = vec![0u64; table_size(l)?];
     for (u0, p) in z_share.iter().enumerate() {
@@ -60,17 +61,35 @@ pub fn w_table<const K: usize>(
     Ok(table)
 }
 
-/// The rows $u$ of the draft's $\sum\_{u = \mu}^{\mu + n'} \chi\_{\mathsf{bit}(u)}(U)$
-/// (`5_Building_Blocks.tex`:270): the 1-indexed rows $\mu, \dots, \mu + n'$ are the 0-indexed
-/// $\mu - 1, \dots, \mu + n' - 1$, i.e. $\langle u \rangle$ and the $n'$ quotient rows (the
-/// oracle's `ind_rows`; `ref/README.md`, choice 8).
+/// The table index of the pad's entry $(\mu, 1)$ (`5_Building_Blocks.tex`:256): row $\mu - 1$,
+/// coefficient 0.
+pub fn pad_index(layout: &Layout) -> usize {
+    layout.pad * 2 * layout.d
+}
+
+/// Writes the residues of [`PadRule::Residues`](hachi_co_params::PadRule) into the pad's row, from
+/// its first entry.
+///
+/// # Errors
+/// [`Error::Shape`] unless there are $2k$ residues.
+pub fn put_pad_residues(layout: &Layout, table: &mut [u64], residues: &[u64]) -> Result<()> {
+    check_len("pad residues (2k)", 2 * layout.k, residues.len())?;
+    let at = pad_index(layout);
+    table[at..at + residues.len()].copy_from_slice(residues);
+    Ok(())
+}
+
+/// The rows $u$ of the draft's $\sum\_{u = \mu - 1}^{\mu + n'} \chi\_{\mathsf{bit}(u)}(U)$
+/// (`5_Building_Blocks.tex`:302): the 1-indexed rows $\mu - 1, \dots, \mu + n'$ are the 0-indexed
+/// $\mu - 2, \dots, \mu + n' - 1$, i.e. $\langle u \rangle$, the pad's row and the $n'$ quotient
+/// rows (the oracle's `ind_rows`; `ref/README.md`, choice 8).
 pub fn ind_rows(layout: &Layout) -> Range<usize> {
-    layout.mu - 1..layout.mu + layout.n_prime
+    layout.u..layout.mu + layout.n_prime
 }
 
 /// The $0/1$ table over $U$ ($2^{\ell\_U}$ entries) that is 1 on the rows `rows`: $e\_p(U) =
 /// \sum\_{u \in S\_p} \chi\_{\mathsf{bit}(u)}(U)$ for the ranges [`Layout::s_ranges`]`(p)`, or
-/// $\mathrm{ind}(U)$ for [`ind_rows`] (`5_Building_Blocks.tex`:262, 270). The oracle's
+/// $\mathrm{ind}(U)$ for [`ind_rows`] (`5_Building_Blocks.tex`:294, 302). The oracle's
 /// `row_indicator` broadcasts it over $L$; both factors are constant in $L$, so the provers keep
 /// them as tables over $U$.
 ///
@@ -95,7 +114,7 @@ pub fn row_indicator(layout: &Layout, rows: &[Range<usize>]) -> Result<Vec<u64>>
 }
 
 /// The range polynomial $\prod\_{c \in \lbrace -b+1, \dots, b-1 \rbrace} (W - c)$ of
-/// $F\_{0,p}$ (`5_Building_Blocks.tex`:269; the oracle's `range_product`), evaluated as
+/// $F\_{0,p}$ (`5_Building_Blocks.tex`:301; the oracle's `range_product`), evaluated as
 /// $W \prod\_{c=1}^{b-1} (W^2 - c^2)$: $b$ multiplications instead of $2b - 2$ (the empty product
 /// for $b = 0$ is $1$).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,7 +212,7 @@ fn check_e_and_eq1<const K: usize>(
 }
 
 /// The weights $c\_u = \sum\_{i' \lt n'} \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))\, M\_{i',u}(\alpha)$
-/// of the columns $u \lt \mu$ of $\mathbf M$ (fixture convention `M_tilde`), from the powers
+/// of the columns $u \lt \mu - 1$ of $\mathbf M$ (fixture convention `M_tilde`), from the powers
 /// $\alpha^0, \dots, \alpha^{d-1}$. Zero coefficients of $\mathbf M$ are skipped.
 pub(crate) fn column_weights<const K: usize>(
     field: &Fqk<K>,
@@ -222,18 +241,19 @@ pub(crate) fn column_weights<const K: usize>(
 /// The hypercube values of
 /// $$M^\ast(U, L) = \sum\_{i' \in \[\nu\]} \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))\,
 /// \widetilde M\_\alpha(\mathsf{bit}(i'), U, L)$$
-/// (`5_Building_Blocks.tex`:254-260, 271; the oracle's `mstar_table`), $2^{\ell''}$ elements of
+/// (`5_Building_Blocks.tex`:286-292, 303; the oracle's `mstar_table`), $2^{\ell''}$ elements of
 /// $\mathbb F\_{q^k}$, by the fixture convention `M_tilde`: at $(u\_0, l\_0)$,
-/// - $c\_u \alpha^{l\_0}$ for $u\_0 \lt \mu$ and every $l\_0 \lt 2d$, with
-///   $c\_u = \sum\_{i\_0 \lt n'} \mathrm{eq}\_1\[i\_0\] M\_{i\_0, u\_0}(\alpha)$ (first term, $u \le \mu$;
+/// - $c\_u \alpha^{l\_0}$ for $u\_0 \lt \mu - 1$ and every $l\_0 \lt 2d$, with
+///   $c\_u = \sum\_{i\_0 \lt n'} \mathrm{eq}\_1\[i\_0\] M\_{i\_0, u\_0}(\alpha)$ (first term, $u \le \mu - 1$;
 ///   `ref/README.md`, choice 10);
 /// - $-\mathrm{eq}\_1\[u\_0 - \mu\] (\alpha^d + 1) \alpha^{l\_0}$ for $\mu \le u\_0 \lt \mu + n'$ (first
 ///   term, $u = i' + \mu$);
-/// - plus $\sum\_{j\_0 \lt d} \mathrm{eq}\_1\[n' + j\_0\] E\[j\_0\]\[l\_0\]$ at $u\_0 = \mu - 1$,
+/// - plus $\sum\_{j\_0 \lt d} \mathrm{eq}\_1\[n' + j\_0\] E\[j\_0\]\[l\_0\]$ at $u\_0 = \mu - 2$,
 ///   $l\_0 \lt d$ (second term, the $E$ rows; choice 9);
 /// - plus $\mathrm{eq}\_1\[n' + d + u\_0 + (l\_0 - d)(\mu + n')\]$ for $u\_0 \lt \mu + n'$,
 ///   $l\_0 \ge d$ (third term, the high coefficients);
-/// - and $0$ on the padding rows $u\_0 \ge \mu + n'$,
+/// - and $0$ at the pad's entries $(\mu - 1, l\_0)$, $l\_0 \lt d$, and on the padding rows
+///   $u\_0 \ge \mu + n'$,
 ///
 /// where $\mathrm{eq}\_1$ is [`eq_table`](crate::eq_table)$(\tau\_1)$ and $E\[j\]\[l\]$ is
 /// coefficient $j$ of $E(X^l)$ ([`hachi_co_math::Subfield::e_matrix`]). The cost is
@@ -242,7 +262,7 @@ pub(crate) fn column_weights<const K: usize>(
 /// ([`mstar_eval_factorized`](crate::mstar_eval_factorized)).
 ///
 /// # Errors
-/// [`Error::Shape`] unless $\mathbf M$ is $n' \times \mu$ with $d$ coefficients per entry,
+/// [`Error::Shape`] unless $\mathbf M$ is $n' \times (\mu - 1)$ with $d$ coefficients per entry,
 /// $E$ is $d \times d$ and $\mathrm{eq}\_1$ has $2^{\lceil \log \nu \rceil}$ entries.
 pub fn mstar_table<const K: usize>(
     ctx: &Context<K>,
@@ -255,12 +275,12 @@ pub fn mstar_table<const K: usize>(
     let field = ctx.field();
     let (d, mu, np) = (l.d, l.mu, l.n_prime);
     let two_d = 2 * d;
-    check_matrix(m, np, mu, d)?;
+    check_matrix(m, np, l.len_z, d)?;
     check_e_and_eq1(l, e_matrix, eq1)?;
     let apow = powers(field, alpha, two_d);
     let c = column_weights(field, m, eq1, &apow[..d]);
     let mut table = vec![field.zero(); table_size(l)?];
-    // First term, u0 < mu: c_u alpha^{l0} for all l0 < 2d.
+    // First term, u0 < mu - 1: c_u alpha^{l0} for all l0 < 2d.
     for (u0, cu) in c.iter().enumerate() {
         for (l0, p) in apow.iter().enumerate() {
             table[u0 * two_d + l0] = field.mul(cu, p);
@@ -274,7 +294,7 @@ pub fn mstar_table<const K: usize>(
             table[(mu + i0) * two_d + l0] = field.mul(&coef, p);
         }
     }
-    // Second term: rows n' + 1 .. n' + d (1-indexed) at u0 = mu - 1, l0 < d.
+    // Second term: rows n' + 1 .. n' + d (1-indexed) at u0 = mu - 2, l0 < d.
     let zq = field.zq();
     for l0 in 0..d {
         let mut acc = field.zero();
@@ -284,7 +304,7 @@ pub fn mstar_table<const K: usize>(
                 acc = field.add(&acc, &field.scale(&eq1[np + j0], coef));
             }
         }
-        let x = (mu - 1) * two_d + l0;
+        let x = l.u * two_d + l0;
         table[x] = field.add(&table[x], &acc);
     }
     // Third term: u0 < mu + n', l0 >= d, i' - 1 = n' + d + u0 + (l0 - d)(mu + n').
@@ -301,7 +321,7 @@ pub fn mstar_table<const K: usize>(
 /// The claimed sum
 /// $$a = \sum\_{i' \in \[n'\]} \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))\, y\_{i'}(\alpha) +
 /// \sum\_{i' = n'+1}^{n'+d} \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))\, y\_{i' - n' - 1}$$
-/// (`5_Building_Blocks.tex`:263-264; the oracle's `claimed_sum`), where $\mathbf y \in
+/// (`5_Building_Blocks.tex`:295-296; the oracle's `claimed_sum`), where $\mathbf y \in
 /// \mathcal R\_q^{n'}$ is the right-hand side of $\mathbf M \mathbf z' = \mathbf y$ and
 /// $y = \sum\_{j \lt d} y\_j X^j$ is the claimed evaluation embedded in $\mathcal R\_q^H$
 /// (`y_ring`; `ref/README.md`, choice 12).

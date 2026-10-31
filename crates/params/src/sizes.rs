@@ -2,16 +2,16 @@
 //! in the parameters and in the sizes of the base PCS's items.
 //!
 //! The proof (`hachi_co::EvalProof` in `crates/hachico`) consists of what the provers send to
-//! the verifier in $\mathsf{Eval}$ (6_Collaborative_Hachi.tex:408-419): $E(u) \in \mathcal R\_q$
-//! of $\Pi\_{\mathsf{conv}}$ (field-to-ring-rok.tex:160-164), the index $a^\ast$ of the accepted
+//! the verifier in $\mathsf{Eval}$ (6_Collaborative_Hachi.tex:426-437): $E(u) \in \mathcal R\_q$
+//! of $\Pi\_{\mathsf{conv}}$ (field-to-ring-rok.tex:189-193), the index $a^\ast$ of the accepted
 //! attempt and its first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the ring-to-linear step
-//! (5_Building_Blocks.tex:115-121, 129), and the sumcheck transcript: $G\_{0,p}, G\_{1,p}$ for
-//! every prover (5_Building_Blocks.tex:241), the $\ell''$ round messages $H\_{0,r}(1..d\_0+1)$,
-//! $H\_{1,r}(1..d\_1+1)$ (lines 293-300) and the final values
+//! (5_Building_Blocks.tex:127-133, 141), and the sumcheck transcript: $G\_{0,p}, G\_{1,p}$ for
+//! every prover (5_Building_Blocks.tex:273), the $\ell''$ round messages $H\_{0,r}(1..d\_0+1)$,
+//! $H\_{1,r}(1..d\_1+1)$ (lines 298-305) and the final values
 //! $\langle \widetilde w \rangle\_p(\mathbf a), g\_{0,p}(\mathbf a), g\_{1,p}(\mathbf a)$
-//! (lines 314-320); and the base PCS's parts: the $3n$ commitments to
-//! $\langle \widetilde w \rangle\_p, g\_{0,p}, g\_{1,p}$ (lines 220-221, 230, 241) and the $3n$
-//! opening proofs (lines 316-320). The challenges are not part of it: the verifier re-derives
+//! (lines 319-325); and the base PCS's parts: the $3n$ commitments to
+//! $\langle \widetilde w \rangle\_p, g\_{0,p}, g\_{1,p}$ (lines 222-223, 232, 243) and the $3n$
+//! opening proofs (lines 321-325). The challenges are not part of it: the verifier re-derives
 //! them.
 //!
 //! **The encoding** (format version 2) is a 16-byte header ([`HEADER_BYTES`]) followed by

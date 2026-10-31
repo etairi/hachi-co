@@ -1,11 +1,11 @@
 //! Hachi as the base PCS of Hachi-Co: [`HachiBase`], the adapter between [`hachi::HachiPcs`] and
 //! the [`BasePcs`] trait through which each prover commits to its share polynomial
 //! $\langle \widetilde w \rangle\_p$ and its blinders $g\_{0,p}, g\_{1,p}$ and opens them at the
-//! sumcheck's point (`5_Building_Blocks.tex`:209-241, 314-333).
+//! sumcheck's point (`5_Building_Blocks.tex`:238-273, 346-365).
 //!
 //! **Setup.** The draft samples $\mathsf{pp}\_{\mathsf{PCS}} \gets \mathsf{PCS}.\mathsf{Setup}
 //! (1^\lambda, 1^{\ell''}, 1^{d\_0})$ as part of $\mathsf{Setup}$
-//! (`6_Collaborative_Hachi.tex`:289-292). [`HachiBase::setup`] derives the seed of Hachi's public
+//! (`6_Collaborative_Hachi.tex`:294-297). [`HachiBase::setup`] derives the seed of Hachi's public
 //! matrices from Hachi-Co's setup seed ([`base_pcs_seed`]), so that one seed fixes the whole of
 //! $\mathsf{pp}$. Hachi expands its matrices from that seed, per iteration, to the widths an
 //! opening needs, so it needs neither $\ell''$ nor $d\_0$ in advance. Its other parameters are
@@ -44,7 +44,7 @@ use crate::error::Error;
 use hachi::{Commitment, HachiChoices, HachiPcs, Proof, State};
 use hachi_co_core::{BasePcs, Context, Layout};
 use hachi_co_math::Ext;
-use hachi_co_params::BasePcsWords;
+use hachi_co_params::{BasePcsWords, PadRule};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_transcript::Transcript;
 use rand::Rng;
@@ -86,7 +86,7 @@ impl<const K: usize> HachiBase<K> {
         Ok(Self { pcs, digest })
     }
 
-    /// The base PCS of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:289-292) for the context
+    /// The base PCS of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:294-297) for the context
     /// `ctx` made from the setup seed `seed`: [`HachiBase::new`] at Hachi-Co's $q$ with
     /// [`HachiBase::default_choices`].
     ///
@@ -120,7 +120,7 @@ impl<const K: usize> HachiBase<K> {
     /// [`hachi_co_params::sizes_with_base`] and [`encoded_len`](crate::encoded_len): three
     /// commitments of [`HachiPcs::commitment_words`], the multilinear opening of
     /// $\langle \widetilde w \rangle\_p$ in $\ell''$ variables and the inner-product openings of
-    /// the blinders' $1 + \ell'' d\_b$ coefficients ([`HachiPcs::multilinear_proof_words`],
+    /// the blinders' $1 + \ell'' d\_b$ coefficients ([`HachiPcs::multilinear_ext_proof_words`],
     /// [`HachiPcs::vector_proof_words`]).
     ///
     /// # Errors
@@ -143,7 +143,10 @@ impl<const K: usize> HachiBase<K> {
             commitment_w: commitment,
             commitment_g0: commitment,
             commitment_g1: commitment,
-            proof_w: pcs.multilinear_proof_words(layout.ell_pp)? as u128,
+            proof_w: match layout.pad_rule {
+                PadRule::Field => pcs.multilinear_ext_proof_words(layout.ell_pp)?,
+                PadRule::Residues => pcs.multilinear_proof_words(layout.ell_pp)?,
+            } as u128,
             proof_g0: vector(layout.d0)?,
             proof_g1: vector(layout.d1)?,
         })
@@ -227,6 +230,45 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
         self.pcs
             .prove_multilinear(st, point, context, seed)
             .map_err(base_error)
+    }
+
+    /// [`HachiPcs::commit_multilinear_ext`]: $2^\ell$ coefficients with $2^\ell \ge d/K$.
+    fn commit_multilinear_ext(
+        &self,
+        coeffs: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        self.pcs
+            .commit_multilinear_ext(coeffs, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext`].
+    fn prove_multilinear_ext(
+        &self,
+        st: &State<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
+        self.pcs
+            .prove_multilinear_ext(st, point, context, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::verify_multilinear_ext`]; the reason is Hachi's [`hachi::VerifyError`].
+    fn verify_multilinear_ext(
+        &self,
+        com: &Commitment,
+        num_vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), String> {
+        self.pcs
+            .verify_multilinear_ext(com, num_vars, point, value, proof, context)
+            .map_err(|e| e.to_string())
     }
 
     /// [`HachiPcs::prove_inner_product`].

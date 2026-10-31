@@ -1,5 +1,5 @@
 //! $\mathcal R_q^H$, $\mathrm{Tr}_H$, $\psi$, $\psi^{-1}$ and $E$ against their definitions
-//! (draft `4_preliminaries.tex`:69-84, `field-to-ring-rok.tex`:132-164, Hachi Lemma 5 and
+//! (draft `4_preliminaries.tex`:69-84, `field-to-ring-rok.tex`:161-193, Hachi Lemma 5 and
 //! Theorem 2): the trace as a sum of automorphisms over $H$, membership as invariance under $H$,
 //! $\psi$ as a sum of products with monomials, $\psi^{-1}$ by the trace formula, $E$ by the
 //! schoolbook product and the summed trace; Theorem 2; $\psi^{-1} \circ \psi = \mathrm{id}$ and

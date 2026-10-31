@@ -1,17 +1,21 @@
-"""The collaborative sumcheck (5_BB:195-335): quotient shares, share polynomials, blinders, F_0 / F_1,
+"""The collaborative sumcheck (5_BB:209-367): quotient shares, share polynomials, blinders, F_0 / F_1,
 rounds through F_AH(I), and the verifier.
 
 Conventions (see ref/README.md for the discussion):
   * Hypercube {0,1}^{l''} with V = (U, L) = (V_1, ..., V_{l''}), U the first ceil(log(mu+n')) variables and
-    L the last log(2d) (5_BB:207).  A point x has index nat(x) = sum_j x_j 2^{l''-j} (V_1 most significant,
+    L the last log(2d) (5_BB:236).  A point x has index nat(x) = sum_j x_j 2^{l''-j} (V_1 most significant,
     m0-spec), so the draft's chi_{bit(u)||bit(l)} (1-indexed u, l) is the table entry (u-1)*2d + (l-1).
   * Round r binds V_r, i.e. the most significant remaining index bit (T'[x] = T[x] + a_r (T[x+h] - T[x])).
   * eq(tau_0, (U, L, bit(i))): tau_0[0:l''] pairs with (U, L), tau_0[l'':] with the ceil(log n) bits of
     prover i - 1 (MSB first).  eq(tau_1, bit(i')): i' in [nu] is the table entry i' - 1 of eq_table(tau_1).
-  * Round messages are the values at the nodes 1..D+1 (D = d_0 resp. d_1), as in 5_BB:290-294; the verifier
+  * Round messages are the values at the nodes 1..D+1 (D = d_0 resp. d_1), as in 5_BB:322-326; the verifier
     gets H(0) by Lagrange interpolation.
   * S_i are the 0-indexed positions held by prover i (r2l.Layout.partition); positions of all-zero blocks
     owned by nobody (n = 3) are in no S_i, so F_{0,i} forces every share there to be zero.
+  * The pad's row is 0-indexed row mu - 1 (the draft's row mu, 5_BB:256).  With pad "field" entry (mu - 1, 0)
+    holds rho^w_p in F_{q^k} and <w~>_p no longer has Z_q coefficients; `w_table` returns the rest of the table
+    (W^0 of the proof, tH:56) and `pad_of` the pad.  With pad "residues" entries (mu - 1, 0..2k-1) hold uniform
+    residues, which `w_table` adds, and <w~>_p stays over Z_q.
 """
 from collections import OrderedDict
 
@@ -22,7 +26,7 @@ from .prg import Prg
 
 # --------------------------------------------------------------- quotient ----
 def quotient_shares(ctx, M, z_shares, y_shares):
-    """<r>_p = 1/2 (1 - X^d) (M <z'>_p - {y}_p) mod X^{2d} + 1 (5_BB:198-200), shape (n, n', 2d).
+    """<r>_p = 1/2 (1 - X^d) (M <z'>_p - {y}_p) mod X^{2d} + 1 (5_BB:227-229), shape (n, n', 2d).
 
     With P = M<z'>_p - {y}_p of degree < 2d split as P_lo + X^d P_hi:
     1/2 (1 - X^d) P = 1/2 (P_lo + P_hi) + X^d 1/2 (P_hi - P_lo)  (mod X^{2d} + 1)."""
@@ -47,7 +51,7 @@ def check_quotient(ctx, M, z_prime, y_vec, r_sum):
     ok_rel = True
     for i in range(P.n_prime):
         acc = SR.PR(0)
-        for j in range(P.mu):
+        for j in range(P.len_z):
             if z_prime[j].any() and M[i, j].any():
                 acc += SR.poly(M[i, j]) * SR.poly(z_prime[j])
         acc -= SR.poly(y_vec[i])
@@ -63,7 +67,7 @@ def check_quotient_formula(ctx, M, z_share, y_share, r_share):
     ok = True
     for i in range(P.n_prime):
         acc = SR.PR(0)
-        for j in range(P.mu):
+        for j in range(P.len_z):
             if z_share[j].any() and M[i, j].any():
                 acc += SR.poly(M[i, j]) * SR.poly(z_share[j])
         acc -= SR.poly(y_share[i])
@@ -73,15 +77,39 @@ def check_quotient_formula(ctx, M, z_share, y_share, r_share):
 
 
 # ----------------------------------------------------------------- tables ----
-def w_table(ctx, z_share, r_share):
-    """Hypercube values of <w~>_p (5_BB:225-229), shape (2^{l''},) over Z_q:
-    entry (u0, l0) = z'_share[u0] coefficient l0 for u0 < mu, l0 < d; <r>_p[u0 - mu] coefficient l0 for
-    mu <= u0 < mu + n', l0 < 2d; 0 otherwise."""
+def w_table(ctx, z_share, r_share, pad_residues=None):
+    """Hypercube values of <w~>_p (5_BB:254-259) over Z_q without a field pad, shape (2^{l''},):
+    entry (u0, l0) = z'_share[u0] coefficient l0 for u0 < len(z'), l0 < d; <r>_p[u0 - mu] coefficient l0 for
+    mu <= u0 < mu + n', l0 < 2d; pad_residues[l0] at (mu - 1, l0 < 2k) if given; 0 otherwise."""
     P = ctx.P
     T = np.zeros((2 ** P.ell_U, 2 * P.d), dtype=np.int64)
-    T[:P.mu, :P.d] = z_share
+    T[:P.len_z, :P.d] = z_share
+    if pad_residues is not None:
+        T[P.mu - 1, :2 * P.k] = pad_residues
     T[P.mu:P.mu + P.n_prime, :] = r_share
     return T.reshape(-1)
+
+
+def pad_index(ctx):
+    """The table index of the pad's first entry (the draft's (u, l) = (mu, 1), 5_BB:256)."""
+    return (ctx.P.mu - 1) * 2 * ctx.P.d
+
+
+def pad_of(ctx, p):
+    """Prover p's (0-indexed) pad: rho^w_p in F_{q^k} for pad "field", 2k residues for pad "residues"."""
+    P, F = ctx.P, ctx.F
+    prg = Prg(ctx.seed, "sc/rho_w/p%d" % (p + 1))
+    count = F.k if P.pad == "field" else 2 * P.k
+    return np.array(prg.mod_q(P.q, count), dtype=np.int64)
+
+
+def w_lifted(ctx, W_base, pad):
+    """The table of <w~>_p over F_{q^k}, the pad included (shape (2^{l''}, k))."""
+    F = ctx.F
+    W = F.lift(W_base)
+    if ctx.P.pad == "field":
+        W[pad_index(ctx)] = pad
+    return W
 
 
 def row_indicator(ctx, rows):
@@ -93,9 +121,10 @@ def row_indicator(ctx, rows):
 
 
 def ind_rows(ctx):
-    """The draft's sum_{u=mu}^{mu+n'} chi_bit(u)(U): 1-indexed mu..mu+n' = 0-indexed mu-1..mu+n'-1."""
+    """The draft's sum_{u=mu-1}^{mu+n'} chi_bit(u)(U) (5_BB:302): 1-indexed mu-1..mu+n' = 0-indexed
+    mu-2..mu+n'-1, that is <u>, the pad's row and the quotient rows."""
     P = ctx.P
-    return range(P.mu - 1, P.mu + P.n_prime)
+    return range(P.mu - 2, P.mu + P.n_prime)
 
 
 def bits_of(x, s):
@@ -104,26 +133,26 @@ def bits_of(x, s):
 
 def mstar_table(ctx, M, E_mat, eq1, alpha):
     """Hypercube values of M*(U, L) = sum_{i' in [nu]} eq(tau_1, bit(i')) M~_alpha(bit(i'), U, L)
-    (5_BB:254-260), shape (2^{l''}, k).  This is the provers' construction; the verifier uses
+    (5_BB:286-292), shape (2^{l''}, k).  This is the provers' construction; the verifier uses
     `mstar_eval_factorized` instead."""
     P, F = ctx.P, ctx.F
     d, mu, npr = P.d, P.mu, P.n_prime
     q = P.q
     apow = F.powers(alpha, 2 * d)                                     # alpha^0 .. alpha^{2d-1}
-    M_alpha = np.einsum('iuj,jc->iuc', M, apow[:d]) % q               # M_{i',u}(alpha), (n', mu, k)
-    c_u = F.sum(F.mul(eq1[:npr][:, None, :], M_alpha), axis=0)        # (mu, k)
+    M_alpha = np.einsum('iuj,jc->iuc', M, apow[:d]) % q               # M_{i',u}(alpha), (n', len(z'), k)
+    c_u = F.sum(F.mul(eq1[:npr][:, None, :], M_alpha), axis=0)        # (len(z'), k)
     T = F.zeros(2 ** P.ell_U, 2 * d)
-    # first term, u <= mu (all l in [2d])
-    T[:mu] = F.mul(c_u[:, None, :], apow[None, :, :])
+    # first term, u <= mu - 1 (all l in [2d]); column mu, the pad's, is zero
+    T[:P.len_z] = F.mul(c_u[:, None, :], apow[None, :, :])
     # first term, u = i' + mu: -(alpha^d + 1) alpha^{l-1}
     ad1 = F.add(F.pow(alpha, d), F.one())
     for i0 in range(npr):
         T[mu + i0] = F.neg(F.mul(F.mul(eq1[i0], ad1)[None, :], apow))
-    # second term: rows n'+1..n'+d, u = mu, l in [d]: E_{i'-n', l}
+    # second term: rows n'+1..n'+d, u = mu - 1 (1-indexed), l in [d]: E_{i'-n', l}
     acc = F.zeros(d)
     for j0 in range(d):
         acc = F.add(acc, F.smul(E_mat[j0], np.broadcast_to(eq1[npr + j0], (d, F.k))))
-    T[mu - 1, :d] = F.add(T[mu - 1, :d], acc)
+    T[mu - 2, :d] = F.add(T[mu - 2, :d], acc)
     # third term: u in [mu+n'], l in d+1..2d, i' = n' + d + u + (l - d - 1)(mu + n')
     u0 = np.arange(mu + npr)[:, None]
     l0 = np.arange(d, 2 * d)[None, :]
@@ -135,7 +164,7 @@ def mstar_table(ctx, M, E_mat, eq1, alpha):
 
 def claimed_sum(ctx, eq1, y_vec, y_eval_ring, alpha):
     """a = sum_{i' in [n']} eq(tau_1, bit(i')) y_{i'}(alpha) + sum_{i'=n'+1}^{n'+d} eq(tau_1, bit(i')) y_{i'-n'-1}
-    (5_BB:263-264)."""
+    (5_BB:295-296)."""
     P, F = ctx.P, ctx.F
     apow = F.powers(alpha, P.d)
     y_alpha = np.einsum('ij,jc->ic', y_vec, apow) % P.q
@@ -146,7 +175,7 @@ def claimed_sum(ctx, eq1, y_vec, y_eval_ring, alpha):
 
 # --------------------------------------------------------------- blinders ----
 class Blinder:
-    """g(V) = s_0 + sum_{j in [l'']} sum_{k in [D]} s_{j,k} V_j^k with uniform coefficients (5_BB:209-214)."""
+    """g(V) = s_0 + sum_{j in [l'']} sum_{k in [D]} s_{j,k} V_j^k with uniform coefficients (5_BB:238-243)."""
 
     def __init__(self, ctx, domain, D):
         P, F = ctx.P, ctx.F
@@ -203,11 +232,11 @@ def range_product(F, W, b):
     return acc
 
 
-def prove(ctx, r2l_data, conv, E_mat, coins, z_shares=None, r_shares=None):
+def prove(ctx, r2l_data, conv, E_mat, coins, z_shares=None, r_shares=None, pads=None):
     """All provers' side of the sumcheck.  Returns (transcript, private) where transcript holds only what V
     sees and private holds the F_AH inputs, the polynomials (for the ideal-PCS check) and the tables.
 
-    z_shares / r_shares may be overridden (malicious-witness tests in negative.py)."""
+    z_shares / r_shares may be overridden (malicious-witness tests in negative.py); pads likewise."""
     P, F = ctx.P, ctx.F
     n, Lpp, q, b = P.n, P.ell_pp, P.q, P.b
     M = r2l_data["M"]
@@ -215,9 +244,10 @@ def prove(ctx, r2l_data, conv, E_mat, coins, z_shares=None, r_shares=None):
         z_shares = r2l_data["z_shares"]
     if r_shares is None:
         r_shares = quotient_shares(ctx, M, z_shares, r2l_data["y_shares"])
-    W_base = [w_table(ctx, z_shares[p], r_shares[p]) for p in range(n)]
     g0 = [Blinder(ctx, "sc/g0/p%d" % (p + 1), P.d0) for p in range(n)]
     g1 = [Blinder(ctx, "sc/g1/p%d" % (p + 1), P.d1) for p in range(n)]
+    pads = [pad_of(ctx, p) for p in range(n)] if pads is None else pads
+    W_base = [w_table(ctx, z_shares[p], r_shares[p], None if P.pad == "field" else pads[p]) for p in range(n)]
     G0 = np.array([g.hypercube_sum() for g in g0])
     G1 = np.array([g.hypercube_sum() for g in g1])
     # V's coins after the first messages (G, commitments)
@@ -231,7 +261,7 @@ def prove(ctx, r2l_data, conv, E_mat, coins, z_shares=None, r_shares=None):
     part = r2l_data["partition"]
     E_tab = [F.lift(row_indicator(ctx, part[p + 1])) for p in range(n)]
     IND = F.lift(row_indicator(ctx, ind_rows(ctx)))
-    W = [F.lift(t) for t in W_base]
+    W = [w_lifted(ctx, W_base[p], pads[p]) for p in range(n)]
     nodes0 = list(range(1, P.d0 + 2))
     nodes1 = list(range(1, P.d1 + 2))
     one = F.one()
@@ -277,7 +307,7 @@ def prove(ctx, r2l_data, conv, E_mat, coins, z_shares=None, r_shares=None):
     final = dict(w=np.array([T[0] for T in W]), g0=np.array([g.evaluate(a_vec) for g in g0]),
                  g1=np.array([g.evaluate(a_vec) for g in g1]))
     transcript = dict(G0=G0, G1=G1, rounds=rounds, final=final)
-    private = dict(r_shares=r_shares, W_base=W_base, g0=g0, g1=g1, fah_inputs=fah_inputs, eq1=eq1,
+    private = dict(r_shares=r_shares, W_base=W_base, pads=pads, g0=g0, g1=g1, fah_inputs=fah_inputs, eq1=eq1,
                    MST_table=MST_table, coins=ch, a=a_vec)
     return transcript, private
 
@@ -295,7 +325,7 @@ def degree_at_nodes(F, vals):
 
 
 # ---------------------------------------------------------- hypercube checks ----
-def hypercube_checks(ctx, r2l_data, r_shares, E_mat, y_eval_ring, coins, z_shares=None):
+def hypercube_checks(ctx, r2l_data, r_shares, E_mat, y_eval_ring, coins, pads, z_shares=None):
     """Oracle-level checks of the two claims before any sumcheck round: P_p(x) = 0 at every hypercube point
     for every prover (so sum F_0 = 0 for any tau_0), and sum_x sum_p <w~>_p(x) M*(x) = a."""
     P, F = ctx.P, ctx.F
@@ -307,7 +337,7 @@ def hypercube_checks(ctx, r2l_data, r_shares, E_mat, y_eval_ring, coins, z_share
     zero_ok = True
     bad_points = 0
     for p in range(P.n):
-        W = w_table(ctx, z_shares[p], r_shares[p])
+        W = w_table(ctx, z_shares[p], r_shares[p], None if P.pad == "field" else pads[p])
         E = row_indicator(ctx, part[p + 1])
         prod = np.ones_like(W)
         for c in range(-b + 1, b):
@@ -320,8 +350,8 @@ def hypercube_checks(ctx, r2l_data, r_shares, E_mat, y_eval_ring, coins, z_share
     MST = mstar_table(ctx, r2l_data["M"], E_mat, eq1, ch["alpha"])
     tot = F.zeros()
     for p in range(P.n):
-        W = F.lift(w_table(ctx, z_shares[p], r_shares[p]))
-        tot = F.add(tot, F.sum(F.mul(W, MST), axis=0))
+        base = w_table(ctx, z_shares[p], r_shares[p], None if P.pad == "field" else pads[p])
+        tot = F.add(tot, F.sum(F.mul(w_lifted(ctx, base, pads[p]), MST), axis=0))
     a = claimed_sum(ctx, eq1, r2l_data["y_vec"], y_eval_ring, ch["alpha"])
     return dict(zero_check_all_points=bool(zero_ok), nonzero_points=bad_points,
                 linear_sum_equals_a=F.eq(tot, a), a=a, linear_sum=tot)
@@ -329,7 +359,7 @@ def hypercube_checks(ctx, r2l_data, r_shares, E_mat, y_eval_ring, coins, z_share
 
 # ---------------------------------------------------------------- verifier ----
 def mstar_eval_factorized(ctx, M, E_mat, eq1, alpha, a_pt):
-    """M~*(a) evaluated from the definition (5_BB:254-260) term by term with eq(a_U, .) and eq(a_L, .)
+    """M~*(a) evaluated from the definition (5_BB:286-292) term by term with eq(a_U, .) and eq(a_L, .)
     factored, without building the 2^{l''} table (independent of `mstar_table`)."""
     P, F = ctx.P, ctx.F
     d, mu, npr, q = P.d, P.mu, P.n_prime, P.q
@@ -344,7 +374,7 @@ def mstar_eval_factorized(ctx, M, E_mat, eq1, alpha, a_pt):
     apow = F.powers(alpha, d)
     M_alpha = np.einsum('iuj,jc->iuc', M, apow) % q
     c_u = F.sum(F.mul(eq1[:npr][:, None, :], M_alpha), axis=0)
-    t1a = F.mul(F.sum(F.mul(eqU[:mu], c_u), axis=0), A_L)
+    t1a = F.mul(F.sum(F.mul(eqU[:P.len_z], c_u), axis=0), A_L)
     ad1 = F.add(F.pow(alpha, d), F.one())
     t1b = F.neg(F.mul(F.mul(ad1, A_L), F.sum(F.mul(eq1[:npr], eqU[mu:mu + npr]), axis=0)))
     # second term
@@ -352,7 +382,7 @@ def mstar_eval_factorized(ctx, M, E_mat, eq1, alpha, a_pt):
     for j0 in range(d):
         rowsum = F.sum(F.smul(E_mat[j0], eqL[:d]), axis=0)          # sum_l0 E[j0][l0] eq(a_L, bit(l0))
         inner = F.add(inner, F.mul(eq1[npr + j0], rowsum))
-    t2 = F.mul(eqU[mu - 1], inner)
+    t2 = F.mul(eqU[mu - 2], inner)
     # third term
     t3 = F.zeros()
     for l0 in range(d, 2 * d):
@@ -420,7 +450,7 @@ class IdealPCS:
     def __init__(self, ctx, private):
         self.ctx = ctx
         self.g0_polys, self.g1_polys = private["g0"], private["g1"]
-        self.W = [ctx.F.lift(t) for t in private["W_base"]]
+        self.W = [w_lifted(ctx, t, pad) for t, pad in zip(private["W_base"], private["pads"])]
 
     def g0(self, p, a):
         return self.g0_polys[p].evaluate(a)

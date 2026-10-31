@@ -1,4 +1,4 @@
-//! Steps 1-2 of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:105-123): the public vectors
+//! Steps 1-2 of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:134-152): the public vectors
 //! $\mathbf x', \mathbf b, \mathbf a, v, \mathbf d$, computed by every prover and (for $v$, and
 //! $\mathbf b, \mathbf a$ in the matrix $\mathbf M$ of the ring-to-linear step) by the verifier.
 
@@ -7,21 +7,21 @@ use hachi_co_core::{Context, PublicVectors};
 use hachi_co_math::Ext;
 
 /// The public vectors of $\Pi\_{\mathsf{conv}}$ for the evaluation point $\mathbf x \in
-/// \mathbb F\_{q^k}^\ell$ (`field-to-ring-rok.tex`:105-123; the oracle's `conv.public_vectors`,
+/// \mathbb F\_{q^k}^\ell$ (`field-to-ring-rok.tex`:134-152; the oracle's `conv.public_vectors`,
 /// `ref/README.md`, "Πconv"), with $\ell\_t = \ell - \alpha + \kappa$:
 ///
 /// - $\mathbf x' = \mathbf 1^{\lceil \log n \rceil} \Vert (x\_1, \dots, x\_{\ell\_t}) \in
-///   \mathbb F\_{q^k}^{\ell'}$ (line 113);
+///   \mathbb F\_{q^k}^{\ell'}$ (line 142);
 /// - $\mathbf b = \mathrm{monomials}(x'\_1, \dots, x'\_r) \in \mathbb F\_{q^k}^{2^r}$ and
 ///   $\mathbf a = \mathrm{monomials}(x'\_{r+1}, \dots, x'\_{\ell'}) \in \mathbb F\_{q^k}^{2^m}$
-///   (lines 114-115), ordered by the MSB-first $\mathrm{nat}$
+///   (lines 143-144), ordered by the MSB-first $\mathrm{nat}$
 ///   ([`hachi_co_math::Subfield::monomials`]);
-/// - $v = \psi(\mathrm{monomials}(x\_{\ell\_t + 1}, \dots, x\_\ell)) \in \mathcal R\_q$ (line 116);
+/// - $v = \psi(\mathrm{monomials}(x\_{\ell\_t + 1}, \dots, x\_\ell)) \in \mathcal R\_q$ (line 145);
 /// - $d\[\mathrm{nat}(\mathbf i) 2^m + \mathrm{nat}(\mathbf j)\] = b\_{\mathbf i} a\_{\mathbf j}$,
-///   i.e. $\mathbf d^T = \mathbf b^T (\mathbf I\_{2^r} \otimes \mathbf a^T)$ (lines 117-121);
+///   i.e. $\mathbf d^T = \mathbf b^T (\mathbf I\_{2^r} \otimes \mathbf a^T)$ (lines 146-150);
 /// - $\mathbf b$ and $\mathbf a$ embedded in $\mathcal R\_q$ (Hachi Eq. (7);
 ///   [`hachi_co_math::Subfield::embed`]), as they enter $\mathbf M$
-///   (`5_Building_Blocks.tex`:160-161).
+///   (`5_Building_Blocks.tex`:173-174).
 ///
 /// The coordinates of $\mathbf x$ are read modulo $q$; every output is reduced. This is
 /// verifier-side code: malformed input gives an error, never a panic.
@@ -36,7 +36,7 @@ pub fn public_vectors<const K: usize>(ctx: &Context<K>, x: &[Ext<K>]) -> Result<
     // alpha - kappa = log2(d/k): the trailing coordinates packed by psi (Context: k | d/2).
     let packed = (l.d / l.k.max(1)).trailing_zeros() as usize;
     let lt = l.ell.checked_sub(packed).ok_or(Error::Shape {
-        what: "l (must be at least alpha - kappa, 6_Collaborative_Hachi.tex:273)",
+        what: "l (must be at least alpha - kappa, 6_Collaborative_Hachi.tex:275)",
         expected: packed,
         actual: l.ell,
     })?;

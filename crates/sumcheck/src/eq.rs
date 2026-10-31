@@ -1,5 +1,5 @@
 //! Equality polynomials and multilinear extensions over $\mathbb F\_{q^k}$
-//! (`4_preliminaries.tex`:53-56; `5_Building_Blocks.tex`:261; oracle `ref/hachico_ref/fqk.py`).
+//! (`4_preliminaries.tex`:53-56; `5_Building_Blocks.tex`:293; oracle `ref/hachico_ref/fqk.py`).
 //!
 //! **Bit order** (`ref/README.md`, "Bit strings" and "Hypercube"): a point
 //! $\mathbf x \in \lbrace 0, 1 \rbrace^s$ has index $\mathrm{nat}(\mathbf x) = \sum\_j x\_j 2^{s-j}$,
@@ -12,7 +12,7 @@ use hachi_co_math::{Ext, Fqk};
 
 /// $\widetilde{eq}(\boldsymbol\tau, \mathbf x) = \prod\_j \bigl(\tau\_j x\_j + (1 - \tau\_j)(1 - x\_j)\bigr)$
 /// for every $\mathbf x \in \lbrace 0, 1 \rbrace^s$, at index $\mathrm{nat}(\mathbf x)$ with
-/// $\tau\_1$ paired with the most significant bit (`5_Building_Blocks.tex`:261; the oracle's
+/// $\tau\_1$ paired with the most significant bit (`5_Building_Blocks.tex`:293; the oracle's
 /// `Fqk.eq_table`). $2^s$ multiplications, in place.
 ///
 /// # Errors
@@ -35,7 +35,7 @@ pub fn eq_table<const K: usize>(field: &Fqk<K>, tau: &[Ext<K>]) -> Result<Vec<Ex
 }
 
 /// $\widetilde{eq}(\mathbf x, \mathbf y) = \prod\_j \bigl(x\_j y\_j + (1 - x\_j)(1 - y\_j)\bigr)$ for two
-/// points of $\mathbb F\_{q^k}^s$ (`5_Building_Blocks.tex`:261).
+/// points of $\mathbb F\_{q^k}^s$ (`5_Building_Blocks.tex`:293).
 ///
 /// # Errors
 /// [`Error::Shape`] unless the points have the same length.

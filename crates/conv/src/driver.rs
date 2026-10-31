@@ -1,4 +1,4 @@
-//! The $\Pi\_{\mathsf{conv}}$ driver of one party (`field-to-ring-rok.tex`:105-169), run against a
+//! The $\Pi\_{\mathsf{conv}}$ driver of one party (`field-to-ring-rok.tex`:134-198), run against a
 //! [`Comm`].
 
 use crate::error::{Error, Result};
@@ -8,7 +8,7 @@ use hachi_co_core::{Context, PartyState, PublicVectors};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_mpc::Comm;
 
-/// The [`Comm::fah`] label of $\mathcal F\_{\mathsf{AH}}(E)$ (`field-to-ring-rok.tex`:160-162).
+/// The [`Comm::fah`] label of $\mathcal F\_{\mathsf{AH}}(E)$ (`field-to-ring-rok.tex`:189-191).
 pub const LABEL_FAH_E: &str = "hachi-co/conv/F_AH(E)";
 /// The label under which the message $E(u)$ is absorbed into a [`hachi_co_core::Challenger`]
 /// (with `absorb_polys`) before the next coins are drawn; $\Pi\_{\mathsf{conv}}$ itself draws no
@@ -24,19 +24,19 @@ pub struct ConvOutput<const K: usize> {
     /// secret-shared (`ref/README.md`, choice 4).
     pub u_share: Poly,
     /// $E(u) \in \mathcal R\_q^H$, the output of $\mathcal F\_{\mathsf{AH}}(E)$, which the provers
-    /// send to the verifier (`field-to-ring-rok.tex`:160-164).
+    /// send to the verifier (`field-to-ring-rok.tex`:189-193).
     pub e_u: Poly,
 }
 
-/// $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:105-169) for the party $p$ = `comm.id()` with
+/// $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:134-198) for the party $p$ = `comm.id()` with
 /// state `state` = $\mathsf{st}\_p$ from Commit and the evaluation point $\mathbf x \in
 /// \mathbb F\_{q^k}^\ell$:
 ///
-/// 1. [`public_vectors`] (steps 1-2, lines 105-123);
+/// 1. [`public_vectors`] (steps 1-2, lines 134-152);
 /// 2. $\langle u \rangle\_p$ by [`u_share`] from the blocks of $\mathbf f'$ in the state (steps
-///    3-4, lines 124-131; $\mathsf{PConv}$ ran in Commit, `ref/README.md`, choice 3);
+///    3-4, lines 153-160; $\mathsf{PConv}$ ran in Commit, `ref/README.md`, choice 3);
 /// 3. [`fah_e_input`] and [`Comm::fah`] with [`LABEL_FAH_E`]: every party receives
-///    $E(u)$ (steps 5-6, lines 132-164).
+///    $E(u)$ (steps 5-6, lines 161-193).
 ///
 /// The verifier then checks $y = E(u)$ ([`crate::verify`]). With [`hachi_co_mpc::Loopback`]
 /// ($n = 1$) the collective call is the identity.

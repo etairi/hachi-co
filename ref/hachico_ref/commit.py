@@ -1,6 +1,6 @@
 """Setup (matrices), the instance input, AS.Share, PConv, Commit and Open.
 
-Draft references: Setup 6_CH:263-298; Commit 6_CH:300-391; Open 6_CH:393-406; PConv F2R:36-87;
+Draft references: Setup 6_CH:265-303; Commit 6_CH:305-401; Open 6_CH:403-421; PConv F2R:65-116;
 AS.Share 4_P:150-164; Slice 4_P:167-183; F_AH 4_P:185-201.
 
 Indexing (m0-spec "Bit strings"): nat(b_1..b_s) = sum_j b_j 2^{s-j}, b_1 most significant, values in
@@ -24,8 +24,9 @@ def expand_matrix(seed, domain, rows, cols, d, q):
 
 
 def setup(ctx):
-    """A in R_q^{n_A x delta 2^m}, B in R_q^{n_B x n_A delta 2^r}, D in R_q^{n_D x width_D} (6_CH:283-288).
-    The base-PCS parameters (6_CH:289-292) are omitted: Hachi as the base PCS is deferred."""
+    """A in R_q^{n_A x delta 2^m}, B in R_q^{n_B x (n_A delta 2^r + n m_u)}, D in R_q^{n_D x width_D}
+    (6_CH:287-292).
+    The base-PCS parameters (6_CH:294-297) are omitted: Hachi as the base PCS is deferred."""
     P = ctx.P
     return dict(
         A=expand_matrix(ctx.setup_seed, "setup/A", P.n_A, P.width_A, P.d, P.q),
@@ -50,7 +51,7 @@ def as_share(F, x, n, prg):
 
 def sample_input(ctx):
     """f (coefficients, nat(q) order, X_1 <-> most significant bit), the initial additive shares f_i of f
-    held by the provers (6_CH:301), the evaluation point x, and y = f(x) computed with subfield.py."""
+    held by the provers (6_CH:306), the evaluation point x, and y = f(x) computed with subfield.py."""
     P, F, S = ctx.P, ctx.F, ctx.S
     f = random_field_vec(F, Prg(ctx.seed, "input/f"), 2 ** P.ell)
     f_init = as_share(F, f, P.n, Prg(ctx.seed, "input/f_init"))
@@ -62,7 +63,7 @@ def sample_input(ctx):
 
 # ---------------------------------------------------------------- PConv ----
 def pconv(ctx, f_shares):
-    """PConv (F2R:36-87).  f_shares (n, 2^l, k) -> f_hat (2^{l-hat}, k) and f' (2^{l'}, d).
+    """PConv (F2R:65-116).  f_shares (n, 2^l, k) -> f_hat (2^{l-hat}, k) and f' (2^{l'}, d).
 
     f_hat[nat(p || q)] = <f_q>_{nat(p)+1} if nat(p) < n else 0, nat(p||q) = nat(p) 2^l + nat(q);
     f'[nat(i||j)] = psi((f_hat[nat(i||j||k)])_{k in {0,1}^{alpha-kappa}}).
@@ -84,9 +85,10 @@ def pconv(ctx, f_shares):
 
 # --------------------------------------------------------------- Commit ----
 def commit(ctx, pp, f_init):
-    """Commit<P_1(f_1), ..., P_n(f_n)>(pp) (6_CH:300-391).  Returns (u, states, data).
+    """Commit<P_1(f_1), ..., P_n(f_n)>(pp) (6_CH:305-401).  Returns (u, states, data).
 
-    states[p] = {block i: dict(f_prime, s, t, t_hat)} for the blocks prover p owns (6_CH:390)."""
+    states[p] = {block i: dict(f_prime, s, t, t_hat)} for the blocks prover p owns (6_CH:400); each prover's
+    state also comprises its rho^u_p, here data["rho_u"][p - 1] (signed, m_u ring elements)."""
     P, R, F = ctx.P, ctx.R, ctx.F
     n = P.n
     # step 1-2: resharing by AS.Share, then local sums
@@ -110,22 +112,28 @@ def commit(ctx, pp, f_init):
         t = R.matvec(A, s)                                # A s_i, (n_A, d)
         t_hat = R.g_inv(t, P.b, P.delta)                  # G^{-1}_{n_A}(t_i), (n_A delta, d)
         states[p][i] = dict(f_prime=fpi, s=s, t=t, t_hat=t_hat)
-    # step 5: slices of t_hat and F_AH(B)
+    # step 5: each prover samples rho^u_p in S_b^{m_u} (6_CH:382)
+    rho_u = np.zeros((n, P.m_u, P.d), dtype=np.int64)
+    for p in range(1, n + 1):
+        rho_u[p - 1] = np.array(Prg(ctx.seed, "commit/rho_u/p%d" % p).short(P.b, P.m_u * P.d),
+                                dtype=np.int64).reshape(P.m_u, P.d)
+    # step 6: slices of (t_hat, rho^u) and F_AH(B) (6_CH:383-397)
     w = P.n_A * P.delta
     slices = np.zeros((n, P.n_blocks * w, P.d), dtype=np.int64)
     for p in states:
         for i, st in states[p].items():
             slices[p - 1, i * w:(i + 1) * w] = st["t_hat"]
     t_hat_all = slices.sum(axis=0) % P.q
-    u = R.matvec(B, t_hat_all)
+    u = R.matvec(B, np.concatenate([t_hat_all, R.reduce(rho_u.reshape(n * P.m_u, P.d))]))
     data = dict(reshare=resh, f_shares=f_shares, f_hat=f_hat, f_prime=f_prime, t_hat_slices=slices,
-                t_hat=t_hat_all, u=u)
+                t_hat=t_hat_all, rho_u=rho_u, u=u)
     return u, states, data
 
 
 # ----------------------------------------------------------------- Open ----
-def open_check(ctx, pp, states, u, f, c=None):
-    """Open(pp, st, comm, f, c) (6_CH:393-406), with every relation checked in Sage arithmetic.
+def open_check(ctx, pp, states, rho_u, u, f, c=None):
+    """Open(pp, st, comm, f, c) (6_CH:403-420), with every relation checked in Sage arithmetic.
+    rho_u is the provers' rho^u (n, m_u, d), read from their states.
 
     c defaults to c* = (1, ..., 1).  Returns (bit, checks) where checks names every sub-condition."""
     P, R, F, S, SR = ctx.P, ctx.R, ctx.F, ctx.S, ctx.SR
@@ -154,6 +162,8 @@ def open_check(ctx, pp, states, u, f, c=None):
             th_list.append(zero_t)
     checks["no_block_in_several_states"] = not several
     t_hat = np.concatenate(th_list)
+    # (t_hat, rho^u), on which B acts (6_CH:414-417)
+    t_rho = np.concatenate([t_hat, R.reduce(np.asarray(rho_u).reshape(P.n * P.m_u, P.d))])
     # 2. decode the message: f'_{i||j} = G s_i, f_hat = psi^{-1}, f_bar_q = sum_p f_hat_{p||q}
     g = 2 ** (P.alpha - P.kappa)
     f_hat = F.zeros(2 ** (P.logn + P.ell))
@@ -179,8 +189,8 @@ def open_check(ctx, pp, states, u, f, c=None):
         norm_cs = max(norm_cs, R.inf_norm(cs))
     checks["A_s_eq_G_that"] = bool(ok_a)
     checks["norm_c_s_le_beta_bar"] = bool(norm_cs <= P.beta_bar)
-    checks["B_that_eq_u"] = SR.matvec(B.tolist(), t_hat.tolist()) == np.asarray(u).tolist()
-    checks["norm_that_le_gamma_bar"] = bool(R.inf_norm(t_hat) <= P.gamma_bar)
+    checks["B_that_eq_u"] = SR.matvec(B.tolist(), t_rho.tolist()) == np.asarray(u).tolist()
+    checks["norm_that_le_gamma_bar"] = bool(R.inf_norm(t_rho) <= P.gamma_bar)
     checks["f_eq_f_bar"] = bool(np.array_equal(f_bar % P.q, np.asarray(f) % P.q))
     bit = all(checks.values())
-    return bit, dict(checks=checks, max_norm_c_s=int(norm_cs), max_norm_t_hat=R.inf_norm(t_hat))
+    return bit, dict(checks=checks, max_norm_c_s=int(norm_cs), max_norm_t_hat=R.inf_norm(t_rho))

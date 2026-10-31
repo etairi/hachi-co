@@ -10,7 +10,7 @@ mod common;
 
 use common::{
     Instance, K, Run, clear_pcs, conv_check, fixture_transcript, honest_runs, ideal_pcs, instances,
-    run_parties, with_replay_openings, without_pcs,
+    run_parties, run_parties_with_pads, with_replay_openings, without_pcs,
 };
 use hachi_co_core::{Fixture, LinearShare, Poly, ReplayChallenger, escape_key};
 use hachi_co_math::Ext;
@@ -382,7 +382,7 @@ fn malicious_witnesses_fail_as_recorded() {
             ],
         );
         // M z' = y still holds (the recorded flag).
-        let mut z_sum = vec![ctx.ring.zero(); l.mu];
+        let mut z_sum = vec![ctx.ring.zero(); l.len_z];
         for s in &bad {
             for (acc, z) in z_sum.iter_mut().zip(&s.z_prime) {
                 *acc = ctx.ring.add(acc, z).unwrap();
@@ -445,6 +445,22 @@ fn malicious_witnesses_fail_as_recorded() {
                 witness_failing(inst, shares, Some(&qs)),
             );
         }
+        // (d') The pad leaves both Boolean sums unchanged: another pad is accepted.
+        let f = ctx.field();
+        let pads: Vec<Ext<K>> = (0..inst.n())
+            .map(|p0| {
+                let pad = fx.ext::<K>(&format!("/sumcheck/rho_w/{p0}")).unwrap();
+                f.add(&pad, &f.from_base(1 + p0 as u64))
+            })
+            .collect();
+        let Run {
+            transcript,
+            privates,
+        } = run_parties_with_pads(inst, shares, None, Some(&pads));
+        check(
+            "witness: any pad is accepted",
+            failing(inst, &transcript, &public(inst), &privates),
+        );
         // (e) A quotient whose sum has a nonzero coefficient of X^{d+1} (row 1).
         let mut qs: Vec<Vec<Poly>> = shares
             .iter()
@@ -588,7 +604,7 @@ fn malformed_transcripts_are_errors() {
     assert!(shape(run(&honest, &p)));
 }
 
-/// The exact boundary of the range check of F_0, {-b+1, ..., b-1} (`5_Building_Blocks.tex`:269),
+/// The exact boundary of the range check of F_0, {-b+1, ..., b-1} (`5_Building_Blocks.tex`:301),
 /// which is wider than the digit set [ceil(-b/2), ceil(b/2) - 1] of the gadgets: moving a z_hat
 /// digit of prover 1 by +-b (and the next digit by -+1, so that J z_hat and M z' = y are
 /// unchanged) is accepted when the digit lands on +-(b - 1) and rejected (round_01_H0 only) when

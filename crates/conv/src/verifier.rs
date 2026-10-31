@@ -1,11 +1,11 @@
-//! The verifier's check of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:160-164): $E(u) \in
+//! The verifier's check of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:189-193): $E(u) \in
 //! \mathcal R\_q^H$ and, read in $\mathbb F\_{q^k}$, $y = E(u)$.
 
 use crate::error::VerifyError;
 use hachi_co_core::Context;
 use hachi_co_math::{Ext, Poly};
 
-/// V's check of $\Pi\_{\mathsf{conv}}$ with reasons (`field-to-ring-rok.tex`:163-164; the oracle's
+/// V's check of $\Pi\_{\mathsf{conv}}$ with reasons (`field-to-ring-rok.tex`:192-193; the oracle's
 /// `conv.verify_conv`): the message $E(u)$ must have $d$ canonical coefficients and lie in
 /// $\mathcal R\_q^H$ (Hachi Eq. (7)), and its coordinates in Hachi's basis must equal the claimed
 /// evaluation $y \in \mathbb F\_{q^k}$.

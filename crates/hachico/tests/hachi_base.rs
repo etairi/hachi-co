@@ -37,7 +37,7 @@ use hachi_co::{
     Hiding, Noise, PcsWords, VerifyError, commit, encoded_len, eval_with, verify,
     verify_claims_with,
 };
-use hachi_co_core::base_pcs::mobius;
+use hachi_co_core::base_pcs::mobius_ext;
 use hachi_co_core::{Ext, FsChallenger, PartyRandomness, Poly, PrgRandomness};
 use hachi_co_params::sizes_with_base;
 use hachi_co_sumcheck::{blinder_coefficients, blinder_weights};
@@ -126,7 +126,7 @@ fn run_with(
 fn scheduled_iterations(pcs: &HachiBase<K>, ctx: &Context<K>, poly: ClaimedPoly) -> usize {
     let (l, hachi) = (&ctx.layout, pcs.pcs());
     let schedule = match poly {
-        ClaimedPoly::W => hachi.multilinear_schedule(l.ell_pp),
+        ClaimedPoly::W => hachi.multilinear_ext_schedule(l.ell_pp),
         ClaimedPoly::G0 => hachi.vector_schedule(1 + l.ell_pp * l.d0),
         ClaimedPoly::G1 => hachi.vector_schedule(1 + l.ell_pp * l.d1),
     };
@@ -434,8 +434,8 @@ fn tampered_hachi_items_are_rejected() {
     let (field, l) = (r.ctx.field(), &r.ctx.layout);
     let private = &r.outs[0].sumcheck;
     let point = &private.point;
-    let mut coeffs = private.w_table.clone();
-    mobius(field.zq(), &mut coeffs).unwrap();
+    let mut coeffs = private.w_field_table(field);
+    mobius_ext(field, &mut coeffs).unwrap();
     let other = [0x5au8; 32];
     let mut party = PrgRandomness::new(seed("party/hachi-base", &[n as u64, 3, 1]));
     for poly in ClaimedPoly::ORDER {
@@ -444,11 +444,11 @@ fn tampered_hachi_items_are_rejected() {
         let (commit_seed, open_seed) = (draw(false), draw(true));
         let (com, opening) = match poly {
             ClaimedPoly::W => {
-                let (com, st) = r.pcs.commit_multilinear(&coeffs, &commit_seed).unwrap();
+                let (com, st) = r.pcs.commit_multilinear_ext(&coeffs, &commit_seed).unwrap();
                 (
                     com,
                     r.pcs
-                        .prove_multilinear(&st, point, &other, &open_seed)
+                        .prove_multilinear_ext(&st, point, &other, &open_seed)
                         .unwrap()
                         .1,
                 )

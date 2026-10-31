@@ -19,7 +19,7 @@
 //! Errors are values ([`Error`]); they report invalid parameters and inputs of the wrong shape.
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `625ced1`), cited by file and line; "Hachi" is ePrint 2026/156 (NOZ26), cited by lemma,
+//! `8834c9f`), cited by file and line; "Hachi" is ePrint 2026/156 (NOZ26), cited by lemma,
 //! theorem and equation number.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

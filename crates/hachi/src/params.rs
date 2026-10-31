@@ -94,7 +94,7 @@ impl HachiChoices {
     }
 }
 
-/// Randomized commitments (`docs/hachi-hiding.md` §6; the draft's item (i), 4_preliminaries.tex:334,
+/// Randomized commitments (`docs/hachi-hiding.md` §6; the draft's item (i), 4_preliminaries.tex:362,
 /// after Hwang-Seo-Song §3.3). Chunk $i$ of every committed witness is committed as
 /// $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \mathbf r_i$ and every iteration sends
 /// $\mathbf v = \mathbf D \hat{\mathbf w} + \mathbf D' \boldsymbol\rho$, where
@@ -114,7 +114,7 @@ pub struct Hiding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Noise {
     /// Uniform over the digit set $D$ of base $b$, like Hachi-Co's $\boldsymbol\rho_i$
-    /// (5_Building_Blocks.tex:110).
+    /// (5_Building_Blocks.tex:122).
     Digits,
     /// $D_{\mathbb Z,\sigma}$ with standard deviation $\sigma = 2^j$
     /// ([`hachi_co_sampling::gauss`]), supported on $[-B, B]$, $B$ the length of its table.

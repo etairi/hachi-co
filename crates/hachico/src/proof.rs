@@ -28,7 +28,7 @@ const _: () = assert!(8 == hachi_co_params::sizes::WORD_BYTES);
 const PCS_ORDER: [ClaimedPoly; 3] = [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1];
 
 /// What the provers send to the verifier in $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:
-/// 408-419): the public messages of $\Pi\_{\mathsf{conv}}$, of the accepted attempt of the
+/// 426-437): the public messages of $\Pi\_{\mathsf{conv}}$, of the accepted attempt of the
 /// ring-to-linear step and of the sumcheck, whose transcript carries the base PCS's commitments
 /// and opening proofs as words. The verifier's coins are not part of it: it re-derives them, the
 /// challenges $\mathbf c$ included.
@@ -39,16 +39,16 @@ const PCS_ORDER: [ClaimedPoly; 3] = [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPol
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvalProof<const K: usize> {
     /// $E(u) \in \mathcal R\_q^H$, the output of $\mathcal F\_{\mathsf{AH}}(E)$
-    /// (`field-to-ring-rok.tex`:160-164): $d$ residues.
+    /// (`field-to-ring-rok.tex`:189-193): $d$ residues.
     pub e_u: Poly,
     /// The index $a^\ast$ of the accepted attempt of the ring-to-linear step
-    /// (`5_Building_Blocks.tex`:129; Fiat-Shamir with aborts, `ref/README.md`, choice 5), below
+    /// (`5_Building_Blocks.tex`:141; Fiat-Shamir with aborts, `ref/README.md`, choice 5), below
     /// [`MAX_ATTEMPTS`].
     pub attempt: u64,
     /// The accepted attempt's first message $\mathbf v \in \mathcal R\_q^{n\_D}$
-    /// (`5_Building_Blocks.tex`:120-121).
+    /// (`5_Building_Blocks.tex`:132-133).
     pub v: Vec<Poly>,
-    /// The sumcheck transcript (`5_Building_Blocks.tex`:220-241, 293-300, 314-320): $G\_{0,p},
+    /// The sumcheck transcript (`5_Building_Blocks.tex`:249-273, 325-332, 346-352): $G\_{0,p},
     /// G\_{1,p}$, the base-PCS commitments, the $\ell''$ round messages, the final values and the
     /// base-PCS opening proofs of every prover.
     pub sumcheck: SumcheckTranscript<K>,

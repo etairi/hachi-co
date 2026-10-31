@@ -156,11 +156,11 @@ fn forge<P: BasePcs<K>>(
 /// two blinder vectors, and the provers' states.
 fn commit_all<P: BasePcs<K>>(
     pcs: &P,
-    w: &[u64],
+    w: &[Ext<K>],
     g0: &[Ext<K>],
     g1: &[Ext<K>],
 ) -> (PcsWords, [P::State; 3]) {
-    let (cw, sw) = pcs.commit_multilinear(w, &SEED).unwrap();
+    let (cw, sw) = pcs.commit_multilinear_ext(w, &SEED).unwrap();
     let (c0, s0) = pcs.commit_vector(g0, &SEED).unwrap();
     let (c1, s1) = pcs.commit_vector(g1, &SEED).unwrap();
     let words = PcsWords {
@@ -182,7 +182,7 @@ fn open_all<P: BasePcs<K>>(
     let [sw, s0, s1] = states;
     let [ctx_g0, ctx_g1, ctx_w] = &forged.contexts;
     let (_, pw) = pcs
-        .prove_multilinear(sw, &forged.point, ctx_w, &SEED)
+        .prove_multilinear_ext(sw, &forged.point, ctx_w, &SEED)
         .unwrap();
     let w0 = blinder_weights(field, &forged.point, l.d0);
     let w1 = blinder_weights(field, &forged.point, l.d1);
@@ -233,7 +233,7 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
     // own checks pass (the verdict would be Rejected otherwise); the opening of g_{1,1} does not.
     let (commitments, states) = commit_all(
         pcs,
-        &vec![0; 1 << l.ell_pp],
+        &vec![zero; 1 << l.ell_pp],
         &vec![zero; len0],
         &vec![zero; len1],
     );
@@ -279,8 +279,12 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
 
     // Variant 3: commit to that vector instead. Keeping the messages, the coins change under
     // them: the first round check of H_1 fails.
-    let (commitments3, states3) =
-        commit_all(pcs, &vec![0; 1 << l.ell_pp], &vec![zero; len0], &g1_solved);
+    let (commitments3, states3) = commit_all(
+        pcs,
+        &vec![zero; 1 << l.ell_pp],
+        &vec![zero; len0],
+        &g1_solved,
+    );
     let mut variant3 = forged.proof.clone();
     variant3.sumcheck.commitments = commitments3.clone();
     variant3.sumcheck.openings.g1 = vec![pcs.proof_to_words(&proof)];

@@ -1,5 +1,5 @@
 //! Work package WP10 of Hachi-Co (`docs/m1-spec.md`, "WP10 `hachi-co-sumcheck`"): the
-//! collaborative sumcheck of `5_Building_Blocks.tex`:195-334 and its verifier, which reduce the
+//! collaborative sumcheck of `5_Building_Blocks.tex`:209-366 and its verifier, which reduce the
 //! provers' shares of the linear relation $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$
 //! (with the range conditions on $\mathbf z'$ and $y = E(u)$) to $3n$ evaluation claims, which a
 //! base PCS ([`BasePcs`](hachi_co_core::BasePcs)) proves: each prover commits to its share
@@ -25,7 +25,7 @@
 //! | [`Nodes`], [`degree_at_nodes`] | interpolation at $1, \dots, D + 1$; the degree audit | 290-301, 275 |
 //!
 //! Line numbers without a file are those of `5_Building_Blocks.tex` in the draft
-//! (`collaborative-hatchi`, commit `625ced1`).
+//! (`collaborative-hatchi`, commit `8834c9f`).
 //!
 //! **Conventions** (`ref/README.md`, "Conventions", choices 7-14, and the fixture's
 //! `conventions`): positions are 0-indexed and parties numbered $1, \dots, n$; the hypercube is
@@ -85,8 +85,8 @@ pub use interp::{Nodes, degree_at_nodes};
 pub use prover::PartyProver;
 pub use quotient::quotient_share;
 pub use tables::{
-    RangeProduct, claimed_sum, ind_rows, mstar_table, powers, range_product, row_indicator,
-    table_size, w_table,
+    RangeProduct, claimed_sum, ind_rows, mstar_table, pad_index, powers, put_pad_residues,
+    range_product, row_indicator, table_size, w_table,
 };
 pub use transcript::{
     Claim, ClaimedPoly, FinalClaims, FinalValues, PcsWords, RoundMessage, RoundValues,

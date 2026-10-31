@@ -36,7 +36,7 @@
 //!   \rceil$ bits per digit of the final witness, with exact word counts (`pcs`,
 //!   "Encodings").
 //! - **Randomized commitments**, optional ([`HachiChoices::hiding`]; the Hachi-Co draft's item
-//!   (i), 4_P:334; `docs/hachi-hiding.md` §6):
+//!   (i), 4_P:362; `docs/hachi-hiding.md` §6):
 //!   - $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \mathbf r_i$ and
 //!     $\mathbf v = \mathbf D \hat{\mathbf w} + \mathbf D' \boldsymbol\rho$, with discrete
 //!     Gaussian or uniform-digit randomness drawn from the prover's 32-byte seeds;

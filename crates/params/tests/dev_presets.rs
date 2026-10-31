@@ -1,6 +1,6 @@
 //! The development presets `dev-l12`, `dev-l16`, `dev-l20` (`docs/m1-spec.md`, WP11): the toy
 //! choices with n = 1 and another l, kind `Dev`, found by name; every derived value checked
-//! against a direct evaluation of the draft's formulas (6_Collaborative_Hachi.tex:274-288) with
+//! against a direct evaluation of the draft's formulas (6_Collaborative_Hachi.tex:276-292) with
 //! big integers; q checked to be the smallest admissible prime by an independent search (trial
 //! division); the report flags only the knowledge-error target, as for the toys.
 
@@ -27,9 +27,9 @@ fn dev_presets_are_the_toy_choices_at_larger_l() {
         let c = p.choices;
         assert_eq!(
             (
-                c.n, c.alpha, c.kappa, c.b, c.omega, c.n_a, c.n_b, c.n_d, c.m_rho
+                c.n, c.alpha, c.kappa, c.b, c.omega, c.n_a, c.n_b, c.n_d, c.m_u, c.m_v
             ),
-            (1, 4, 2, 4, Omega::Fixed(2), 1, 1, 1, 2)
+            (1, 4, 2, 4, Omega::Fixed(2), 1, 1, 1, 2, 2)
         );
         assert_eq!((c.tau_rule, c.q), (TauRule::Tight, QChoice::Smallest));
         assert_eq!(preset(&p.name).unwrap(), *p);
@@ -55,7 +55,7 @@ fn tight_tau(b: u128, beta: u128) -> u32 {
         .unwrap()
 }
 
-/// The lower bound on q for a given delta (6_Collaborative_Hachi.tex:272, 275-277;
+/// The lower bound on q for a given delta (6_Collaborative_Hachi.tex:274, 279-281;
 /// `docs/m0-spec.md`, "Choosing q"), for n = 1, omega = 2, b = 4, d = 16 and the l, r, m of the
 /// preset: max(16 omega b^tau, 1 + 2^(l+3) n omega^2 b, 2 beta + 1).
 fn q_bound(ell: u32, r: u32, m: u32, delta: u32) -> u128 {
@@ -130,7 +130,7 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         let (x, _) = derive(&p.choices).unwrap();
         let big = |v: u128| BigUint::from(v);
         let (b, omega, d) = (big(4), big(2), big(16));
-        let (n_a, n_b, n_d, m_rho, n) = (big(1), big(1), big(1), big(2), big(1));
+        let (n_a, n_b, n_d, m_u, m_v, n) = (big(1), big(1), big(1), big(2), big(2), big(1));
         let delta = big(u128::from(x.delta));
         let pow2 = |e: u32| BigUint::from(1u8) << e;
         assert_eq!((x.d, x.k, x.log_n), (16, 4, 0), "{}", p.name);
@@ -148,9 +148,10 @@ fn dev_presets_match_the_formulas_with_big_integers() {
             + &n * &delta
             + pow2(x.r) * &n_a * &delta
             + &n * &n_a * &delta
-            + &n * &m_rho
+            + &n * &m_u
+            + &n * &m_v
             + pow2(x.m) * &delta * BigUint::from(x.tau)
-            + 1u8;
+            + 2u8;
         assert_eq!(big(x.mu), mu, "{}", p.name);
         let n_prime = &n_a + &n_b + &n_d + 2u8;
         assert_eq!(BigUint::from(x.n_prime), n_prime);
@@ -160,10 +161,10 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         assert_eq!(x.d1, 3);
         assert_eq!(big(x.nu), &n_prime + &d + (big(x.mu) + &n_prime) * &d);
         assert_eq!(big(x.width_a), &delta * pow2(x.m));
-        assert_eq!(big(x.width_b), &n_a * &delta * pow2(x.r));
+        assert_eq!(big(x.width_b), &n_a * &delta * pow2(x.r) + &n * &m_u);
         assert_eq!(
             big(x.width_d),
-            &delta * (pow2(x.r) + &n + &n * &n_a) + &n * &m_rho
+            &delta * (pow2(x.r) + &n + &n * &n_a) + &n * &m_v
         );
     }
     // The hypercube sizes of the rustdoc of `dev_choices`.

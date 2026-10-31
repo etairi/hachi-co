@@ -3,9 +3,9 @@
 //!
 //! | Item | Contents | Draft |
 //! |---|---|---|
-//! | [`Choices`] | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega$, the challenge set, the $\tau$ rule, $n_A, n_B, n_D, m_\rho$, $q$ | 6_Collaborative_Hachi.tex:263-273 |
-//! | [`derive`](fn@crate::derive) | every derived quantity, exactly ([`Params`]) | 6_Collaborative_Hachi.tex:265-288 |
-//! | [`Report`] | each condition, whether it holds, and its [`Severity`] | 6_Collaborative_Hachi.tex:269-275, 4_preliminaries.tex:73, 100 |
+//! | [`Choices`] | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega$, the challenge set, the $\tau$ rule, $n_A, n_B, n_D, m_u, m_v$, $q$ | 6_Collaborative_Hachi.tex:265-275 |
+//! | [`derive`](fn@crate::derive) | every derived quantity, exactly ([`Params`]) | 6_Collaborative_Hachi.tex:267-292 |
+//! | [`Report`] | each condition, whether it holds, and its [`Severity`] | 6_Collaborative_Hachi.tex:271-279, 4_preliminaries.tex:73, 100 |
 //! | [`presets`](mod@presets) | the toy presets, the development presets and the secure presets of `presets/secure.json` | `docs/m0-spec.md`; `docs/m1-spec.md`, WP11 |
 //! | [`rules`] | integer logarithms, the $\tau$ rules, primality, $\lvert C \rvert$, $M \le e^{1/n}$ | — |
 //! | [`sizes`](fn@crate::sizes), [`sizes_with_base`] | the byte size of the Eval proof's encoding, per component ([`ProofSizes`]), with the base PCS's items ([`BasePcsWords`]) | `docs/m1-spec.md`, WP11 |
@@ -16,7 +16,7 @@
 //! use hachi_co_params::{derive, presets::toy_choices};
 //!
 //! let (params, report) = derive(&toy_choices(2))?;
-//! assert_eq!((params.q, params.delta, params.tau, params.mu), (33554501, 13, 10, 785));
+//! assert_eq!((params.q, params.delta, params.tau, params.mu), (33554501, 13, 10, 790));
 //! assert!(report.is_admissible()); // no fatal violation
 //! assert!(!report.all_hold()); // the toy misses the knowledge-error target (a warning)
 //! # Ok::<(), hachi_co_params::Error>(())
@@ -30,7 +30,7 @@
 //! [`sizes`](fn@crate::sizes) counts uses 64-bit words ([`sizes::WORD_BYTES`]).
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `625ced1`), cited by file and line; "Hachi" is ePrint 2026/156 (NOZ26), cited by lemma.
+//! `8834c9f`), cited by file and line; "Hachi" is ePrint 2026/156 (NOZ26), cited by lemma.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -43,7 +43,7 @@ pub mod rules;
 pub mod sizes;
 
 pub use cascade::{Params, derive};
-pub use choices::{ChallengeSet, Choices, Omega, QChoice, TauRule};
+pub use choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, TauRule};
 pub use error::{Error, Result};
 pub use presets::{Preset, PresetKind, preset, presets};
 pub use report::{Constraint, ConstraintId, Report, Severity};

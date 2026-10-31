@@ -1,13 +1,13 @@
 //! Challenges: the $\ell_1$ ball $C = \lbrace c \in R_q : \lVert c \rVert_1 \le \omega \rbrace$ of
-//! 5_Building_Blocks.tex:122, sampled exactly uniformly, and the prototype's sparse set.
+//! 5_Building_Blocks.tex:134, sampled exactly uniformly, and the prototype's sparse set.
 //!
 //! The soundness analysis assumes that the verifier samples uniformly from $C$
-//! (6_Collaborative_Hachi.tex:977-979). A challenge is returned as its $d$ coefficients, entry $j$
+//! (6_Collaborative_Hachi.tex:1007-1009). A challenge is returned as its $d$ coefficients, entry $j$
 //! for $X^j$, as signed integers. Their $\ell_1$ norm is at most $\omega$, so for
 //! $\omega \le (q-1)/2$ these are the centered representatives and the map to $R_q$ is a
 //! bijection from $\lbrace c \in \mathbb Z^d : \lVert c \rVert_1 \le \omega \rbrace$ onto $C$
 //! (the norm of 4_preliminaries.tex:86 uses centered representatives). The Setup bounds on $q$
-//! (6_Collaborative_Hachi.tex:272) give $q \gt 2\omega$.
+//! (6_Collaborative_Hachi.tex:274) give $q \gt 2\omega$.
 //!
 //! **Size of the ball.** A vector with $i$ nonzero coefficients is given by its support
 //! ($\binom{d}{i}$ choices), its signs ($2^i$), and the absolute values, a composition
@@ -91,7 +91,7 @@ pub fn contains_sparse(c: &[i64], omega: u64) -> bool {
 
 /// The $\ell_1$ ball of radius $\omega$ in dimension $d$, with the support-size weights
 /// precomputed for repeated sampling (a proof draws $2^r$ challenges,
-/// 5_Building_Blocks.tex:122-126).
+/// 5_Building_Blocks.tex:134-138).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct L1Ball {
     d: usize,
@@ -167,7 +167,7 @@ impl L1Ball {
 }
 
 /// A uniform element of $C = \lbrace c \in \mathbb Z^d : \lVert c \rVert_1 \le \omega \rbrace$
-/// (5_Building_Blocks.tex:122), exactly.
+/// (5_Building_Blocks.tex:134), exactly.
 ///
 /// Procedure (all draws exact, in this order; the draft does not fix a sampler):
 /// 1. $u \leftarrow$ [`uniform_below_big`](crate::uniform::uniform_below_big)$(|C|)$, and $i$

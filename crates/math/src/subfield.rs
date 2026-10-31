@@ -1,7 +1,7 @@
 //! The subfield $\mathcal R_q^H$, the trace $\mathrm{Tr}\_H$, the packing map $\psi$, its inverse
 //! and the map $E$ of the field-to-ring reduction.
 //!
-//! Definitions (draft `4_preliminaries.tex`:69-84; `field-to-ring-rok.tex`:116, 132-164; Hachi,
+//! Definitions (draft `4_preliminaries.tex`:69-84; `field-to-ring-rok.tex`:145, 161-193; Hachi,
 //! Lemma 5, Eq. (7) and Theorem 2), exactly as in the Sage reference
 //! `ref/hachico_ref/subfield.py`:
 //! - $\sigma_i : X \mapsto X^i$ for odd $i$; $H = \langle \sigma_{-1}, \sigma_{4k+1} \rangle$,
@@ -16,7 +16,7 @@
 //! - $\psi^{-1}(u)\_i = (k/d) \mathrm{Tr}\_H(u \cdot X^{-e_i})$ with $e_i = i$ for $i < d/(2k)$ and
 //!   $e_i = d/2 + (i - d/(2k))$ otherwise ($\psi$ of the $i$-th unit vector is $X^{e_i}$).
 //! - $E(u) = (k/d) \mathrm{Tr}\_H(u \cdot \sigma_{-1}(v))$ for $v = \psi$ of a monomial vector
-//!   (`field-to-ring-rok.tex`:116, 134).
+//!   (`field-to-ring-rok.tex`:145, 163).
 //!
 //! **Closed forms.** With $s = d/(2k)$ (so $t = X^s$):
 //! - $\mathrm{Tr}\_H(X^j) = 0$ unless $s \mid j$ (Hachi, proof of Theorem 2, second claim), and
@@ -41,7 +41,7 @@ use crate::{
 
 /// $\mathcal R_q^H \cong \mathbb F_{q^K}$ inside a ring $\mathcal R_q$ (Hachi, Lemma 5), with
 /// $\mathrm{Tr}\_H$, $\psi$, $\psi^{-1}$ and $E$ (draft `4_preliminaries.tex`:69-84,
-/// `field-to-ring-rok.tex`:132-164).
+/// `field-to-ring-rok.tex`:161-193).
 #[derive(Clone, Debug)]
 pub struct Subfield<const K: usize> {
     ring: Ring,
@@ -246,7 +246,7 @@ impl<const K: usize> Subfield<K> {
     /// $\mathbf x \in \mathbb F_{q^K}^s$, ordered by $\mathrm{nat}(\mathbf b) = \sum_j b_j
     /// 2^{s-j}$ ($b_1$ the most significant bit; `docs/m0-spec.md`, "Bit strings"), as
     /// `Subfield.monomials` in `ref/hachico_ref/subfield.py`. These are the vectors of
-    /// `field-to-ring-rok.tex`:113-116.
+    /// `field-to-ring-rok.tex`:142-145.
     ///
     /// # Errors
     /// [`Error::Overflow`] for $s \ge 48$ (the output would have $2^s$ entries).
@@ -267,7 +267,7 @@ impl<const K: usize> Subfield<K> {
     }
 
     /// $E(u) = (K/d) \mathrm{Tr}\_H(u \cdot \sigma_{-1}(v)) \in \mathcal R_q^H$
-    /// (`field-to-ring-rok.tex`:134, 162), from the exact product in $\mathcal R_q$ and the
+    /// (`field-to-ring-rok.tex`:163, 191), from the exact product in $\mathcal R_q$ and the
     /// closed form of the trace: its coordinates are $y_0$ and $(y_{ms} - y_{(2K-m)s})/2$ for
     /// $y = u \sigma_{-1}(v)$.
     ///
@@ -296,7 +296,7 @@ impl<const K: usize> Subfield<K> {
     }
 
     /// The $d \times d$ matrix $\mathbf M$ over $\mathbb Z_q$ with
-    /// $\mathrm{cf}(E(u)) = \mathbf M \cdot \mathrm{cf}(u)$ (`field-to-ring-rok.tex`:140-158),
+    /// $\mathrm{cf}(E(u)) = \mathbf M \cdot \mathrm{cf}(u)$ (`field-to-ring-rok.tex`:169-187),
     /// row-major: column $j$ is $\mathrm{cf}(E(X^j))$, computed in $O(K)$ from
     /// $\sigma_{-1}(v)$ shifted by $j$.
     ///

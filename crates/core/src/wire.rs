@@ -1,6 +1,6 @@
 //! Flat encodings for the collective calls of [`hachi_co_mpc::Comm`], which carry `u64` residues
-//! and `i64` vectors: every block flattens what it passes to $\mathcal F\_{\mathsf{AH}}$, the
-//! exchange or the gather, and checks the exact shape of what it receives.
+//! and `i64` vectors: every block flattens what it passes to $\mathcal F\_{\mathsf{AH}}$ or the
+//! exchange, and checks the exact shape of what it receives.
 //!
 //! The order is row-major: polynomial $i$'s coefficient $j$ at $i d + j$; element $i$'s coordinate
 //! $c$ at $i K + c$. Nothing here reduces modulo $q$.
@@ -96,7 +96,7 @@ pub fn split_words(flat: &[u64], count: usize) -> Result<Vec<Vec<u64>>> {
 }
 
 /// The entries of `rows`, one row after the other (for example the $\delta 2^m$ short ring
-/// elements of a response $\mathbf z\_i$ before [`hachi_co_mpc::Comm::gather`]).
+/// elements of a response $\mathbf z\_i$).
 pub fn flatten_rows<T: Copy>(rows: &[Vec<T>]) -> Vec<T> {
     rows.iter().flat_map(|r| r.iter().copied()).collect()
 }

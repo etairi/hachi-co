@@ -3,7 +3,8 @@
 
 use hachi_co_core::{
     BlinderKind, DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK,
-    DOMAIN_RESHARE, DOMAIN_RHO, Error, Ext, Fqk, PartyRandomness, PrgRandomness,
+    DOMAIN_RESHARE, DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, Error, Ext, Fqk, PartyRandomness,
+    PrgRandomness,
 };
 use hachi_co_sampling::{ShakePrg, rej, uniform};
 use rand::Rng;
@@ -35,15 +36,48 @@ fn masks_and_rho_follow_the_documented_streams() {
         );
         assert_eq!(mask, want.unwrap());
         assert!(mask.iter().all(|x| x.unsigned_abs() <= GAMMA));
-        let rho = PartyRandomness::<K>::rho(&mut rng, attempt, 4, 32).unwrap();
+        let rho = PartyRandomness::<K>::rho_v(&mut rng, attempt, 4, 32).unwrap();
         let want = uniform::short(
-            &mut ShakePrg::new(&SEED, DOMAIN_RHO.as_bytes(), attempt),
+            &mut ShakePrg::new(&SEED, DOMAIN_RHO_V.as_bytes(), attempt),
             4,
             32,
         );
         assert_eq!(rho, want.unwrap());
         assert!(rho.iter().all(|x| (-2..=1).contains(x)));
     }
+    // rho^u has one stream per PrgRandomness, drawn in Commit.
+    let rho_u = PartyRandomness::<K>::rho_u(&mut rng, 4, 32).unwrap();
+    let want = uniform::short(&mut ShakePrg::new(&SEED, DOMAIN_RHO_U.as_bytes(), 0), 4, 32);
+    assert_eq!(rho_u, want.unwrap());
+    assert!(rho_u.iter().all(|x| (-2..=1).contains(x)));
+}
+
+/// The two rules of the pad share a stream: a party draws one pad per Eval, under either rule.
+#[test]
+fn the_pad_has_one_stream() {
+    let f = Fqk::<K>::new(Q).unwrap();
+    let mut rng = PrgRandomness::new(SEED);
+    let pad = PartyRandomness::<K>::rho_w(&mut rng, &f).unwrap();
+    assert!(pad.0.iter().all(|x| *x < Q));
+    assert!(matches!(
+        PartyRandomness::<K>::rho_w(&mut rng, &f),
+        Err(Error::RandomnessReuse {
+            kind: DOMAIN_RHO_W,
+            index: 0
+        })
+    ));
+    assert!(matches!(
+        PartyRandomness::<K>::rho_w_residues(&mut rng, Q, 8),
+        Err(Error::RandomnessReuse { .. })
+    ));
+    let mut rng = PrgRandomness::new(SEED);
+    let residues = PartyRandomness::<K>::rho_w_residues(&mut rng, Q, 8).unwrap();
+    let want = uniform::uniform_mod_q(&mut ShakePrg::new(&SEED, DOMAIN_RHO_W.as_bytes(), 0), Q, 8);
+    assert_eq!(residues, want.unwrap());
+    assert!(matches!(
+        PartyRandomness::<K>::rho_w(&mut rng, &f),
+        Err(Error::RandomnessReuse { .. })
+    ));
 }
 
 #[test]
@@ -56,7 +90,7 @@ fn supports_are_exactly_the_boxes() {
     assert!(mask.iter().all(|x| (-1..=1).contains(x)));
     // S_b = [ceil(-b/2), ceil(b/2) - 1]: b = 4 -> [-2, 1], b = 5 -> [-2, 2].
     for (attempt, b, lo, hi) in [(0u64, 4u64, -2i64, 1i64), (1, 5, -2, 2), (2, 3, -1, 1)] {
-        let rho = PartyRandomness::<K>::rho(&mut rng, attempt, b, 3000).unwrap();
+        let rho = PartyRandomness::<K>::rho_v(&mut rng, attempt, b, 3000).unwrap();
         for v in lo..=hi {
             assert!(rho.contains(&v), "b = {b}: value {v} appears");
         }
@@ -184,10 +218,15 @@ fn every_stream_is_served_once_and_failures_do_not_use_it_up() {
         })
     );
     // Other kinds and other attempts are separate streams.
-    PartyRandomness::<K>::rho(&mut rng, 0, 4, 8).unwrap();
+    PartyRandomness::<K>::rho_v(&mut rng, 0, 4, 8).unwrap();
     PartyRandomness::<K>::mask(&mut rng, 1, GAMMA, 8).unwrap();
     assert!(matches!(
-        PartyRandomness::<K>::rho(&mut rng, 0, 4, 8),
+        PartyRandomness::<K>::rho_v(&mut rng, 0, 4, 8),
+        Err(Error::RandomnessReuse { .. })
+    ));
+    PartyRandomness::<K>::rho_u(&mut rng, 4, 8).unwrap();
+    assert!(matches!(
+        PartyRandomness::<K>::rho_u(&mut rng, 4, 8),
         Err(Error::RandomnessReuse { .. })
     ));
     // A failed request (gamma above 2^63 - 1, b = 0) does not use up its stream.
@@ -197,10 +236,10 @@ fn every_stream_is_served_once_and_failures_do_not_use_it_up() {
     ));
     PartyRandomness::<K>::mask(&mut rng, 5, GAMMA, 8).unwrap();
     assert!(matches!(
-        PartyRandomness::<K>::rho(&mut rng, 9, 0, 8),
+        PartyRandomness::<K>::rho_v(&mut rng, 9, 0, 8),
         Err(Error::Sampling(_))
     ));
-    PartyRandomness::<K>::rho(&mut rng, 9, 4, 8).unwrap();
+    PartyRandomness::<K>::rho_v(&mut rng, 9, 4, 8).unwrap();
     // Debug output does not show the seed.
     let debug = format!("{rng:?}");
     assert!(debug.starts_with("PrgRandomness"));

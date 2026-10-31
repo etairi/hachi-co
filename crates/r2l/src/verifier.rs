@@ -1,6 +1,6 @@
 //! The verifier's side of the ring-to-linear step: the challenges of the accepted attempt by
 //! Fiat-Shamir, and the public matrix $\mathbf M$ and vector $\mathbf y$ of the linear relation
-//! (`5_Building_Blocks.tex`:122-126, 154-179). The provers compute $\mathbf M$ and $\mathbf y$ the
+//! (`5_Building_Blocks.tex`:134-138, 167-193). The provers compute $\mathbf M$ and $\mathbf y$ the
 //! same way.
 //!
 //! These functions take proof data ($a^\ast$, $\mathbf v$, $\mathbf c$) and never panic on it:
@@ -48,17 +48,17 @@ pub fn verifier_challenges<const K: usize, H: Challenger<K>>(
 }
 
 /// The linear relation $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ produced by the
-/// ring-to-linear step (`5_Building_Blocks.tex`:154-182).
+/// ring-to-linear step (`5_Building_Blocks.tex`:167-196).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinearRelation {
-    /// $\mathbf M \in \mathcal R\_q^{n' \times \mu}$, dense and row-major (lines 157-163).
+    /// $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$, dense and row-major (lines 170-176).
     pub m: Matrix,
     /// $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$
-    /// (lines 173-179).
+    /// (lines 187-193).
     pub y: Vec<Poly>,
 }
 
-/// $\mathbf M$ and $\mathbf y$ from public data (`5_Building_Blocks.tex`:157-179): the public
+/// $\mathbf M$ and $\mathbf y$ from public data (`5_Building_Blocks.tex`:170-193): the public
 /// vectors of $\Pi\_{\mathsf{conv}}$ ($\mathbf b$ and $\mathbf a$ in $\mathcal R\_q$), the
 /// accepted attempt's $\mathbf v$ and $\mathbf c$, and the commitment $\mathbf u$; after checking
 /// $\mathbf c \in \mathcal C^{2^r}$ ([`check_challenges`]) and the shapes and canonical residues

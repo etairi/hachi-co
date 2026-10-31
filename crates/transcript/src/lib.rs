@@ -148,7 +148,7 @@ impl Transcript {
 
     /// A 32-byte challenge seed: [`challenge_bytes`](Self::challenge_bytes) with a 32-byte
     /// output. Seed a PRG with it to derive structured challenges, such as the $2^r$ elements of
-    /// the $\ell_1$ ball (5_Building_Blocks.tex:122-126).
+    /// the $\ell_1$ ball (5_Building_Blocks.tex:134-138).
     pub fn challenge_seed(&mut self, label: &[u8]) -> [u8; 32] {
         let mut seed = [0u8; 32];
         self.challenge_bytes(label, &mut seed);

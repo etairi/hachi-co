@@ -7,9 +7,9 @@ mod common;
 use common::{load, u_com, u_share};
 use hachi_co_core::{Fixture, LinearShare, Poly, ReplayChallenger, ReplayRandomness, short};
 use hachi_co_r2l::{
-    Error, LinearRelation, aggregate, block_w, check_challenges, d_slice, fah_d_input, fold,
-    linear_relation, mask_images, norm_check, owned_w, relation_holds, residual, respond,
-    response_len, sample_attempt, sum_shares, y_share, z_hat, z_prime_share,
+    Error, LinearRelation, block_w, check_challenges, d_slice, fah_d_input, fold, linear_relation,
+    mask_images, norm_check, owned_w, relation_holds, residual, respond, response_len,
+    sample_attempt, sum_shares, y_share, z_hat, z_of_sum, z_prime_share,
 };
 use hachi_co_sampling::Error as SamplingError;
 
@@ -128,20 +128,21 @@ fn party_local_functions_refuse_malformed_inputs() {
 fn prover1_steps_refuse_malformed_responses() {
     let (_, ctx, _, _) = load("toy-n2");
     let n_len = response_len(&ctx);
-    let ok = vec![vec![1i64; n_len], vec![-1i64; n_len]];
-    assert_eq!(aggregate(&ctx, &ok).unwrap(), vec![0i64; n_len]);
-    assert!(shape(aggregate(&ctx, &ok[..1])));
-    let mut more = ok.clone();
-    more.push(vec![0; n_len]);
-    assert!(shape(aggregate(&ctx, &more)));
-    let mut short_resp = ok.clone();
-    short_resp[1].pop();
-    assert!(shape(aggregate(&ctx, &short_resp)));
-    let huge = vec![vec![i64::MAX; n_len], vec![1; n_len]];
-    assert_eq!(
-        aggregate(&ctx, &huge),
-        Err(Error::Overflow("z = sum of the responses"))
-    );
+    // z_of_sum: centered representatives, at the boundary q/2, and a sum of the wrong shape.
+    let q = ctx.q();
+    let half = (q / 2) as i64;
+    let mut sum = vec![0u64; n_len];
+    sum[..4].copy_from_slice(&[1, q - 1, q / 2, q / 2 + 1]);
+    assert_eq!(z_of_sum(&ctx, &sum).unwrap()[..4], [1, -1, half, -half]);
+    assert!(shape(z_of_sum(&ctx, &sum[1..])));
+    sum.push(0);
+    assert!(shape(z_of_sum(&ctx, &sum)));
+    sum.pop();
+    sum[0] = q;
+    assert!(matches!(
+        z_of_sum(&ctx, &sum),
+        Err(Error::NonCanonical { .. })
+    ));
     // z_hat: the window of tau digits at its boundary, which contains [-beta, beta].
     let l = &ctx.layout;
     let b = ctx.b() as i64;

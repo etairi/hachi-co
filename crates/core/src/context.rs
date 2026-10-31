@@ -1,7 +1,7 @@
 //! The context of one Hachi-Co instance: the parameters, their [`Layout`], the rings
 //! $\mathcal R\_q$ and $\mathbb Z\_q\[X\]/(X^{2d} + 1)$, the subfield $\mathcal R\_q^H \cong
 //! \mathbb F\_{q^k}$, and the public matrices $\mathbf A, \mathbf B, \mathbf D$ of
-//! $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:263-298).
+//! $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:265-303).
 
 use crate::data::{Matrix, check_len, check_polys};
 use crate::{Error, Layout, Result};
@@ -16,12 +16,12 @@ pub const SETUP_DOMAIN_B: &[u8] = b"hachi-co/setup/B";
 /// The PRG domain of $\mathbf D$ in [`Context::setup`].
 pub const SETUP_DOMAIN_D: &[u8] = b"hachi-co/setup/D";
 
-/// The public matrices of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:283-288), row-major,
+/// The public matrices of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:287-292), row-major,
 /// entries in $\mathcal R\_q$ with canonical residues:
 /// $\mathbf A \in \mathcal R\_q^{n\_A \times \delta 2^m}$,
 /// $\mathbf B \in \mathcal R\_q^{n\_B \times n\_A \delta 2^r}$ and
-/// $\mathbf D \in \mathcal R\_q^{n\_D \times (\delta(2^r + n + n n\_A) + n m\_\rho)}$.
-/// The parameters of the base PCS (lines 289-292) are not part of them: the base PCS is a value
+/// $\mathbf D \in \mathcal R\_q^{n\_D \times (\delta(2^r + n + n n\_A) + n m\_v)}$.
+/// The parameters of the base PCS (lines 294-297) are not part of them: the base PCS is a value
 /// of its own ([`BasePcs`](crate::BasePcs)), set up over the same $q$ and $k$ and passed to Eval
 /// and Verify.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub struct PublicParams {
     /// $\mathbf B$, the outer commitment key: $\mathbf u = \mathbf B \hat{\mathbf t}$.
     pub b: Matrix,
     /// $\mathbf D$, the key of the first message $\mathbf v$ of the ring-to-linear step
-    /// (`5_Building_Blocks.tex`:120).
+    /// (`5_Building_Blocks.tex`:132).
     pub d: Matrix,
 }
 
@@ -77,7 +77,7 @@ impl PublicParams {
 
 /// Everything the parties and the verifier share about one instance (`docs/m1-spec.md`,
 /// `hachi-co-core`): the parameters, the [`Layout`], $\mathcal R\_q$ (`ring`),
-/// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$ (`ring2`, for the quotients of `5_Building_Blocks.tex`:198-200),
+/// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$ (`ring2`, for the quotients of `5_Building_Blocks.tex`:227-229),
 /// the subfield $\mathcal R\_q^H \cong \mathbb F\_{q^K}$ (`sub`) and the public matrices (`pp`).
 ///
 /// Built by [`Context::new`], [`Context::setup`] or (feature `fixtures`) `Fixture::context`. The
@@ -86,14 +86,14 @@ impl PublicParams {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Context<const K: usize> {
-    /// The derived parameters (`6_Collaborative_Hachi.tex`:265-281; `hachi-co-params`).
+    /// The derived parameters (`6_Collaborative_Hachi.tex`:267-285; `hachi-co-params`).
     pub params: Params,
     /// The positions, rows, ownership and hypercube sizes derived from `params`.
     pub layout: Layout,
     /// $\mathcal R\_q = \mathbb Z\_q\[X\]/(X^d + 1)$ (`4_preliminaries.tex`:67).
     pub ring: Ring,
     /// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$, in which the quotient shares
-    /// $\langle \mathbf r \rangle\_p$ live (`5_Building_Blocks.tex`:198-200).
+    /// $\langle \mathbf r \rangle\_p$ live (`5_Building_Blocks.tex`:227-229).
     pub ring2: Ring,
     /// $\mathcal R\_q^H \cong \mathbb F\_{q^K}$ with $\psi$, $\psi^{-1}$, $\mathrm{Tr}\_H$ and $E$
     /// (`4_preliminaries.tex`:73-84; Hachi, Lemma 5 and Theorem 2).
@@ -158,7 +158,7 @@ impl<const K: usize> Context<K> {
         })
     }
 
-    /// $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:283-288) from a 32-byte seed: entry
+    /// $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:287-292) from a 32-byte seed: entry
     /// $(i, j)$ of each matrix is uniform in $\mathcal R\_q$, read from its own stream
     /// [`hachi_co_sampling::matrix::expand`] with the domains [`SETUP_DOMAIN_A`],
     /// [`SETUP_DOMAIN_B`] and [`SETUP_DOMAIN_D`] (index $i \cdot \mathrm{cols} + j$). The Sage
@@ -189,23 +189,23 @@ impl<const K: usize> Context<K> {
         self.sub.field()
     }
 
-    /// The modulus $q$ (`6_Collaborative_Hachi.tex`:272).
+    /// The modulus $q$ (`6_Collaborative_Hachi.tex`:274).
     pub fn q(&self) -> u64 {
         self.ring.modulus()
     }
 
-    /// The decomposition base $b$ (`6_Collaborative_Hachi.tex`:269).
+    /// The decomposition base $b$ (`6_Collaborative_Hachi.tex`:271).
     pub fn b(&self) -> u64 {
         self.params.choices.b
     }
 
     /// The challenge radius $\omega$: $\mathcal C = \lbrace c : \Vert c \Vert\_1 \le \omega
-    /// \rbrace$ (`5_Building_Blocks.tex`:122).
+    /// \rbrace$ (`5_Building_Blocks.tex`:134).
     pub fn omega(&self) -> u64 {
         self.params.omega
     }
 
-    /// The mask width $\gamma = 2nN\beta\_1$ (`6_Collaborative_Hachi.tex`:275): masks are uniform
+    /// The mask width $\gamma = 2nN\beta\_1$ (`6_Collaborative_Hachi.tex`:279): masks are uniform
     /// in $\[-\gamma, \gamma\]^N$. ([`Context::new`] checks that it fits in `i64`; if `params` is
     /// changed afterwards, the value saturates at `u64::MAX`.)
     pub fn gamma(&self) -> u64 {
@@ -213,14 +213,14 @@ impl<const K: usize> Context<K> {
     }
 
     /// $\beta\_1 = 2^{r - \lceil \log n \rceil} \omega b$, the bound on each prover's fold
-    /// (`6_Collaborative_Hachi.tex`:275; `5_Building_Blocks.tex`:129). Saturating as
+    /// (`6_Collaborative_Hachi.tex`:279; `5_Building_Blocks.tex`:141). Saturating as
     /// [`Context::gamma`].
     pub fn beta1(&self) -> u64 {
         u64::try_from(self.params.beta1).unwrap_or(u64::MAX)
     }
 
     /// $\beta = n\gamma$, the bound that prover 1 checks on $\Vert \mathbf z \Vert\_\infty$
-    /// (`6_Collaborative_Hachi.tex`:275; `5_Building_Blocks.tex`:131). Saturating as
+    /// (`6_Collaborative_Hachi.tex`:279; `5_Building_Blocks.tex`:144). Saturating as
     /// [`Context::gamma`].
     pub fn beta(&self) -> u64 {
         u64::try_from(self.params.beta).unwrap_or(u64::MAX)

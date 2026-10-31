@@ -1,7 +1,7 @@
 //! [`ClearPcs`], a reference base PCS (feature `fixtures`): the commitment is the SHA-256 hash
 //! of the committed polynomial or vector, and an opening reveals it.
 
-use crate::base_pcs::{BasePcs, evaluate_multilinear, inner_product};
+use crate::base_pcs::{BasePcs, evaluate_multilinear, evaluate_multilinear_ext, inner_product};
 use crate::{Error, Result};
 use hachi_co_math::{Ext, Fqk};
 use sha2::{Digest, Sha256};
@@ -25,6 +25,9 @@ pub enum ClearPolynomial<const K: usize> {
     Multilinear(Vec<u64>),
     /// A vector over $\mathbb F\_{q^K}$, canonical.
     Vector(Vec<Ext<K>>),
+    /// The $2^\ell$ monomial coefficients of a multilinear polynomial over $\mathbb F\_{q^K}$,
+    /// canonical.
+    MultilinearExt(Vec<Ext<K>>),
 }
 
 impl<const K: usize> ClearPolynomial<K> {
@@ -33,6 +36,7 @@ impl<const K: usize> ClearPolynomial<K> {
         match self {
             Self::Multilinear(_) => (0, "multilinear"),
             Self::Vector(_) => (1, "vector"),
+            Self::MultilinearExt(_) => (2, "multilinear-ext"),
         }
     }
 
@@ -40,7 +44,7 @@ impl<const K: usize> ClearPolynomial<K> {
     fn len(&self) -> usize {
         match self {
             Self::Multilinear(c) => c.len(),
-            Self::Vector(v) => v.len(),
+            Self::Vector(v) | Self::MultilinearExt(v) => v.len(),
         }
     }
 
@@ -48,7 +52,7 @@ impl<const K: usize> ClearPolynomial<K> {
     fn residues(&self) -> Box<dyn Iterator<Item = u64> + '_> {
         match self {
             Self::Multilinear(c) => Box::new(c.iter().copied()),
-            Self::Vector(v) => Box::new(v.iter().flat_map(|x| x.0)),
+            Self::Vector(v) | Self::MultilinearExt(v) => Box::new(v.iter().flat_map(|x| x.0)),
         }
     }
 }
@@ -73,7 +77,7 @@ pub struct ClearOpening<const K: usize> {
 ///
 /// - **Commit.** The commitment is the SHA-256 hash of `LE64(len(D)) ‖ D ‖ LE64(len(kind)) ‖
 ///   kind ‖ LE64(q) ‖ LE64(K) ‖ LE64(entries) ‖ residues`, with the domain $D$ =
-///   [`CLEAR_PCS_DOMAIN`], the kind `multilinear` or `vector`, the number of entries
+///   [`CLEAR_PCS_DOMAIN`], the kind `multilinear`, `vector` or `multilinear-ext`, the number of entries
 ///   (coefficients or field elements) and the residues as `LE64`, entry after entry (a field
 ///   element is its $K$ coordinates). The inputs are reduced modulo $q$ first.
 /// - **Open.** The proof is the whole committed polynomial or vector, with the context; the
@@ -94,8 +98,10 @@ pub struct ClearOpening<const K: usize> {
 /// proof.
 ///
 /// **Words.** A commitment is the 32 bytes of the hash as 4 little-endian words. A proof is the
-/// context as 4 little-endian words, the kind (0 multilinear, 1 vector), the number of entries,
-/// and the residues ([`ClearPcs::multilinear_proof_words`], [`ClearPcs::vector_proof_words`]).
+/// context as 4 little-endian words, the kind (0 multilinear, 1 vector, 2 multilinear over
+/// $\mathbb F\_{q^K}$), the number of entries, and the residues
+/// ([`ClearPcs::multilinear_proof_words`], [`ClearPcs::vector_proof_words`],
+/// [`ClearPcs::multilinear_ext_proof_words`]).
 /// Decoding accepts exactly these encodings; the residues are checked against $q$ by the
 /// verifier (decoding does not know $q$).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,6 +192,15 @@ impl<const K: usize> ClearPcs<K> {
         len.checked_mul(K)?.checked_add(PROOF_HEADER_WORDS)
     }
 
+    /// The number of words of an opening of a multilinear polynomial over $\mathbb F\_{q^K}$ in
+    /// `num_vars` variables: $6 + K 2^{\mathrm{num\\_vars}}$ (`None` on overflow).
+    pub fn multilinear_ext_proof_words(num_vars: usize) -> Option<usize> {
+        u32::try_from(num_vars)
+            .ok()
+            .and_then(|e| 1usize.checked_shl(e))
+            .and_then(Self::vector_proof_words)
+    }
+
     /// The checks every opening shares: the context, canonical residues, and the hash.
     fn check_opening(
         &self,
@@ -255,6 +270,27 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         Ok((ClearCommitment(digest(self.field.modulus(), &poly)), poly))
     }
 
+    /// The hash of the coefficients, reduced; the scheme ignores the seed.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless there are $2^\ell$ coefficients for some $\ell \ge 0$.
+    fn commit_multilinear_ext(
+        &self,
+        coeffs: &[Ext<K>],
+        _seed: &[u8; 32],
+    ) -> Result<(ClearCommitment, ClearPolynomial<K>)> {
+        if !coeffs.len().is_power_of_two() {
+            return Err(Error::Shape {
+                what: "multilinear coefficients (2^l entries)",
+                expected: coeffs.len().checked_next_power_of_two().unwrap_or(0),
+                actual: coeffs.len(),
+            });
+        }
+        let poly =
+            ClearPolynomial::MultilinearExt(coeffs.iter().map(|c| self.field.reduce(c)).collect());
+        Ok((ClearCommitment(digest(self.field.modulus(), &poly)), poly))
+    }
+
     /// The hash of the vector reduced modulo $q$ (any length); the seed is ignored.
     fn commit_vector(
         &self,
@@ -281,6 +317,31 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
             ));
         };
         let value = evaluate_multilinear(&self.field, coeffs, point)?;
+        Ok((
+            value,
+            ClearOpening {
+                context: *context,
+                polynomial: st.clone(),
+            },
+        ))
+    }
+
+    /// # Errors
+    /// [`Error::BasePcs`] for a state of another kind; [`Error::Shape`] unless the point has
+    /// $\ell$ coordinates for $2^\ell$ coefficients.
+    fn prove_multilinear_ext(
+        &self,
+        st: &ClearPolynomial<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        _seed: &[u8; 32],
+    ) -> Result<(Ext<K>, ClearOpening<K>)> {
+        let ClearPolynomial::MultilinearExt(coeffs) = st else {
+            return Err(Error::BasePcs(
+                "an opening over the field of another kind of commitment".into(),
+            ));
+        };
+        let value = evaluate_multilinear_ext(&self.field, coeffs, point)?;
         Ok((
             value,
             ClearOpening {
@@ -342,6 +403,39 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
         }
         self.check_opening(com, proof, context)?;
         let got = evaluate_multilinear(&self.field, coeffs, point).map_err(|e| e.to_string())?;
+        self.check_value(&got, value)
+    }
+
+    fn verify_multilinear_ext(
+        &self,
+        com: &ClearCommitment,
+        num_vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &ClearOpening<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), String> {
+        let ClearPolynomial::MultilinearExt(coeffs) = &proof.polynomial else {
+            return Err("the opening is not of a multilinear polynomial over the field".into());
+        };
+        if point.len() != num_vars {
+            return Err(format!(
+                "the point has {} coordinates for a polynomial in {num_vars} variables",
+                point.len()
+            ));
+        }
+        let size = u32::try_from(num_vars)
+            .ok()
+            .and_then(|e| 1usize.checked_shl(e));
+        if size != Some(coeffs.len()) {
+            return Err(format!(
+                "the opening has {} coefficients for a polynomial in {num_vars} variables",
+                coeffs.len()
+            ));
+        }
+        self.check_opening(com, proof, context)?;
+        let got =
+            evaluate_multilinear_ext(&self.field, coeffs, point).map_err(|e| e.to_string())?;
         self.check_value(&got, value)
     }
 
@@ -427,6 +521,12 @@ impl<const K: usize> BasePcs<K> for ClearPcs<K> {
             1 if K > 0 => {
                 entries(K)?;
                 ClearPolynomial::Vector(data.as_chunks::<K>().0.iter().map(|c| Ext(*c)).collect())
+            }
+            2 if K > 0 => {
+                entries(K)?;
+                ClearPolynomial::MultilinearExt(
+                    data.as_chunks::<K>().0.iter().map(|c| Ext(*c)).collect(),
+                )
             }
             other => {
                 return Err(Error::BasePcs(format!(

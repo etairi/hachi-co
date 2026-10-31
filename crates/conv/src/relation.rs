@@ -1,6 +1,6 @@
 //! A checker for the reduction $\mathcal R\_{\mathsf{eval}, \mathbb F\_{q^k}} \to
 //! \mathcal R\_{\mathsf{eval}, \mathcal R\_q}$ of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:
-//! 1-24, 89-169), on the reconstructed witnesses; for tests.
+//! 35-56, 118-198), on the reconstructed witnesses; for tests.
 
 use crate::error::{Error, Result, check_len, pow2};
 use crate::public::public_vectors;
@@ -13,14 +13,14 @@ use hachi_co_math::{Ext, Poly};
 pub struct ConvRelation {
     /// The input statement: $f(\mathbf x) = y$ for $\mathbf f = \sum\_p \langle \mathbf f
     /// \rangle\_p$, i.e. $((\mathbf x, y), \langle \mathbf f \rangle) \in
-    /// \mathcal R\_{\mathsf{eval}, \mathbb F\_{q^k}}$ (`field-to-ring-rok.tex`:6-13).
+    /// \mathcal R\_{\mathsf{eval}, \mathbb F\_{q^k}}$ (`field-to-ring-rok.tex`:35-42).
     pub input: bool,
     /// The output statement: $u = f'(\mathbf x') = \sum\_t d\_t f'\_t$ over all blocks, i.e.
     /// $((\mathbf x', u), \langle \mathbf f' \rangle) \in \mathcal R\_{\mathsf{eval},
-    /// \mathcal R\_q}$ (`field-to-ring-rok.tex`:16-23).
+    /// \mathcal R\_q}$ (`field-to-ring-rok.tex`:45-52).
     pub output: bool,
     /// The link that the verifier's check enforces: $E(u) = f(\mathbf x)$, read in
-    /// $\mathbb F\_{q^k}$ (`field-to-ring-rok.tex`:160-164, Eq. (conv)).
+    /// $\mathbb F\_{q^k}$ (`field-to-ring-rok.tex`:189-193, Eq. (conv)).
     pub link: bool,
 }
 
@@ -61,7 +61,7 @@ pub fn evaluate<const K: usize>(ctx: &Context<K>, f: &[Ext<K>], x: &[Ext<K>]) ->
 
 /// $\mathbf f' \in \mathcal R\_q^{2^{\ell'}}$ assembled from the parties' blocks (block $i$ at
 /// $\[i 2^m, (i+1) 2^m)$), with zeros for the blocks that nobody holds:
-/// $\mathbf f' = \sum\_p \lbrace \mathbf f' \rbrace\_p$ (`field-to-ring-rok.tex`:85).
+/// $\mathbf f' = \sum\_p \lbrace \mathbf f' \rbrace\_p$ (`field-to-ring-rok.tex`:114).
 ///
 /// # Errors
 /// [`Error::Shape`] unless there are $n$ states; [`Error::InvalidParty`] unless `states[p - 1]`

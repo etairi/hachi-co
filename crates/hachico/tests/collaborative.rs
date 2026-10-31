@@ -33,7 +33,7 @@ use hachi_co_core::{Context, Ext, FsChallenger, PartyState, Poly, PrgRandomness}
 use hachi_co_mpc::{Comm, Fault, LABEL_SETUP, Loopback, MemoryConfig, Stats, ZeroSharing};
 use hachi_co_params::presets::toy_choices;
 use hachi_co_params::{Choices, QChoice, derive};
-use hachi_co_r2l::{COMM_ABORT, COMM_FAH_D, COMM_GATHER_Z, COMM_PROVER1, response_len};
+use hachi_co_r2l::{COMM_ABORT, COMM_FAH_D, COMM_FAH_Z, COMM_PROVER1, response_len};
 use hachi_co_sumcheck::{
     ALL_GATHER_COMMITMENTS, ALL_GATHER_FINAL, ALL_GATHER_OPENINGS, ALL_GATHER_SUMS, FAH_ROUND,
 };
@@ -340,14 +340,7 @@ fn expected_bytes_sent(
         (LABEL_FAH_E, 8 * peers * fah * d),
         (COMM_FAH_D, 8 * peers * fah * l.n_d as u64 * d * attempts),
         (COMM_ABORT, 8 * peers * attempts),
-        (
-            COMM_GATHER_Z,
-            if p == 1 {
-                0
-            } else {
-                8 * response_len(ctx) as u64
-            },
-        ),
+        (COMM_FAH_Z, 8 * peers * fah * response_len(ctx) as u64),
         (COMM_PROVER1, 8 * peers),
         (ALL_GATHER_SUMS, 8 * peers * 2 * k),
         (ALL_GATHER_COMMITMENTS, 8 * peers * commitments),

@@ -1,6 +1,6 @@
 //! The units of $\mathcal R\_q = \mathbb Z\_q\[X\]/(X^d + 1)$: the invertibility test of Open's
 //! slack space $\mathcal Z = \lbrace (c\_1, \dots, c\_{2^r}) \in (\mathcal R\_q^\times)^{2^r} :
-//! \Vert c\_i \Vert\_1 \le \bar\omega \rbrace$ (`6_Collaborative_Hachi.tex`:393-395; the oracle's
+//! \Vert c\_i \Vert\_1 \le \bar\omega \rbrace$ (`6_Collaborative_Hachi.tex`:403-405; the oracle's
 //! `SageRing.is_unit`, `ref/README.md`, choice 18). `hachi-co-math` has no such test.
 //!
 //! An element $c \in \mathcal R\_q$ is a unit iff $\gcd(c, X^d + 1) = 1$ in $\mathbb F\_q\[X\]$
@@ -10,7 +10,7 @@
 //!   prime $q$, in $O(d^2)$ operations.
 //! - [`is_unit`] uses the factorization $X^d + 1 = (X^{d/2} - r)(X^{d/2} + r)$ with
 //!   $r^2 = -1$ into two irreducible factors, valid for $q \equiv 5 \pmod 8$ (the moduli of the
-//!   draft, `6_Collaborative_Hachi.tex`:272): by the Chinese remainder theorem $c$ is a unit iff
+//!   draft, `6_Collaborative_Hachi.tex`:274): by the Chinese remainder theorem $c$ is a unit iff
 //!   it is nonzero modulo both factors. Writing $c = c\_{\mathrm{lo}} + X^{d/2}
 //!   c\_{\mathrm{hi}}$ with $\deg c\_{\mathrm{lo}}, \deg c\_{\mathrm{hi}} \lt d/2$, the residues are
 //!   $c\_{\mathrm{lo}} \pm r\, c\_{\mathrm{hi}}$, so the test takes $O(d)$ operations. For other

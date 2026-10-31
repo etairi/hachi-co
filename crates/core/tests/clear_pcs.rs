@@ -8,7 +8,9 @@
 //! Seeds: the splitmix64 streams below (seeds in each test).
 #![cfg(feature = "fixtures")]
 
-use hachi_co_core::base_pcs::{evaluate_multilinear, inner_product, mobius};
+use hachi_co_core::base_pcs::{
+    evaluate_multilinear, evaluate_multilinear_ext, inner_product, mobius, mobius_ext,
+};
 use hachi_co_core::{
     BasePcs, ClearCommitment, ClearOpening, ClearPcs, ClearPolynomial, Error, Ext, Fqk,
 };
@@ -116,6 +118,77 @@ fn honest_multilinear_openings_verify() {
         pcs.verify_multilinear(&com, ell, &point, &unreduced, &proof, &context)
             .unwrap();
     }
+}
+
+/// An opening of a polynomial over the field: hypercube values through the Möbius transform,
+/// checked against the definition, against [`evaluate_multilinear_ext`], and against the lift of
+/// a polynomial over $\mathbb Z\_q$; every change of the statement or the proof is refused, and
+/// the kinds of the openings are not interchangeable.
+#[test]
+fn honest_field_multilinear_openings_verify() {
+    let pcs = Pcs::new(Q).unwrap();
+    let field = pcs.field().clone();
+    let mut rng = Stream(0xc1ea_0007);
+    for ell in [0usize, 1, 3, 6] {
+        let values = rng.exts(1 << ell);
+        let mut coeffs = values.clone();
+        mobius_ext(&field, &mut coeffs).unwrap();
+        let (com, st) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let point = rng.exts(ell);
+        let context = rng.context();
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&st, &point, &context, &SEED)
+            .unwrap();
+        let by_definition = values.iter().enumerate().fold(field.zero(), |acc, (x, v)| {
+            let eq = (0..ell).fold(field.one(), |e, j| {
+                let bit = (x >> (ell - 1 - j)) & 1 == 1;
+                let a = &point[j];
+                field.mul(&e, &if bit { *a } else { field.sub(&field.one(), a) })
+            });
+            field.add(&acc, &field.mul(&eq, v))
+        });
+        assert_eq!(value, by_definition, "l = {ell}");
+        assert_eq!(
+            value,
+            evaluate_multilinear_ext(&field, &coeffs, &point).unwrap()
+        );
+        pcs.verify_multilinear_ext(&com, ell, &point, &value, &proof, &context)
+            .unwrap();
+        let words = pcs.proof_to_words(&proof);
+        assert_eq!(Some(words.len()), Pcs::multilinear_ext_proof_words(ell));
+        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof);
+        // False statements, and the other kinds of openings.
+        let wrong = field.add(&value, &field.one());
+        assert!(
+            pcs.verify_multilinear_ext(&com, ell, &point, &wrong, &proof, &context)
+                .is_err()
+        );
+        let mut ctx = context;
+        ctx[0] ^= 1;
+        assert!(
+            pcs.verify_multilinear_ext(&com, ell, &point, &value, &proof, &ctx)
+                .is_err()
+        );
+        assert!(
+            pcs.verify_multilinear(&com, ell, &point, &value, &proof, &context)
+                .is_err()
+        );
+        assert!(
+            pcs.verify_inner_product(&com, 1 << ell, &point, &value, &proof, &context)
+                .is_err()
+        );
+        assert!(pcs.prove_multilinear(&st, &point, &context, &SEED).is_err());
+    }
+    // The lift of a polynomial over Z_q has the same evaluations.
+    let values = rng.residues(16);
+    let point = rng.exts(4);
+    let mut coeffs = values.clone();
+    mobius(field.zq(), &mut coeffs).unwrap();
+    let lifted: Vec<Ext<K>> = coeffs.iter().map(|c| field.from_base(*c)).collect();
+    assert_eq!(
+        evaluate_multilinear_ext(&field, &lifted, &point).unwrap(),
+        evaluate_multilinear(&field, &coeffs, &point).unwrap()
+    );
 }
 
 #[test]
@@ -351,7 +424,7 @@ fn malformed_words_are_errors() {
         longer.push(0);
         assert!(pcs.proof_from_words(&longer).is_err());
         // The kind and the count.
-        for kind in [2u64, 3, u64::MAX] {
+        for kind in [3u64, 4, u64::MAX] {
             let mut w = words.clone();
             w[4] = kind;
             assert!(pcs.proof_from_words(&w).is_err());

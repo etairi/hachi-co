@@ -6,14 +6,14 @@
 //!
 //! | Item | Contents | Draft |
 //! |---|---|---|
-//! | [`Context`], [`PublicParams`] | parameters, $\mathcal R\_q$, $\mathbb Z\_q\[X\]/(X^{2d}+1)$, $\mathcal R\_q^H \cong \mathbb F\_{q^k}$, $\mathbf A, \mathbf B, \mathbf D$ | `6_Collaborative_Hachi.tex`:263-298 |
-//! | [`Layout`] | positions in $\mathbf z'$, rows of $\mathbf M$, block owners, $S\_p$, hypercube sizes | `5_Building_Blocks.tex`:157-172, 197; `6_Collaborative_Hachi.tex`:278-281, 406 |
-//! | [`build_m`], [`build_y`] | the linear relation $\mathbf M \mathbf z' = \mathbf y$ | `5_Building_Blocks.tex`:154-182 |
-//! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:390; `field-to-ring-rok.tex`:111-122; `5_Building_Blocks.tex`:164-179, 209-214, 243-250 |
-//! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:110, 209-214 |
-//! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir, and the contexts of the base-PCS openings | `5_Building_Blocks.tex`:122-126, 243-250, 312, 314-326 |
-//! | [`BasePcs`], [`base_pcs`] | the base PCS of the sumcheck (commitments and openings of $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$), the Möbius transform, evaluations | `5_Building_Blocks.tex`:209-241, 314-333 |
-//! | [`short`], [`wire`] | exact short-polynomial products, norms and centered representatives; flat encodings for [`hachi_co_mpc::Comm`] | `4_preliminaries.tex`:86; `5_Building_Blocks.tex`:127-133 |
+//! | [`Context`], [`PublicParams`] | parameters, $\mathcal R\_q$, $\mathbb Z\_q\[X\]/(X^{2d}+1)$, $\mathcal R\_q^H \cong \mathbb F\_{q^k}$, $\mathbf A, \mathbf B, \mathbf D$ | `6_Collaborative_Hachi.tex`:265-303 |
+//! | [`Layout`] | positions in $\mathbf z'$, rows of $\mathbf M$, block owners, $S\_p$, hypercube sizes | `5_Building_Blocks.tex`:170-186, 226; `6_Collaborative_Hachi.tex`:282-285, 421 |
+//! | [`build_m`], [`build_y`] | the linear relation $\mathbf M \mathbf z' = \mathbf y$ | `5_Building_Blocks.tex`:167-196 |
+//! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:400; `field-to-ring-rok.tex`:140-151; `5_Building_Blocks.tex`:177-193, 238-243, 275-282 |
+//! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:122, 238-243 |
+//! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir, and the contexts of the base-PCS openings | `5_Building_Blocks.tex`:134-138, 275-282, 344, 346-358 |
+//! | [`BasePcs`], [`base_pcs`] | the base PCS of the sumcheck (commitments and openings of $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$), the Möbius transform, evaluations | `5_Building_Blocks.tex`:238-273, 346-365 |
+//! | [`short`], [`wire`] | exact short-polynomial products, norms and centered representatives; flat encodings for [`hachi_co_mpc::Comm`] | `4_preliminaries.tex`:86; `5_Building_Blocks.tex`:139-146 |
 //!
 //! The inter-block types are plain structs with public fields; each has a `validate` method that
 //! checks its shape (lengths, and $d$ coefficients per polynomial) against a [`Layout`], not its
@@ -46,7 +46,7 @@
 //! the canonical-residue check of [`PublicParams::validate`]; the hash, word formats and context
 //! check of `ClearPcs`.
 //!
-//! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit `625ced1`),
+//! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit `8834c9f`),
 //! cited by file and line; "the oracle" is the Sage reference in `ref/`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -84,8 +84,8 @@ pub use error::{Error, Result};
 pub use layout::{Layout, NamedBlock};
 pub use linear::{build_m, build_y};
 pub use randomness::{
-    DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE, DOMAIN_RHO,
-    PartyRandomness, PrgRandomness,
+    DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE,
+    DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, PartyRandomness, PrgRandomness,
 };
 
 #[cfg(feature = "fixtures")]

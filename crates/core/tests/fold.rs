@@ -1,7 +1,7 @@
 //! The shared helpers and data types on the oracle's data: the commit states (`PartyState`), each
-//! prover's fold of 5_Building_Blocks.tex:128 computed with `short::negacyclic_mul` on the
+//! prover's fold of 5_Building_Blocks.tex:140 computed with `short::negacyclic_mul` on the
 //! centered digits, its norm, Rej's decision, the responses z_i and their sum z, and the flat
-//! encoding of a response for the gather.
+//! encoding of a response.
 #![cfg(feature = "fixtures")]
 
 use hachi_co_core::wire::{flatten_rows, unflatten_rows};
@@ -37,6 +37,7 @@ fn state(fx: &Fixture, ctx: &Context<K>, p: usize) -> PartyState<K> {
         party: p,
         share: fx.exts(&format!("/commit/f_shares/{}", p - 1)).unwrap(),
         blocks,
+        rho_u: vec![ctx.ring.zero(); l.m_u],
     }
 }
 
@@ -83,7 +84,7 @@ fn folds_norms_rej_and_responses_match_every_fixture() {
                     fx.u64(&format!("{prefix}/fold_norm")).unwrap(),
                     "{name}"
                 );
-                assert!(fold_norm <= beta1, "the bound of 5_Building_Blocks.tex:129");
+                assert!(fold_norm <= beta1, "the bound of 5_Building_Blocks.tex:141");
                 let mut rng = ReplayRandomness::new(&fx, p).unwrap();
                 let mask =
                     PartyRandomness::<K>::mask(&mut rng, a as u64, gamma, l.width_a * l.d).unwrap();

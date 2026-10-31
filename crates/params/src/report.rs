@@ -29,22 +29,22 @@ pub enum Severity {
 /// The conditions the report checks, in the order of `docs/m0-spec.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum ConstraintId {
-    /// $q$ is prime (6_Collaborative_Hachi.tex:272). Fatal.
+    /// $q$ is prime (6_Collaborative_Hachi.tex:274). Fatal.
     QPrime,
-    /// $q \equiv 5 \pmod 8$ (6_Collaborative_Hachi.tex:272), needed for
+    /// $q \equiv 5 \pmod 8$ (6_Collaborative_Hachi.tex:274), needed for
     /// $\mathcal R_q^H \cong \mathbb F_{q^k}$ (Hachi, Lemma 5). Fatal.
     QFiveMod8,
-    /// $q > 1 + 2^{\ell+3} n \omega^2 b$ (6_Collaborative_Hachi.tex:272; the draft does not
+    /// $q > 1 + 2^{\ell+3} n \omega^2 b$ (6_Collaborative_Hachi.tex:274; the draft does not
     /// derive it). Fatal.
     QAboveRangeGuard,
-    /// $q > 4\bar\omega\bar\beta$ (6_Collaborative_Hachi.tex:272): otherwise the
-    /// $\mathsf{MSIS}$ bound $2\bar\omega\bar\beta$ of relaxed binding (line 563) is at least
+    /// $q > 4\bar\omega\bar\beta$ (6_Collaborative_Hachi.tex:274): otherwise the
+    /// $\mathsf{MSIS}$ bound $2\bar\omega\bar\beta$ of relaxed binding (line 581) is at least
     /// $q/2$ and the instance is trivially solvable. Fatal.
     QAboveBindingGuard,
     /// $2\beta < q$, so that every $z$ with $\lVert z \rVert_\infty \le \beta$ has a unique
     /// centered representative (`docs/m0-spec.md`, "Choosing q"). Fatal.
     CenteredResponses,
-    /// $1 \le \alpha - \kappa \le \ell$ (6_Collaborative_Hachi.tex:273). Only the lower bound
+    /// $2 \le \alpha - \kappa \le \ell$ (6_Collaborative_Hachi.tex:275). Only the lower bound
     /// can fail in a report: $\alpha - \kappa > \ell$ makes $m < 0$, so
     /// [`derive`](fn@crate::derive) returns [`Error::NegativeExponent`](crate::Error::NegativeExponent).
     /// Fatal.
@@ -53,16 +53,20 @@ pub enum ConstraintId {
     /// $H = \langle\sigma_{-1}, \sigma_{4k+1}\rangle$; for powers of two it is equivalent to
     /// $\alpha - \kappa \ge 1$. Fatal.
     KDividesHalfD,
-    /// $b \ge 3$ (6_Collaborative_Hachi.tex:269). Fatal.
+    /// $b \ge 3$ (6_Collaborative_Hachi.tex:271). Fatal.
     BAtLeast3,
-    /// $m_\rho > n_D$ (6_Collaborative_Hachi.tex:269), needed for the $\mathsf{MLWE}$ hiding
-    /// argument with secret dimension $m_\rho - n_D$ (5_Building_Blocks.tex:193). Fatal.
-    MRhoAboveND,
+    /// $m_u > n_B$ (6_Collaborative_Hachi.tex:278), needed for the $\mathsf{MLWE}$ argument with
+    /// secret dimension $m_u - n_B$ that hides the commitment (t-hiding.tex:20-26). Fatal.
+    MUAboveNB,
+    /// $m_v > n_D$ (6_Collaborative_Hachi.tex:278), needed for the $\mathsf{MLWE}$ argument with
+    /// secret dimension $m_v - n_D$ that hides the first message (5_Building_Blocks.tex:207).
+    /// Fatal.
+    MVAboveND,
     /// $q < 2^{63}$: residues are `u64` with 128-bit products (`docs/m0-spec.md`,
     /// "Modulus"). Fatal.
     QBelow2Pow63,
-    /// $M \le e^{1/n}$ (6_Collaborative_Hachi.tex:275), which gives the completeness bound
-    /// $M^{-n} \ge 1/e$ (5_Building_Blocks.tex:193). Always true for the cascade's $\gamma$
+    /// $M \le e^{1/n}$ (6_Collaborative_Hachi.tex:279), which gives the completeness bound
+    /// $M^{-n} \ge 1/e$ (5_Building_Blocks.tex:207). Always true for the cascade's $\gamma$
     /// ([`rules::rejection_constant_within`]). Warning.
     RejectionConstant,
     /// $\mathbf J^{-1}$ represents $\beta$ with $\tau$ digits:
@@ -77,7 +81,7 @@ pub enum ConstraintId {
 
 impl ConstraintId {
     /// Every condition, in report order.
-    pub const ALL: [ConstraintId; 13] = [
+    pub const ALL: [ConstraintId; 14] = [
         ConstraintId::QPrime,
         ConstraintId::QFiveMod8,
         ConstraintId::QAboveRangeGuard,
@@ -86,7 +90,8 @@ impl ConstraintId {
         ConstraintId::AlphaMinusKappa,
         ConstraintId::KDividesHalfD,
         ConstraintId::BAtLeast3,
-        ConstraintId::MRhoAboveND,
+        ConstraintId::MUAboveNB,
+        ConstraintId::MVAboveND,
         ConstraintId::QBelow2Pow63,
         ConstraintId::RejectionConstant,
         ConstraintId::JInvRepresentable,
@@ -109,10 +114,11 @@ impl ConstraintId {
             ConstraintId::QAboveRangeGuard => "q > 1 + 2^(l+3) n omega^2 b",
             ConstraintId::QAboveBindingGuard => "q > 4 omega_bar beta_bar",
             ConstraintId::CenteredResponses => "2 beta < q",
-            ConstraintId::AlphaMinusKappa => "1 <= alpha - kappa <= l",
+            ConstraintId::AlphaMinusKappa => "2 <= alpha - kappa <= l",
             ConstraintId::KDividesHalfD => "k | d/2",
             ConstraintId::BAtLeast3 => "b >= 3",
-            ConstraintId::MRhoAboveND => "m_rho > n_D",
+            ConstraintId::MUAboveNB => "m_u > n_B",
+            ConstraintId::MVAboveND => "m_v > n_D",
             ConstraintId::QBelow2Pow63 => "q < 2^63",
             ConstraintId::RejectionConstant => "M <= e^(1/n)",
             ConstraintId::JInvRepresentable => "(ceil(b/2) - 1)(b^tau - 1)/(b - 1) >= beta",
@@ -126,13 +132,14 @@ impl ConstraintId {
             ConstraintId::QPrime
             | ConstraintId::QFiveMod8
             | ConstraintId::QAboveRangeGuard
-            | ConstraintId::QAboveBindingGuard => "6_Collaborative_Hachi.tex:272",
+            | ConstraintId::QAboveBindingGuard => "6_Collaborative_Hachi.tex:274",
             ConstraintId::CenteredResponses => "docs/m0-spec.md (unique centered responses)",
-            ConstraintId::AlphaMinusKappa => "6_Collaborative_Hachi.tex:273",
+            ConstraintId::AlphaMinusKappa => "6_Collaborative_Hachi.tex:275",
             ConstraintId::KDividesHalfD => "4_preliminaries.tex:73",
-            ConstraintId::BAtLeast3 | ConstraintId::MRhoAboveND => "6_Collaborative_Hachi.tex:269",
+            ConstraintId::BAtLeast3 => "6_Collaborative_Hachi.tex:271",
+            ConstraintId::MUAboveNB | ConstraintId::MVAboveND => "6_Collaborative_Hachi.tex:278",
             ConstraintId::QBelow2Pow63 => "docs/m0-spec.md (64-bit residues)",
-            ConstraintId::RejectionConstant => "6_Collaborative_Hachi.tex:275",
+            ConstraintId::RejectionConstant => "6_Collaborative_Hachi.tex:279",
             ConstraintId::JInvRepresentable => {
                 "4_preliminaries.tex:100; docs/m0-spec.md (tau rule)"
             }
@@ -216,7 +223,7 @@ impl Report {
         );
         push(
             ConstraintId::AlphaMinusKappa,
-            alpha_minus_kappa >= 1 && alpha_minus_kappa <= i64::from(c.ell),
+            alpha_minus_kappa >= 2 && alpha_minus_kappa <= i64::from(c.ell),
             format!("alpha - kappa = {alpha_minus_kappa}, l = {}", c.ell),
         );
         push(
@@ -226,9 +233,14 @@ impl Report {
         );
         push(ConstraintId::BAtLeast3, c.b >= 3, format!("b = {}", c.b));
         push(
-            ConstraintId::MRhoAboveND,
-            c.m_rho > c.n_d,
-            format!("m_rho = {}, n_D = {}", c.m_rho, c.n_d),
+            ConstraintId::MUAboveNB,
+            c.m_u > c.n_b,
+            format!("m_u = {}, n_B = {}", c.m_u, c.n_b),
+        );
+        push(
+            ConstraintId::MVAboveND,
+            c.m_v > c.n_d,
+            format!("m_v = {}, n_D = {}", c.m_v, c.n_d),
         );
         push(
             ConstraintId::QBelow2Pow63,

@@ -50,7 +50,19 @@ fn replay_randomness_serves_the_recorded_values() {
                 shares2[fx.n() - 1][0],
                 f.add(&shares[fx.n() - 1][0], &f.one())
             );
-            // Masks and rho of every attempt, flattened (element i, coefficient j at i d + j).
+            // rho^u, and the pad.
+            let rho_u = PartyRandomness::<K>::rho_u(&mut rng, ctx.b(), l.m_u * l.d);
+            let key = format!("/commit/rho_u/{}", p - 1);
+            assert_eq!(rho_u.unwrap(), fx.ints(&key).unwrap());
+            let rho_w = PartyRandomness::<K>::rho_w(&mut rng, f).unwrap();
+            let key = format!("/sumcheck/rho_w/{}", p - 1);
+            assert_eq!(rho_w, fx.ext::<K>(&key).unwrap());
+            assert!(replay_err(PartyRandomness::<K>::rho_w_residues(
+                &mut rng,
+                fx.q(),
+                2 * K
+            )));
+            // Masks and rho^v of every attempt, flattened (element i, coefficient j at i d + j).
             for a in 0..attempts {
                 let prefix = format!("/ring_to_linear/attempts/{a}/provers/{}", p - 1);
                 let mask =
@@ -58,8 +70,8 @@ fn replay_randomness_serves_the_recorded_values() {
                 assert_eq!(mask.unwrap(), fx.ints(&format!("{prefix}/mask")).unwrap());
                 let rows = fx.int_rows(&format!("{prefix}/mask")).unwrap();
                 assert_eq!((rows.len(), rows[0].len()), (l.width_a, l.d));
-                let rho = PartyRandomness::<K>::rho(&mut rng, a as u64, ctx.b(), l.m_rho * l.d);
-                assert_eq!(rho.unwrap(), fx.ints(&format!("{prefix}/rho")).unwrap());
+                let rho = PartyRandomness::<K>::rho_v(&mut rng, a as u64, ctx.b(), l.m_v * l.d);
+                assert_eq!(rho.unwrap(), fx.ints(&format!("{prefix}/rho_v")).unwrap());
             }
             // Blinders.
             for (kind, key) in [(BlinderKind::G0, "g0"), (BlinderKind::G1, "g1")] {
@@ -112,23 +124,33 @@ fn replay_randomness_refuses_mismatched_requests() {
         ctx.gamma(),
         n_mask - 1
     )));
-    assert!(replay_err(PartyRandomness::<K>::rho(
+    assert!(replay_err(PartyRandomness::<K>::rho_v(
         &mut rng,
         0,
         ctx.b() + 1,
-        l.m_rho * l.d
+        l.m_v * l.d
     )));
-    assert!(replay_err(PartyRandomness::<K>::rho(
+    assert!(replay_err(PartyRandomness::<K>::rho_v(
         &mut rng,
         0,
         ctx.b(),
-        l.m_rho * l.d + 1
+        l.m_v * l.d + 1
     )));
-    assert!(replay_err(PartyRandomness::<K>::rho(
+    assert!(replay_err(PartyRandomness::<K>::rho_v(
         &mut rng,
         attempts,
         ctx.b(),
-        l.m_rho * l.d
+        l.m_v * l.d
+    )));
+    assert!(replay_err(PartyRandomness::<K>::rho_u(
+        &mut rng,
+        ctx.b() + 1,
+        l.m_u * l.d
+    )));
+    assert!(replay_err(PartyRandomness::<K>::rho_u(
+        &mut rng,
+        ctx.b(),
+        l.m_u * l.d + 1
     )));
     let input = fx.exts::<K>("/input/f_init_shares/1").unwrap();
     assert!(replay_err(rng.reshare(f, &input, 2)));

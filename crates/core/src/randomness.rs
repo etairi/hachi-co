@@ -8,13 +8,21 @@ use hachi_co_sampling::{ShakePrg, rej, uniform};
 use rand::Rng;
 use std::collections::BTreeSet;
 
+#[cfg(doc)]
+use hachi_co_params::PadRule;
+
 /// The PRG domain of the resharing in Commit ([`PartyRandomness::reshare`]; index 0).
 pub const DOMAIN_RESHARE: &str = "hachi-co/commit/reshare";
 /// The PRG domain of the masks $\mathbf r\_i$ ([`PartyRandomness::mask`]; index = attempt).
 pub const DOMAIN_MASK: &str = "hachi-co/r2l/mask";
-/// The PRG domain of the commitment randomness $\boldsymbol\rho\_i$ ([`PartyRandomness::rho`];
-/// index = attempt).
-pub const DOMAIN_RHO: &str = "hachi-co/r2l/rho";
+/// The PRG domain of the commitment's randomness $\boldsymbol\rho^u\_i$
+/// ([`PartyRandomness::rho_u`]; index 0).
+pub const DOMAIN_RHO_U: &str = "hachi-co/commit/rho-u";
+/// The PRG domain of the first message's randomness $\boldsymbol\rho^v\_i$
+/// ([`PartyRandomness::rho_v`]; index = attempt).
+pub const DOMAIN_RHO_V: &str = "hachi-co/r2l/rho-v";
+/// The PRG domain of the witness pad $\rho^w\_i$ ([`PartyRandomness::rho_w`]; index 0).
+pub const DOMAIN_RHO_W: &str = "hachi-co/sumcheck/rho-w";
 /// The PRG domain of the blinder $g\_{0,i}$ ([`PartyRandomness::blinder`]; index 0).
 pub const DOMAIN_BLINDER_G0: &str = "hachi-co/sumcheck/g0";
 /// The PRG domain of the blinder $g\_{1,i}$ ([`PartyRandomness::blinder`]; index 0).
@@ -46,11 +54,11 @@ pub(crate) fn uniform_ext<const K: usize>(prg: &mut ShakePrg, q: u64) -> Result<
 ///
 /// [`PrgRandomness`] and `ReplayRandomness` implement the trait for every `K`. Generic code with
 /// a bound `R: PartyRandomness<K>` calls `rng.mask(..)` directly; on a concrete value, a method
-/// whose signature does not mention `K` (`mask`, `rho`, `base_pcs`) needs it spelled out:
+/// whose signature does not mention `K` (`mask`, `rho_u`, `rho_v`, `base_pcs`) needs it spelled out:
 /// `PartyRandomness::<4>::mask(&mut rng, attempt, gamma, len)`.
 pub trait PartyRandomness<const K: usize> {
     /// $\mathsf{AS.Share}(\mathbf x, n)$ (`4_preliminaries.tex`:154; Commit,
-    /// `6_Collaborative_Hachi.tex`:303-305) of a vector $\mathbf x \in \mathbb F\_{q^K}^{len}$:
+    /// `6_Collaborative_Hachi.tex`:308-310) of a vector $\mathbf x \in \mathbb F\_{q^K}^{len}$:
     /// shares $1, \dots, n-1$ uniform in $\mathbb F\_{q^K}^{len}$ and share $n$ equal to
     /// $\mathbf x - \sum\_{j \lt n} \langle \mathbf x \rangle\_j$. Returns the $n$ shares in order;
     /// share $j$ goes to party $j$. For $n = 1$ the only share is $\mathbf x$.
@@ -60,22 +68,43 @@ pub trait PartyRandomness<const K: usize> {
     fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>>;
 
     /// The mask $\mathbf r\_i \leftarrow \chi\_r$ of attempt `attempt` of the ring-to-linear step
-    /// (`5_Building_Blocks.tex`:110; `4_preliminaries.tex`:117): `len` $= N = d\delta 2^m$
+    /// (`5_Building_Blocks.tex`:122; `4_preliminaries.tex`:117): `len` $= N = d\delta 2^m$
     /// integers uniform in $\[-\gamma, \gamma\]$, flat (element $i$, coefficient $j$ at $id + j$).
     ///
     /// # Errors
     /// [`Error::Sampling`] if $\gamma \gt 2^{63} - 1$, and implementation-specific errors.
     fn mask(&mut self, attempt: u64, gamma: u64, len: usize) -> Result<Vec<i64>>;
 
-    /// The commitment randomness $\boldsymbol\rho\_i \leftarrow S\_b^{m\_\rho}$ of attempt
-    /// `attempt` (`5_Building_Blocks.tex`:110; $S\_b$ of `4_preliminaries.tex`:88): `len`
-    /// $= m\_\rho d$ integers uniform in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, flat.
+    /// The commitment's randomness $\boldsymbol\rho^u\_i \leftarrow S\_b^{m\_u}$
+    /// (`6_Collaborative_Hachi.tex`:382; $S\_b$ of `4_preliminaries.tex`:88): `len` $= m\_u d$
+    /// integers uniform in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, flat.
     ///
     /// # Errors
     /// [`Error::Sampling`] for $b = 0$, and implementation-specific errors.
-    fn rho(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>>;
+    fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>>;
 
-    /// The coefficients of the blinder $g\_{0,i}$ or $g\_{1,i}$ (`5_Building_Blocks.tex`:209-214):
+    /// The first message's randomness $\boldsymbol\rho^v\_i \leftarrow S\_b^{m\_v}$ of attempt
+    /// `attempt` (`5_Building_Blocks.tex`:122; $S\_b$ of `4_preliminaries.tex`:88): `len`
+    /// $= m\_v d$ integers uniform in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, flat.
+    ///
+    /// # Errors
+    /// [`Error::Sampling`] for $b = 0$, and implementation-specific errors.
+    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>>;
+
+    /// The witness pad $\rho^w\_i \leftarrow \mathbb F\_{q^K}$ (`5_Building_Blocks.tex`:252).
+    ///
+    /// # Errors
+    /// Implementation-specific errors.
+    fn rho_w(&mut self, field: &Fqk<K>) -> Result<Ext<K>>;
+
+    /// `len` residues uniform in $\[0, q)$, the pad of [`PadRule::Residues`].
+    ///
+    /// # Errors
+    /// Implementation-specific errors.
+    #[doc(hidden)]
+    fn rho_w_residues(&mut self, q: u64, len: usize) -> Result<Vec<u64>>;
+
+    /// The coefficients of the blinder $g\_{0,i}$ or $g\_{1,i}$ (`5_Building_Blocks.tex`:238-243):
     /// $s\_0$ and the $\ell'' \times D$ coefficients $s\_{j,k}$, all uniform in $\mathbb F\_{q^K}$,
     /// with $D$ = `degree` ($d\_0$ for [`BlinderKind::G0`], $d\_1$ for [`BlinderKind::G1`]).
     ///
@@ -106,7 +135,9 @@ pub trait PartyRandomness<const K: usize> {
 /// |---|---|---|
 /// | `reshare` | [`DOMAIN_RESHARE`], 0 | shares $1..n-1$, element by element, each element's $K$ coordinates by [`uniform::uniform_mod_q`] |
 /// | `mask` | [`DOMAIN_MASK`], attempt | [`rej::mask`] ($\[-\gamma, \gamma\]$, entry by entry) |
-/// | `rho` | [`DOMAIN_RHO`], attempt | [`uniform::short`] ($S\_b$, entry by entry) |
+/// | `rho_u` | [`DOMAIN_RHO_U`], 0 | [`uniform::short`] ($S\_b$, entry by entry) |
+/// | `rho_v` | [`DOMAIN_RHO_V`], attempt | [`uniform::short`] ($S\_b$, entry by entry) |
+/// | `rho_w` | [`DOMAIN_RHO_W`], 0 | one element, as in `reshare` |
 /// | `blinder` | [`DOMAIN_BLINDER_G0`] or [`DOMAIN_BLINDER_G1`], 0 | $s\_0$, then $s\_{j,k}$ row by row, each element as in `reshare` |
 /// | `base_pcs` | [`DOMAIN_BASE_PCS`], index | the first 32 bytes of the stream |
 ///
@@ -188,8 +219,25 @@ impl<const K: usize> PartyRandomness<K> for PrgRandomness {
         self.draw(DOMAIN_MASK, attempt, |prg| Ok(rej::mask(prg, gamma, len)?))
     }
 
-    fn rho(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
-        self.draw(DOMAIN_RHO, attempt, |prg| Ok(uniform::short(prg, b, len)?))
+    fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
+        self.draw(DOMAIN_RHO_U, 0, |prg| Ok(uniform::short(prg, b, len)?))
+    }
+
+    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
+        self.draw(DOMAIN_RHO_V, attempt, |prg| {
+            Ok(uniform::short(prg, b, len)?)
+        })
+    }
+
+    fn rho_w(&mut self, field: &Fqk<K>) -> Result<Ext<K>> {
+        let q = field.modulus();
+        self.draw(DOMAIN_RHO_W, 0, |prg| uniform_ext::<K>(prg, q))
+    }
+
+    fn rho_w_residues(&mut self, q: u64, len: usize) -> Result<Vec<u64>> {
+        self.draw(DOMAIN_RHO_W, 0, |prg| {
+            Ok(uniform::uniform_mod_q(prg, q, len)?)
+        })
     }
 
     fn blinder(

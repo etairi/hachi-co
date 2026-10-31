@@ -31,7 +31,7 @@ pub enum Error {
     Overflow(&'static str),
 
     /// An exponent of the cascade is negative, so the cascade is undefined. This happens exactly
-    /// when $\alpha - \kappa > \ell$ (6_Collaborative_Hachi.tex:273), because then
+    /// when $\alpha - \kappa > \ell$ (6_Collaborative_Hachi.tex:275), because then
     /// $m = \ell' - r < 0$.
     #[error("{0}")]
     NegativeExponent(String),

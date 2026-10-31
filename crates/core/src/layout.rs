@@ -5,13 +5,13 @@
 use crate::{Error, Result};
 use core::ops::Range;
 use hachi_co_mpc::PartyId;
-use hachi_co_params::Params;
+use hachi_co_params::{PadRule, Params};
 
 /// A named block of $\mathbf z'$: its name, first position and length, as in the fixture key
 /// `ring_to_linear/layout/blocks` (`ref/hachico_ref/r2l.py`, `Layout.blocks`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NamedBlock {
-    /// One of `w_hat`, `w0_hat`, `t0_hat`, `rho`, `t_hat`, `z_hat`, `u`.
+    /// One of `w_hat`, `w0_hat`, `t0_hat`, `rho_v`, `t_hat`, `rho_u`, `z_hat`, `u`.
     pub name: &'static str,
     /// The first position, 0-indexed.
     pub start: usize,
@@ -24,20 +24,21 @@ pub struct NamedBlock {
 /// `r2l.Layout` plus ownership and the hypercube; `docs/m1-spec.md`, `hachi-co-core`).
 ///
 /// All positions are 0-indexed (`ref/README.md`, "Indexing": the draft's 1-indexed position $u$ is
-/// our $u - 1$). The layout of $\mathbf z' \in \mathcal R\_q^\mu$ is that of
-/// `5_Building_Blocks.tex`:164-172 and of the oracle (`ref/hachico_ref/r2l.py`, class `Layout`):
+/// our $u - 1$). The layout of $\mathbf z' \in \mathcal R\_q^{\mu - 1}$ is that of
+/// `5_Building_Blocks.tex`:177-186 and of the oracle (`ref/hachico_ref/r2l.py`, class `Layout`):
 /// $$\mathbf z' = \bigl\[ \hat{\mathbf w}\ (2^r\delta) \mid \hat{\mathbf w}\_0\ (n\delta) \mid
-/// \hat{\mathbf t}\_0\ (n n\_A \delta) \mid \boldsymbol\rho\ (n m\_\rho) \mid
-/// \hat{\mathbf t}\ (2^r n\_A \delta) \mid \hat{\mathbf z}\ (2^m \delta \tau) \mid
-/// \langle u \rangle\ (1) \bigr\],$$
+/// \hat{\mathbf t}\_0\ (n n\_A \delta) \mid \boldsymbol\rho^v\ (n m\_v) \mid
+/// \hat{\mathbf t}\ (2^r n\_A \delta) \mid \boldsymbol\rho^u\ (n m\_u) \mid
+/// \hat{\mathbf z}\ (2^m \delta \tau) \mid \langle u \rangle\ (1) \bigr\],$$
 /// with the element-major gadget layout inside each block: $\hat{\mathbf w}\_i =
 /// \mathbf G\_1^{-1}(w\_i)$ at $w + i\delta + e$; $\hat{\mathbf w}\_{0,p}$ at $w\_0 + (p-1)\delta +
-/// e$; $\hat{\mathbf t}\_{0,p}$ at $t\_0 + (p-1) n\_A \delta + a\delta + e$; $\boldsymbol\rho\_p$ at
-/// $\rho + (p-1) m\_\rho + j$; $\hat{\mathbf t}\_i$ at $t + i n\_A \delta + a \delta + e$; digit
+/// e$; $\hat{\mathbf t}\_{0,p}$ at $t\_0 + (p-1) n\_A \delta + a\delta + e$; $\boldsymbol\rho^v\_p$ at
+/// $\rho\_v + (p-1) m\_v + j$; $\hat{\mathbf t}\_i$ at $t + i n\_A \delta + a \delta + e$;
+/// $\boldsymbol\rho^u\_p$ at $\rho\_u + (p-1) m\_u + j$; digit
 /// $\theta$ of $z\_{j\delta + e}$ at $z + (j\delta + e)\tau + \theta$ (`ref/README.md`, "z′
-/// layout"). The rows of $\mathbf M \in \mathcal R\_q^{n' \times \mu}$ are $\mathbf D$ ($n\_D$),
+/// layout"). The rows of $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ are $\mathbf D$ ($n\_D$),
 /// $\mathbf B$ ($n\_B$), $\mathbf b^T \mathbf G\_{2^r}$ (1), the $\mathbf c$ row (1) and the
-/// $\mathbf A$ rows ($n\_A$) (`5_Building_Blocks.tex`:157-163).
+/// $\mathbf A$ rows ($n\_A$) (`5_Building_Blocks.tex`:170-176).
 ///
 /// Every field is a `usize`, so that block code can index vectors directly; the derivation checks
 /// every product for overflow. The struct is non-exhaustive: it is built only by [`Layout::new`],
@@ -45,29 +46,29 @@ pub struct NamedBlock {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Layout {
-    // ---- dimensions (6_Collaborative_Hachi.tex:265-287) ----
+    // ---- dimensions (6_Collaborative_Hachi.tex:267-291) ----
     /// The number of provers $n \ge 1$.
     pub n: usize,
-    /// $\lceil \log\_2 n \rceil$ (`6_Collaborative_Hachi.tex`:274), with $\lceil \log 1 \rceil = 0$.
+    /// $\lceil \log\_2 n \rceil$ (`6_Collaborative_Hachi.tex`:276), with $\lceil \log 1 \rceil = 0$.
     pub log_n: usize,
-    /// The ring degree $d = 2^\alpha$ (`6_Collaborative_Hachi.tex`:270).
+    /// The ring degree $d = 2^\alpha$ (`6_Collaborative_Hachi.tex`:272).
     pub d: usize,
     /// The extension degree $k = 2^\kappa$ of $\mathbb F\_{q^k} \cong \mathcal R\_q^H$
-    /// (`6_Collaborative_Hachi.tex`:274).
+    /// (`6_Collaborative_Hachi.tex`:276).
     pub k: usize,
     /// The number of variables $\ell$ of the committed polynomial ($2^\ell$ coefficients).
     pub ell: usize,
     /// $\ell' = \lceil \log n \rceil + \ell - \alpha + \kappa$, the number of variables of $f'$
-    /// (`6_Collaborative_Hachi.tex`:274).
+    /// (`6_Collaborative_Hachi.tex`:276).
     pub ell_prime: usize,
-    /// $r = \max(\lceil \ell'/2 \rceil, \lceil \log n \rceil)$ (`6_Collaborative_Hachi.tex`:274).
+    /// $r = \max(\lceil \ell'/2 \rceil, \lceil \log n \rceil)$ (`6_Collaborative_Hachi.tex`:276).
     pub r: usize,
-    /// $m = \ell' - r$ (`6_Collaborative_Hachi.tex`:274).
+    /// $m = \ell' - r$ (`6_Collaborative_Hachi.tex`:276).
     pub m: usize,
     /// $\delta = \lceil \log\_b q \rceil$, the digits of $\mathbf G^{-1}$
-    /// (`6_Collaborative_Hachi.tex`:274).
+    /// (`6_Collaborative_Hachi.tex`:276).
     pub delta: usize,
-    /// $\tau$, the digits of $\mathbf J^{-1}$ (`6_Collaborative_Hachi.tex`:276, tight rule of
+    /// $\tau$, the digits of $\mathbf J^{-1}$ (`6_Collaborative_Hachi.tex`:280, tight rule of
     /// `docs/m0-spec.md`).
     pub tau: usize,
     /// The height $n\_A$ of $\mathbf A$.
@@ -76,58 +77,71 @@ pub struct Layout {
     pub n_b: usize,
     /// The height $n\_D$ of $\mathbf D$.
     pub n_d: usize,
-    /// $m\_\rho$, the ring elements of each $\boldsymbol\rho\_p \in S\_b^{m\_\rho}$
-    /// (`5_Building_Blocks.tex`:110).
-    pub m_rho: usize,
+    /// $m\_u$, the ring elements of each $\boldsymbol\rho^u\_p \in S\_b^{m\_u}$
+    /// (`6_Collaborative_Hachi.tex`:382).
+    pub m_u: usize,
+    /// $m\_v$, the ring elements of each $\boldsymbol\rho^v\_p \in S\_b^{m\_v}$
+    /// (`5_Building_Blocks.tex`:122).
+    pub m_v: usize,
+    /// The witness pad's form.
+    pub pad_rule: PadRule,
     /// $2^r$, the number of blocks of $\mathbf f'$.
     pub n_blocks: usize,
     /// $2^m$, the ring elements per block.
     pub block_len: usize,
     /// $2^{r - \lceil \log n \rceil}$, the blocks held by each prover ($|\mathcal I\_i|$,
-    /// `5_Building_Blocks.tex`:127).
+    /// `5_Building_Blocks.tex`:139).
     pub blocks_per_party: usize,
-    /// The width $\delta 2^m$ of $\mathbf A$ (`6_Collaborative_Hachi.tex`:285).
+    /// The width $\delta 2^m$ of $\mathbf A$ (`6_Collaborative_Hachi.tex`:289).
     pub width_a: usize,
-    /// The width $n\_A \delta 2^r$ of $\mathbf B$ (`6_Collaborative_Hachi.tex`:286).
+    /// The width $n\_A \delta 2^r + n m\_u$ of $\mathbf B$ (`6_Collaborative_Hachi.tex`:290);
+    /// $\mathbf B$ acts on $\mathbf z'\[t, z)$.
     pub width_b: usize,
-    /// The width $\delta(2^r + n + n n\_A) + n m\_\rho$ of $\mathbf D$
-    /// (`6_Collaborative_Hachi.tex`:287); $\mathbf D$ acts on $\mathbf z'\[0..t)$.
+    /// The width $\delta(2^r + n + n n\_A) + n m\_v$ of $\mathbf D$
+    /// (`6_Collaborative_Hachi.tex`:291); $\mathbf D$ acts on $\mathbf z'\[0..t)$.
     pub width_d: usize,
-    /// $\mu = \mathrm{len}(\mathbf z')$ (`6_Collaborative_Hachi.tex`:278).
+    /// $\mu = \mathrm{len}(\mathbf z') + 1$ (`6_Collaborative_Hachi.tex`:282,
+    /// `5_Building_Blocks.tex`:226): the pad's row comes after $\mathbf z'$.
     pub mu: usize,
-    /// $n' = n\_A + n\_B + n\_D + 2 = \mathrm{len}(\mathbf y)$ (`6_Collaborative_Hachi.tex`:279).
+    /// $\mathrm{len}(\mathbf z') = \mu - 1$, the number of columns of $\mathbf M$.
+    pub len_z: usize,
+    /// $n' = n\_A + n\_B + n\_D + 2 = \mathrm{len}(\mathbf y)$ (`6_Collaborative_Hachi.tex`:283).
     pub n_prime: usize,
-    /// $\nu = n' + d + (\mu + n') d$ (`6_Collaborative_Hachi.tex`:281).
+    /// $\nu = n' + d + (\mu + n') d$ (`6_Collaborative_Hachi.tex`:285).
     pub nu: usize,
-    /// $d\_0 = 2b + n' + 1$, the degree of $g\_{0,p}$ (`6_Collaborative_Hachi.tex`:281).
+    /// $d\_0 = 2b + n' + 1$, the degree of $g\_{0,p}$ (`6_Collaborative_Hachi.tex`:285).
     pub d0: usize,
-    /// $d\_1 = 3$, the degree of $g\_{1,p}$ (`6_Collaborative_Hachi.tex`:281).
+    /// $d\_1 = 3$, the degree of $g\_{1,p}$ (`6_Collaborative_Hachi.tex`:285).
     pub d1: usize,
-    // ---- hypercube of the sumcheck (5_Building_Blocks.tex:207, 243-249) ----
+    // ---- hypercube of the sumcheck (5_Building_Blocks.tex:236, 275-281) ----
     /// $\ell\_U = \lceil \log\_2(\mu + n') \rceil = |U|$ (`ref/README.md`, "Hypercube").
     pub ell_u: usize,
     /// $\ell\_L = \log\_2 2d = |L|$.
     pub ell_l: usize,
-    /// $\ell'' = \ell\_U + \ell\_L$ (`6_Collaborative_Hachi.tex`:280).
+    /// $\ell'' = \ell\_U + \ell\_L$ (`6_Collaborative_Hachi.tex`:284).
     pub ell_pp: usize,
-    /// $\lceil \log\_2 \nu \rceil$, the length of $\tau\_1$ (`5_Building_Blocks.tex`:248).
+    /// $\lceil \log\_2 \nu \rceil$, the length of $\tau\_1$ (`5_Building_Blocks.tex`:280).
     pub log_nu: usize,
-    // ---- offsets of z' (5_Building_Blocks.tex:164-172) ----
+    // ---- offsets of z' (5_Building_Blocks.tex:177-186) ----
     /// Start of $\hat{\mathbf w}$ (always 0).
     pub w: usize,
     /// Start of $\hat{\mathbf w}\_0 = (\hat{\mathbf w}\_{0,1}, \dots, \hat{\mathbf w}\_{0,n})$.
     pub w0: usize,
     /// Start of $\hat{\mathbf t}\_0 = (\hat{\mathbf t}\_{0,1}, \dots, \hat{\mathbf t}\_{0,n})$.
     pub t0: usize,
-    /// Start of $\boldsymbol\rho = (\boldsymbol\rho\_1, \dots, \boldsymbol\rho\_n)$.
-    pub rho: usize,
+    /// Start of $\boldsymbol\rho^v = (\boldsymbol\rho^v\_1, \dots, \boldsymbol\rho^v\_n)$.
+    pub rho_v: usize,
     /// Start of $\hat{\mathbf t}$; equals the width of $\mathbf D$.
     pub t: usize,
+    /// Start of $\boldsymbol\rho^u = (\boldsymbol\rho^u\_1, \dots, \boldsymbol\rho^u\_n)$.
+    pub rho_u: usize,
     /// Start of $\hat{\mathbf z}$.
     pub z: usize,
-    /// The position of $\langle u \rangle$, the last entry: $u = \mu - 1$.
+    /// The position of $\langle u \rangle$, the last entry of $\mathbf z'$: $u = \mu - 2$.
     pub u: usize,
-    // ---- rows of M (5_Building_Blocks.tex:157-163) ----
+    /// The table row of the pad, $\mu - 1$ (the draft's row $\mu$, `5_Building_Blocks.tex`:256).
+    pub pad: usize,
+    // ---- rows of M (5_Building_Blocks.tex:170-176) ----
     /// First row of the $\mathbf D$ block (always 0).
     pub row_d: usize,
     /// First row of the $\mathbf B$ block ($= n\_D$).
@@ -196,12 +210,12 @@ impl Layout {
     /// The layout for `params`, with every invariant checked.
     ///
     /// Besides the conversions to `usize`, it checks (`docs/m1-spec.md`, `hachi-co-core`) that
-    /// $u + 1 = \mu$ (`6_Collaborative_Hachi.tex`:278), that $t$ equals the width of $\mathbf D$
-    /// (line 287), that $\mathrm{row}\_A + n\_A = n'$ (line 279), and that $S\_1, \dots, S\_n$ and
-    /// the unheld positions partition $\[0, \mu - 1)$ (`5_Building_Blocks.tex`:197 and
+    /// $u + 2 = \mu$ (`6_Collaborative_Hachi.tex`:282), that $t$ equals the width of $\mathbf D$
+    /// (line 291), that $\mathrm{row}\_A + n\_A = n'$ (line 283), and that $S\_1, \dots, S\_n$ and
+    /// the unheld positions partition $\[0, \mu - 2)$ (`5_Building_Blocks.tex`:226 and
     /// `ref/README.md`, choice 6); and also that the widths of $\mathbf A$ and $\mathbf B$ match
-    /// the blocks they act on (lines 285-286), that $\nu = n' + d + (\mu + n') d$ (line 281),
-    /// that $\ell'' = \lceil \log(\mu + n') \rceil + \log 2d$ (line 280), that
+    /// the blocks they act on (lines 317-318), that $\nu = n' + d + (\mu + n') d$ (line 313),
+    /// that $\ell'' = \lceil \log(\mu + n') \rceil + \log 2d$ (line 312), that
     /// $\lceil \log n \rceil$ is right, that $r \ge \lceil \log n \rceil$ and that $d$ is a
     /// power of two.
     ///
@@ -222,7 +236,8 @@ impl Layout {
         let n_a = to_usize(c.n_a, "n_A")?;
         let n_b = to_usize(c.n_b, "n_B")?;
         let n_d = to_usize(c.n_d, "n_D")?;
-        let m_rho = to_usize(c.m_rho, "m_rho")?;
+        let m_u = to_usize(c.m_u, "m_u")?;
+        let m_v = to_usize(c.m_v, "m_v")?;
         let width_a = to_usize(params.width_a, "the width of A")?;
         let width_b = to_usize(params.width_b, "the width of B")?;
         let width_d = to_usize(params.width_d, "the width of D")?;
@@ -239,7 +254,7 @@ impl Layout {
         }
         if log_n != ceil_log2(n) {
             return fail(format!(
-                "ceil(log n) = {log_n} is wrong for n = {n} (6_Collaborative_Hachi.tex:274)"
+                "ceil(log n) = {log_n} is wrong for n = {n} (6_Collaborative_Hachi.tex:276)"
             ));
         }
         if d < 2 || !d.is_power_of_two() {
@@ -247,49 +262,51 @@ impl Layout {
         }
         if r < log_n {
             return fail(format!(
-                "r = {r} < ceil(log n) = {log_n} (6_Collaborative_Hachi.tex:274)"
+                "r = {r} < ceil(log n) = {log_n} (6_Collaborative_Hachi.tex:276)"
             ));
         }
         let n_blocks = pow2(r, "2^r")?;
         let block_len = pow2(m, "2^m")?;
         let blocks_per_party = pow2(r - log_n, "2^(r - ceil(log n))")?;
 
-        // Offsets of z' (5_Building_Blocks.tex:164-172).
+        // Offsets of z' (5_Building_Blocks.tex:177-186).
         let w = 0;
         let w0 = add(w, mul(n_blocks, delta, "2^r delta")?, "w0")?;
         let t0 = add(w0, mul(n, delta, "n delta")?, "t0")?;
         let n_na_delta = mul(mul(n, n_a, "n n_A")?, delta, "n n_A delta")?;
-        let rho = add(t0, n_na_delta, "rho")?;
-        let t = add(rho, mul(n, m_rho, "n m_rho")?, "t")?;
+        let rho_v = add(t0, n_na_delta, "rho_v")?;
+        let t = add(rho_v, mul(n, m_v, "n m_v")?, "t")?;
         let t_hat_len = mul(mul(n_blocks, n_a, "2^r n_A")?, delta, "2^r n_A delta")?;
-        let z = add(t, t_hat_len, "z")?;
+        let rho_u = add(t, t_hat_len, "rho_u")?;
+        let z = add(rho_u, mul(n, m_u, "n m_u")?, "z")?;
         let z_hat_len = mul(mul(block_len, delta, "2^m delta")?, tau, "2^m delta tau")?;
         let u = add(z, z_hat_len, "u")?;
-        if add(u, 1, "u + 1")? != mu {
+        if add(u, 2, "u + 2")? != mu {
             return fail(format!(
-                "u + 1 = {} but mu = {mu} (6_Collaborative_Hachi.tex:278)",
-                u + 1
+                "u + 2 = {} but mu = {mu} (6_Collaborative_Hachi.tex:282)",
+                u + 2
             ));
         }
         if t != width_d {
             return fail(format!(
-                "t = {t} but the width of D is {width_d} (6_Collaborative_Hachi.tex:287)"
+                "t = {t} but the width of D is {width_d} (6_Collaborative_Hachi.tex:291)"
             ));
         }
-        if t_hat_len != width_b {
+        if z - t != width_b {
             return fail(format!(
-                "t-hat has {t_hat_len} entries but the width of B is {width_b} \
-                 (6_Collaborative_Hachi.tex:286)"
+                "(t-hat, rho^u) has {} entries but the width of B is {width_b} \
+                 (6_Collaborative_Hachi.tex:290)",
+                z - t
             ));
         }
         if mul(block_len, delta, "2^m delta")? != width_a {
             return fail(format!(
-                "delta 2^m = {} but the width of A is {width_a} (6_Collaborative_Hachi.tex:285)",
+                "delta 2^m = {} but the width of A is {width_a} (6_Collaborative_Hachi.tex:289)",
                 block_len * delta
             ));
         }
 
-        // Rows of M (5_Building_Blocks.tex:157-163).
+        // Rows of M (5_Building_Blocks.tex:170-176).
         let row_d = 0;
         let row_b = n_d;
         let row_bg = add(n_d, n_b, "n_D + n_B")?;
@@ -297,19 +314,19 @@ impl Layout {
         let row_a = add(row_c, 1, "row_A")?;
         if add(row_a, n_a, "row_A + n_A")? != n_prime {
             return fail(format!(
-                "row_A + n_A = {} but n' = {n_prime} (6_Collaborative_Hachi.tex:279)",
+                "row_A + n_A = {} but n' = {n_prime} (6_Collaborative_Hachi.tex:283)",
                 row_a + n_a
             ));
         }
 
-        // Hypercube (5_Building_Blocks.tex:207; ref/README.md, "Hypercube").
+        // Hypercube (5_Building_Blocks.tex:236; ref/README.md, "Hypercube").
         let mu_np = add(mu, n_prime, "mu + n'")?;
         let ell_u = ceil_log2(mu_np);
         // log 2d = alpha + 1 (d is a power of two).
         let ell_l = d.trailing_zeros() as usize + 1;
         if ell_u + ell_l != ell_pp {
             return fail(format!(
-                "l'' = {ell_pp} but ceil(log(mu + n')) + log 2d = {} (6_Collaborative_Hachi.tex:280)",
+                "l'' = {ell_pp} but ceil(log(mu + n')) + log 2d = {} (6_Collaborative_Hachi.tex:284)",
                 ell_u + ell_l
             ));
         }
@@ -320,7 +337,7 @@ impl Layout {
         )?;
         if nu != expected_nu {
             return fail(format!(
-                "nu = {nu} but n' + d + (mu + n') d = {expected_nu} (6_Collaborative_Hachi.tex:281)"
+                "nu = {nu} but n' + d + (mu + n') d = {expected_nu} (6_Collaborative_Hachi.tex:285)"
             ));
         }
         let log_nu = ceil_log2(nu);
@@ -339,7 +356,9 @@ impl Layout {
             n_a,
             n_b,
             n_d,
-            m_rho,
+            m_u,
+            m_v,
+            pad_rule: c.pad,
             n_blocks,
             block_len,
             blocks_per_party,
@@ -347,6 +366,7 @@ impl Layout {
             width_b,
             width_d,
             mu,
+            len_z: mu - 1,
             n_prime,
             nu,
             d0,
@@ -358,10 +378,12 @@ impl Layout {
             w,
             w0,
             t0,
-            rho,
+            rho_v,
             t,
+            rho_u,
             z,
             u,
+            pad: u + 1,
             row_d,
             row_b,
             row_bg,
@@ -372,7 +394,7 @@ impl Layout {
         Ok(layout)
     }
 
-    /// Checks that $S\_1, \dots, S\_n$ and the unheld positions partition $\[0, \mu - 1)$.
+    /// Checks that $S\_1, \dots, S\_n$ and the unheld positions partition $\[0, \mu - 2)$.
     fn check_partition(&self) -> Result<()> {
         let mut count = vec![0u8; self.u];
         let ranges = (1..=self.n)
@@ -381,7 +403,7 @@ impl Layout {
         for range in ranges {
             if range.end > self.u {
                 return Err(Error::Layout(format!(
-                    "the range {range:?} leaves [0, mu - 1) = [0, {})",
+                    "the range {range:?} leaves [0, mu - 2) = [0, {})",
                     self.u
                 )));
             }
@@ -392,7 +414,7 @@ impl Layout {
         if let Some(pos) = count.iter().position(|c| *c != 1) {
             return Err(Error::Layout(format!(
                 "position {pos} is covered {} times by S_1..S_n and the unheld positions \
-                 (5_Building_Blocks.tex:197)",
+                 (5_Building_Blocks.tex:226)",
                 count[pos]
             )));
         }
@@ -400,7 +422,7 @@ impl Layout {
     }
 
     /// The prover holding block $i$ of $\mathbf f'$: $\lfloor i / 2^{r - \lceil \log n \rceil}
-    /// \rfloor + 1$ if that is at most $n$ (`6_Collaborative_Hachi.tex`:406, `ref/README.md`,
+    /// \rfloor + 1$ if that is at most $n$ (`6_Collaborative_Hachi.tex`:421, `ref/README.md`,
     /// "Blocks and owners"), and `None` for an all-zero block held by nobody (for $n = 3$: blocks 6
     /// and 7) and for $i \ge 2^r$.
     pub fn owner_of_block(&self, i: usize) -> Option<PartyId> {
@@ -411,7 +433,7 @@ impl Layout {
         (p <= self.n).then_some(p)
     }
 
-    /// The blocks of prover $p$, $\mathcal I\_p$ of `5_Building_Blocks.tex`:127: the contiguous
+    /// The blocks of prover $p$, $\mathcal I\_p$ of `5_Building_Blocks.tex`:139: the contiguous
     /// range $\[(p-1) \cdot 2^{r - \lceil \log n \rceil}, p \cdot 2^{r - \lceil \log n \rceil})$; empty for
     /// $p \notin \lbrace 1, \dots, n \rbrace$.
     pub fn blocks_of(&self, p: PartyId) -> Range<usize> {
@@ -422,7 +444,7 @@ impl Layout {
     }
 
     /// The $\delta$ positions of $\hat{\mathbf w}\_i = \mathbf G\_1^{-1}(w\_i)$ in $\mathbf z'$
-    /// (`5_Building_Blocks.tex`:107, 165); empty for $i \ge 2^r$.
+    /// (`5_Building_Blocks.tex`:119, 178); empty for $i \ge 2^r$.
     pub fn w_hat_range(&self, i: usize) -> Range<usize> {
         if i >= self.n_blocks {
             return 0..0;
@@ -430,7 +452,7 @@ impl Layout {
         self.w + i * self.delta..self.w + (i + 1) * self.delta
     }
 
-    /// The $\delta$ positions of $\hat{\mathbf w}\_{0,p}$ (`5_Building_Blocks.tex`:113, 166);
+    /// The $\delta$ positions of $\hat{\mathbf w}\_{0,p}$ (`5_Building_Blocks.tex`:125, 179);
     /// empty for $p \notin \lbrace 1, \dots, n \rbrace$.
     pub fn w0_hat_range(&self, p: PartyId) -> Range<usize> {
         if p == 0 || p > self.n {
@@ -439,7 +461,7 @@ impl Layout {
         self.w0 + (p - 1) * self.delta..self.w0 + p * self.delta
     }
 
-    /// The $n\_A \delta$ positions of $\hat{\mathbf t}\_{0,p}$ (`5_Building_Blocks.tex`:112, 167),
+    /// The $n\_A \delta$ positions of $\hat{\mathbf t}\_{0,p}$ (`5_Building_Blocks.tex`:124, 180),
     /// row $a$ of $\mathbf t\_{0,p}$ at offset $a\delta$; empty for $p \notin \lbrace 1, \dots, n
     /// \rbrace$.
     pub fn t0_hat_range(&self, p: PartyId) -> Range<usize> {
@@ -450,17 +472,26 @@ impl Layout {
         self.t0 + (p - 1) * len..self.t0 + p * len
     }
 
-    /// The $m\_\rho$ positions of $\boldsymbol\rho\_p$ (`5_Building_Blocks.tex`:110, 168); empty
+    /// The $m\_v$ positions of $\boldsymbol\rho^v\_p$ (`5_Building_Blocks.tex`:122, 181); empty
     /// for $p \notin \lbrace 1, \dots, n \rbrace$.
-    pub fn rho_range(&self, p: PartyId) -> Range<usize> {
+    pub fn rho_v_range(&self, p: PartyId) -> Range<usize> {
         if p == 0 || p > self.n {
             return 0..0;
         }
-        self.rho + (p - 1) * self.m_rho..self.rho + p * self.m_rho
+        self.rho_v + (p - 1) * self.m_v..self.rho_v + p * self.m_v
+    }
+
+    /// The $m\_u$ positions of $\boldsymbol\rho^u\_p$ (`6_Collaborative_Hachi.tex`:382;
+    /// `5_Building_Blocks.tex`:183); empty for $p \notin \lbrace 1, \dots, n \rbrace$.
+    pub fn rho_u_range(&self, p: PartyId) -> Range<usize> {
+        if p == 0 || p > self.n {
+            return 0..0;
+        }
+        self.rho_u + (p - 1) * self.m_u..self.rho_u + p * self.m_u
     }
 
     /// The $n\_A \delta$ positions of $\hat{\mathbf t}\_i = \mathbf G\_{n\_A}^{-1}(\mathbf t\_i)$
-    /// (`6_Collaborative_Hachi.tex`:375; `5_Building_Blocks.tex`:169), row $a$ of $\mathbf t\_i$
+    /// (`6_Collaborative_Hachi.tex`:380; `5_Building_Blocks.tex`:182), row $a$ of $\mathbf t\_i$
     /// at offset $a\delta$; empty for $i \ge 2^r$.
     pub fn t_hat_range(&self, i: usize) -> Range<usize> {
         if i >= self.n_blocks {
@@ -471,14 +502,14 @@ impl Layout {
     }
 
     /// The $2^m \delta \tau$ positions of $\hat{\mathbf z} = \mathbf J\_{\delta 2^m}^{-1}(\mathbf z)$
-    /// (`5_Building_Blocks.tex`:133, 170): digit $\theta$ of $z\_j$, $j \lt \delta 2^m$, is at
+    /// (`5_Building_Blocks.tex`:146, 184): digit $\theta$ of $z\_j$, $j \lt \delta 2^m$, is at
     /// $z + j\tau + \theta$.
     pub fn z_hat_range(&self) -> Range<usize> {
         self.z..self.u
     }
 
     /// The pieces of $S\_p$ in increasing order of position (some may be empty).
-    fn components(&self, p: PartyId) -> [Range<usize>; 6] {
+    fn components(&self, p: PartyId) -> [Range<usize>; 7] {
         if p == 0 || p > self.n {
             return core::array::from_fn(|_| 0..0);
         }
@@ -488,21 +519,23 @@ impl Layout {
             self.w + blocks.start * self.delta..self.w + blocks.end * self.delta,
             self.w0_hat_range(p),
             self.t0_hat_range(p),
-            self.rho_range(p),
+            self.rho_v_range(p),
             self.t + blocks.start * t_len..self.t + blocks.end * t_len,
+            self.rho_u_range(p),
             if p == 1 { self.z_hat_range() } else { 0..0 },
         ]
     }
 
-    /// $S\_p$ (`5_Building_Blocks.tex`:197; `ref/README.md`, "Shares" and choice 6): the positions
+    /// $S\_p$ (`5_Building_Blocks.tex`:226; `ref/README.md`, "Shares" and choice 6): the positions
     /// of $\mathbf z'$ that prover $p$ holds, as sorted, disjoint, non-adjacent ranges in
-    /// $\[0, \mu - 1)$ (adjacent pieces are merged, as in the fixture key
+    /// $\[0, \mu - 2)$ (adjacent pieces are merged, as in the fixture key
     /// `ring_to_linear/partition`). They are $p$'s blocks of $\hat{\mathbf w}$ and
-    /// $\hat{\mathbf t}$, its own $\hat{\mathbf w}\_{0,p}$, $\hat{\mathbf t}\_{0,p}$ and
-    /// $\boldsymbol\rho\_p$, and, for $p = 1$, $\hat{\mathbf z}$. Position $\mu - 1$
-    /// ($\langle u \rangle$) is in no $S\_p$. Empty for $p \notin \lbrace 1, \dots, n \rbrace$.
+    /// $\hat{\mathbf t}$, its own $\hat{\mathbf w}\_{0,p}$, $\hat{\mathbf t}\_{0,p}$,
+    /// $\boldsymbol\rho^v\_p$ and $\boldsymbol\rho^u\_p$, and, for $p = 1$, $\hat{\mathbf z}$.
+    /// Position $\mu - 2$ ($\langle u \rangle$) is in no $S\_p$. Empty for $p \notin \lbrace 1,
+    /// \dots, n \rbrace$.
     pub fn s_ranges(&self, p: PartyId) -> Vec<Range<usize>> {
-        let mut out = Vec::with_capacity(6);
+        let mut out = Vec::with_capacity(7);
         for r in self.components(p) {
             push_merged(&mut out, r);
         }
@@ -519,20 +552,21 @@ impl Layout {
     /// $\hat{\mathbf t}$ entries of blocks $i \ge n 2^{r - \lceil \log n \rceil}$; non-empty only
     /// when $n$ is not a power of two), as sorted disjoint ranges (`ref/README.md`, choice 6;
     /// fixture key `ring_to_linear/unheld`). Together with $S\_1, \dots, S\_n$ they partition
-    /// $\[0, \mu - 1)$.
+    /// $\[0, \mu - 2)$.
     pub fn unheld(&self) -> Vec<Range<usize>> {
         let first = self.n * self.blocks_per_party;
         let t_len = self.n_a * self.delta;
         let mut out = Vec::with_capacity(2);
         push_merged(&mut out, self.w + first * self.delta..self.w0);
-        push_merged(&mut out, self.t + first * t_len..self.z);
+        push_merged(&mut out, self.t + first * t_len..self.rho_u);
         out
     }
 
-    /// The seven blocks of $\mathbf z'$ in order, named as in the fixture key
-    /// `ring_to_linear/layout/blocks`: `w_hat`, `w0_hat`, `t0_hat`, `rho`, `t_hat`, `z_hat`, `u`
-    /// (`5_Building_Blocks.tex`:164-172).
-    pub fn named_blocks(&self) -> [NamedBlock; 7] {
+    /// The eight blocks of $\mathbf z'$ in order, named as in the fixture key
+    /// `ring_to_linear/layout/blocks`: `w_hat`, `w0_hat`, `t0_hat`, `rho_v`, `t_hat`, `rho_u`,
+    /// `z_hat`, `u`
+    /// (`5_Building_Blocks.tex`:177-186).
+    pub fn named_blocks(&self) -> [NamedBlock; 8] {
         let block = |name, start: usize, end: usize| NamedBlock {
             name,
             start,
@@ -541,11 +575,12 @@ impl Layout {
         [
             block("w_hat", self.w, self.w0),
             block("w0_hat", self.w0, self.t0),
-            block("t0_hat", self.t0, self.rho),
-            block("rho", self.rho, self.t),
-            block("t_hat", self.t, self.z),
+            block("t0_hat", self.t0, self.rho_v),
+            block("rho_v", self.rho_v, self.t),
+            block("t_hat", self.t, self.rho_u),
+            block("rho_u", self.rho_u, self.z),
             block("z_hat", self.z, self.u),
-            block("u", self.u, self.mu),
+            block("u", self.u, self.pad),
         ]
     }
 }

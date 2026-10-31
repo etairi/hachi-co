@@ -1,4 +1,4 @@
-//! $\mathsf{Open}(\mathsf{pp}, \mathbf{st}, \mathbf u, f, c)$ (`6_Collaborative_Hachi.tex`:393-404;
+//! $\mathsf{Open}(\mathsf{pp}, \mathbf{st}, \mathbf u, f, c)$ (`6_Collaborative_Hachi.tex`:403-419;
 //! the oracle's `commit.open_check`), a test oracle that reports every condition.
 
 use crate::error::{Result, check_len, pow2};
@@ -8,7 +8,7 @@ use hachi_co_core::{BlockState, Context, Layout, PartyState};
 use hachi_co_math::{Ext, Poly, decompose};
 
 /// The global relaxation factor $c^\* = (1, \dots, 1) \in \mathcal Z$
-/// (`6_Collaborative_Hachi.tex`:395): $2^r$ copies of the constant polynomial $1$, as signed
+/// (`6_Collaborative_Hachi.tex`:405): $2^r$ copies of the constant polynomial $1$, as signed
 /// coefficient vectors.
 pub fn c_star(layout: &Layout) -> Vec<Vec<i64>> {
     let mut one = vec![0i64; layout.d];
@@ -16,30 +16,31 @@ pub fn c_star(layout: &Layout) -> Vec<Vec<i64>> {
     vec![one; layout.n_blocks]
 }
 
-/// The named conditions of Open (`6_Collaborative_Hachi.tex`:393-404), each `true` when it holds;
+/// The named conditions of Open (`6_Collaborative_Hachi.tex`:403-419), each `true` when it holds;
 /// the names in [`OpenChecks::NAMES`] are the oracle's (fixture key `open/checks`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenChecks {
     /// `c_in_slack_space`: $c \in \mathcal Z$, i.e. every $c\_i$ is a unit of $\mathcal R\_q$
     /// ([`is_unit`]) with $\Vert c\_i \Vert\_1 \le \bar\omega$ over centered coefficients
-    /// (line 394; `ref/README.md`, choice 18).
+    /// (line 404; `ref/README.md`, choice 18).
     pub c_in_slack_space: bool,
     /// `no_block_in_several_states`: no block $\mathbf i$ has entries in several states
-    /// (line 397). **Choice:** two entries for the same block in one state count as several.
+    /// (line 407). **Choice:** two entries for the same block in one state count as several.
     pub no_block_in_several_states: bool,
     /// `A_s_eq_G_that`: $\mathbf A \mathbf s\_i = \mathbf G\_{n\_A} \hat{\mathbf t}\_i$ for every
-    /// $i \in \[2^r\]$ (line 401).
+    /// $i \in \[2^r\]$ (line 413).
     pub a_s_eq_g_t_hat: bool,
     /// `norm_c_s_le_beta_bar`: $\Vert c\_i \mathbf s\_i \Vert\_\infty \le \bar\beta$ for every $i$,
-    /// the product taken in $\mathcal R\_q$ and the norm over centered coefficients (line 401).
+    /// the product taken in $\mathcal R\_q$ and the norm over centered coefficients (line 413).
     pub norm_c_s_le_beta_bar: bool,
-    /// `B_that_eq_u`: $\mathbf B \hat{\mathbf t} = \mathbf u$ (line 402), comparing the reduced
-    /// product with $\mathbf u$ as given.
+    /// `B_that_eq_u`: $\mathbf B (\hat{\mathbf t}, \boldsymbol\rho^u) = \mathbf u$ (line 414),
+    /// comparing the reduced product with $\mathbf u$ as given.
     pub b_t_hat_eq_u: bool,
-    /// `norm_that_le_gamma_bar`: $\Vert \hat{\mathbf t} \Vert\_\infty \le \bar\gamma$ (line 402).
+    /// `norm_that_le_gamma_bar`: $\Vert (\hat{\mathbf t}, \boldsymbol\rho^u) \Vert\_\infty \le
+    /// \bar\gamma$ (line 417).
     pub norm_t_hat_le_gamma_bar: bool,
     /// `f_eq_f_bar`: $f\_{\mathbf q} = \bar f\_{\mathbf q}$ for every $\mathbf q \in \lbrace 0,1
-    /// \rbrace^\ell$, comparing residues modulo $q$ (line 403).
+    /// \rbrace^\ell$, comparing residues modulo $q$ (line 418).
     pub f_eq_f_bar: bool,
 }
 
@@ -97,7 +98,7 @@ pub struct OpenReport {
     pub checks: OpenChecks,
     /// $\max\_i \Vert c\_i \mathbf s\_i \Vert\_\infty$.
     pub max_norm_c_s: u64,
-    /// $\Vert \hat{\mathbf t} \Vert\_\infty$.
+    /// $\Vert (\hat{\mathbf t}, \boldsymbol\rho^u) \Vert\_\infty$.
     pub max_norm_t_hat: u64,
 }
 
@@ -109,22 +110,24 @@ fn l1_norm(ctx_ring: &hachi_co_math::Ring, c: &Poly) -> Result<u128> {
 }
 
 /// $\mathsf{Open}(\mathsf{pp}, \mathbf{st}, \mathbf u, f, c)$ (`6_Collaborative_Hachi.tex`:
-/// 393-404), evaluating and reporting every condition, as the oracle's `open_check` does (the
+/// 403-419), evaluating and reporting every condition, as the oracle's `open_check` does (the
 /// draft outputs 0 as soon as $c \notin \mathcal Z$; the bit is the same).
 ///
-/// Inputs: the $n$ states (`states[p - 1]` = $\mathsf{st}\_p$; only their blocks are used), the
+/// Inputs: the $n$ states (`states[p - 1]` = $\mathsf{st}\_p$; only their blocks and
+/// $\boldsymbol\rho^u\_p$ are used), the
 /// commitment $\mathbf u \in \mathcal R\_q^{n\_B}$, the coefficient vector $\mathbf f \in
 /// \mathbb F\_{q^k}^{2^\ell}$ of $f$, and the relaxation factor $c = (c\_1, \dots, c\_{2^r})$ as
 /// signed coefficient vectors read modulo $q$, with `None` for $c^\*$ ([`c_star`]).
 ///
-/// 1. *Assemble* (line 397): $\mathbf s\_i, \hat{\mathbf t}\_i$ from the state holding block $i$;
+/// 1. *Assemble* (line 407): $\mathbf s\_i, \hat{\mathbf t}\_i$ from the state holding block $i$;
 ///    zero if none does; if several do, the condition `no_block_in_several_states` fails and the
-///    first entry (in party order, then in the order of the state) is used, as in the oracle.
-/// 2. *Decode* (line 398): $(f'\_{\mathbf i \Vert \mathbf j})\_{\mathbf j} = \mathbf
+///    first entry (in party order, then in the order of the state) is used, as in the oracle;
+///    $\boldsymbol\rho^u$ from the states (line 409).
+/// 2. *Decode* (line 410): $(f'\_{\mathbf i \Vert \mathbf j})\_{\mathbf j} = \mathbf
 ///    G\_{2^m} \mathbf s\_i$, $\hat{\mathbf f} = \psi^{-1}(\mathbf f')$
 ///    ([`f_hat_of_f_prime`]), $\bar f\_{\mathbf q} = \sum\_{\mathbf p} \hat f\_{\mathbf p \Vert
 ///    \mathbf q}$ ([`fold_slots`]).
-/// 3. *Conditions* (lines 399-404): see [`OpenChecks`].
+/// 3. *Conditions* (lines 411-419): see [`OpenChecks`].
 ///
 /// # Errors
 /// [`Error::Shape`](crate::Error::Shape) unless there are $n$ states, $n\_B$ polynomials in
@@ -144,6 +147,9 @@ pub fn open<const K: usize>(
     for block in states.iter().flat_map(|s| &s.blocks) {
         block.validate(l)?;
     }
+    for state in states {
+        check_len("rho^u_p (m_u entries)", l.m_u, state.rho_u.len())?;
+    }
     check_len("u (n_B entries)", l.n_b, u.len())?;
     for entry in u {
         check_len("u (d coefficients per entry)", l.d, entry.0.len())?;
@@ -162,7 +168,7 @@ pub fn open<const K: usize>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // The slack space Z (line 394).
+    // The slack space Z (line 404).
     let mut c_in_slack_space = true;
     for ci in &c_polys {
         c_in_slack_space &=
@@ -201,11 +207,12 @@ pub fn open<const K: usize>(
             max_norm_c_s = max_norm_c_s.max(ring.inf_norm(&ring.mul(ci, s_e)?)?);
         }
     }
-    let t_hat: Vec<Poly> = (0..l.n_blocks)
+    let t_rho: Vec<Poly> = (0..l.n_blocks)
         .flat_map(|i| t_hat_of(i).iter().cloned())
+        .chain(states.iter().flat_map(|s| s.rho_u.iter().cloned()))
         .collect();
-    let b_t_hat_eq_u = ring.mat_vec(&ctx.pp.b, &t_hat)? == u;
-    let max_norm_t_hat = hachi_co_core::short::inf_norm_polys(ring, &t_hat)?;
+    let b_t_hat_eq_u = ring.mat_vec(&ctx.pp.b, &t_rho)? == u;
+    let max_norm_t_hat = hachi_co_core::short::inf_norm_polys(ring, &t_rho)?;
     let f_eq_f_bar = f.iter().zip(&f_bar).all(|(x, y)| field.reduce(x) == *y);
 
     let checks = OpenChecks {

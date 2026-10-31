@@ -42,7 +42,7 @@ fn severities_are_as_documented() {
     }
     let r = report(&clean_toy());
     assert!(r.all_hold(), "{r}");
-    assert_eq!(r.constraints().len(), 13);
+    assert_eq!(r.constraints().len(), 14);
     for (entry, id) in r.constraints().iter().zip(ConstraintId::ALL) {
         assert_eq!((entry.id, entry.severity), (id, id.severity()));
     }
@@ -125,7 +125,9 @@ fn centered_responses() {
         n_a: 1,
         n_b: 1,
         n_d: 1,
-        m_rho: 2,
+        m_u: 2,
+        m_v: 2,
+        pad: hachi_co_params::PadRule::Field,
         q: QChoice::Smallest,
     };
     let (p, r) = derive(&with_q(c, 1 << 26)).unwrap();
@@ -142,14 +144,29 @@ fn centered_responses() {
 
 #[test]
 fn alpha_minus_kappa_and_k_divides_half_d() {
-    // alpha - kappa = 1 (the boundary) holds; kappa = alpha (k = d) fails both, which are
-    // equivalent for powers of two.
+    // 2 <= alpha - kappa <= l, and k | d/2, i.e. alpha - kappa >= 1 for powers of two: the lower
+    // boundary holds, alpha - kappa = 1 fails the first only, kappa = alpha (k = d) fails both.
+    let c = Choices {
+        kappa: 2,
+        ..clean_toy()
+    };
+    let r = report(&c);
+    assert!(r.holds(ConstraintId::AlphaMinusKappa) && r.holds(ConstraintId::KDividesHalfD));
     let c = Choices {
         kappa: 3,
         ..clean_toy()
     };
     let r = report(&c);
-    assert!(r.holds(ConstraintId::AlphaMinusKappa) && r.holds(ConstraintId::KDividesHalfD));
+    assert!(!r.holds(ConstraintId::AlphaMinusKappa) && r.holds(ConstraintId::KDividesHalfD));
+    // The upper boundary, alpha - kappa = l; above it derive refuses the choices.
+    let c = Choices {
+        alpha: 6,
+        kappa: 2,
+        ell: 4,
+        ..clean_toy()
+    };
+    assert!(report(&c).holds(ConstraintId::AlphaMinusKappa));
+    assert!(derive(&Choices { ell: 3, ..c }).is_err());
     let c = Choices {
         kappa: 4,
         ..clean_toy()
@@ -200,10 +217,46 @@ fn b_at_least_three() {
 }
 
 #[test]
-fn m_rho_above_n_d() {
+fn m_u_above_n_b() {
     assert!(
         report(&Choices {
-            m_rho: 2,
+            m_u: 2,
+            n_b: 1,
+            ..clean_toy()
+        })
+        .all_hold()
+    );
+    assert_eq!(
+        violated(&Choices {
+            m_u: 1,
+            n_b: 1,
+            ..clean_toy()
+        }),
+        [ConstraintId::MUAboveNB]
+    );
+    assert_eq!(
+        violated(&Choices {
+            m_u: 3,
+            n_b: 3,
+            ..clean_toy()
+        }),
+        [ConstraintId::MUAboveNB]
+    );
+    assert!(
+        report(&Choices {
+            m_u: 4,
+            n_b: 3,
+            ..clean_toy()
+        })
+        .all_hold()
+    );
+}
+
+#[test]
+fn m_v_above_n_d() {
+    assert!(
+        report(&Choices {
+            m_v: 2,
             n_d: 1,
             ..clean_toy()
         })
@@ -211,23 +264,23 @@ fn m_rho_above_n_d() {
     );
     assert_eq!(
         violated(&Choices {
-            m_rho: 1,
+            m_v: 1,
             n_d: 1,
             ..clean_toy()
         }),
-        [ConstraintId::MRhoAboveND]
+        [ConstraintId::MVAboveND]
     );
     assert_eq!(
         violated(&Choices {
-            m_rho: 3,
+            m_v: 3,
             n_d: 3,
             ..clean_toy()
         }),
-        [ConstraintId::MRhoAboveND]
+        [ConstraintId::MVAboveND]
     );
     assert!(
         report(&Choices {
-            m_rho: 4,
+            m_v: 4,
             n_d: 3,
             ..clean_toy()
         })
@@ -331,10 +384,10 @@ fn display_lists_every_condition() {
         ..toy_choices(1)
     })
     .to_string();
-    assert_eq!(text.lines().count(), 13);
+    assert_eq!(text.lines().count(), 14);
     assert!(
         text.contains("FATAL")
             && text.contains("warning")
-            && text.contains("6_Collaborative_Hachi.tex:272")
+            && text.contains("6_Collaborative_Hachi.tex:274")
     );
 }

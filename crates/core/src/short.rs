@@ -1,6 +1,6 @@
 //! Exact arithmetic on short integer polynomials, infinity norms and centered representatives,
 //! shared by the blocks that handle masks, folds and responses (the ring-to-linear step,
-//! `5_Building_Blocks.tex`:127-133, and the test oracle Open, `6_Collaborative_Hachi.tex`:401).
+//! `5_Building_Blocks.tex`:139-146, and the test oracle Open, `6_Collaborative_Hachi.tex`:413).
 //!
 //! A short polynomial is the vector of its $d$ signed coefficients (index $j$ for $X^j$), an
 //! element of $\mathcal R = \mathbb Z\[X\]/(X^d + 1)$ (`4_preliminaries.tex`:67).
@@ -18,7 +18,7 @@ use hachi_co_math::{Poly, Ring};
 /// two integer polynomials of the same length $d$; the oracle's `int_ring_mul_rows` for one row
 /// (`ref/hachico_ref/r2l.py`). In the ring-to-linear step $c$ is a challenge and $s$ the centered
 /// digits of a block, so that $\sum\_{i' \in \mathcal I\_i} c\_{i'} \mathbf s\_{i'}$ is computed
-/// over the integers (`5_Building_Blocks.tex`:128; `ref/README.md`, choice 17).
+/// over the integers (`5_Building_Blocks.tex`:140; `ref/README.md`, choice 17).
 ///
 /// The products and sums are formed in `i128` with overflow checks.
 ///
@@ -126,7 +126,7 @@ pub fn centered(ring: &Ring, polys: &[Poly]) -> Result<Vec<Vec<i64>>> {
 
 /// $\Vert (a\_1, \dots, a\_L) \Vert\_\infty$ over centered representatives
 /// (`4_preliminaries.tex`:86), e.g. $\Vert \hat{\mathbf t} \Vert\_\infty$ in Open
-/// (`6_Collaborative_Hachi.tex`:402); 0 for an empty vector.
+/// (`6_Collaborative_Hachi.tex`:414); 0 for an empty vector.
 ///
 /// # Errors
 /// [`Error::Math`] for a polynomial without $d$ coefficients.

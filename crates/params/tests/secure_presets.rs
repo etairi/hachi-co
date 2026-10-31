@@ -137,16 +137,19 @@ fn estimates_are_consistent_and_reach_the_target() {
                 "{name} {which}"
             );
         }
-        // MLWE_{q, d, n_D, m_rho - n_D, b}: S_b has coefficients in [ceil(-b/2), ceil(b/2) - 1].
-        assert_eq!(s.mlwe.secret_dim, (c.m_rho - c.n_d) * p.d, "{name}");
-        assert_eq!(s.mlwe.samples, c.n_d * p.d, "{name}");
+        // MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b}: S_b has coefficients
+        // in [ceil(-b/2), ceil(b/2) - 1].
         let b = i64::try_from(c.b).unwrap();
-        assert_eq!(s.mlwe.digit_range, (-(b / 2), (b + 1) / 2 - 1), "{name}");
-        assert!(
-            s.mlwe.bits.is_none_or(|bits| bits >= target),
-            "{name}: {:?}",
-            s.mlwe.bits
-        );
+        for (mlwe, rank, m) in [(&s.mlwe, c.n_d, c.m_v), (&s.mlwe_u, c.n_b, c.m_u)] {
+            assert_eq!(mlwe.secret_dim, (m - rank) * p.d, "{name}");
+            assert_eq!(mlwe.samples, rank * p.d, "{name}");
+            assert_eq!(mlwe.digit_range, (-(b / 2), (b + 1) / 2 - 1), "{name}");
+            assert!(
+                mlwe.bits.is_none_or(|bits| bits >= target),
+                "{name}: {:?}",
+                mlwe.bits
+            );
+        }
     }
 }
 

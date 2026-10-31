@@ -16,7 +16,7 @@ fn partition_matches_a_brute_force_reimplementation() {
     for n in 1..=8u64 {
         let l = Layout::new(&toy(n)).unwrap();
         let n = n as usize;
-        let mut owner = vec![0usize; l.mu - 1]; // 0 = unheld
+        let mut owner = vec![0usize; l.u]; // 0 = unheld
         for i in 0..l.n_blocks {
             // The oracle's rule: (i >> (r - ceil(log n))) + 1 if <= n.
             let p = (i >> (l.r - l.log_n)) + 1;
@@ -36,8 +36,11 @@ fn partition_matches_a_brute_force_reimplementation() {
             for e in 0..l.n_a * l.delta {
                 owner[l.t0 + (p - 1) * l.n_a * l.delta + e] = p;
             }
-            for e in 0..l.m_rho {
-                owner[l.rho + (p - 1) * l.m_rho + e] = p;
+            for e in 0..l.m_v {
+                owner[l.rho_v + (p - 1) * l.m_v + e] = p;
+            }
+            for e in 0..l.m_u {
+                owner[l.rho_u + (p - 1) * l.m_u + e] = p;
             }
         }
         owner[l.z..l.u].fill(1);
@@ -71,7 +74,7 @@ fn partition_matches_a_brute_force_reimplementation() {
             );
         }
         assert_eq!(unheld.is_empty(), n.is_power_of_two(), "n = {n}");
-        // No S_p contains u = mu - 1, and invalid parties hold nothing.
+        // No S_p contains u = mu - 2, and invalid parties hold nothing.
         for p in 0..=n + 1 {
             assert!(!l.in_s(p, l.u));
         }
@@ -96,25 +99,29 @@ fn ranges_follow_the_element_major_layout() {
         for p in 1..=n {
             assert_eq!(l.w0_hat_range(p).len(), l.delta);
             assert_eq!(l.t0_hat_range(p).len(), l.n_a * l.delta);
-            assert_eq!(l.rho_range(p).len(), l.m_rho);
+            assert_eq!(l.rho_v_range(p).len(), l.m_v);
+            assert_eq!(l.rho_u_range(p).len(), l.m_u);
         }
         assert_eq!(l.w0_hat_range(n).end, l.t0);
-        assert_eq!(l.t0_hat_range(n).end, l.rho);
-        assert_eq!(l.rho_range(n).end, l.t);
-        assert_eq!(l.t_hat_range(l.n_blocks - 1).end, l.z);
+        assert_eq!(l.t0_hat_range(n).end, l.rho_v);
+        assert_eq!(l.rho_v_range(n).end, l.t);
+        assert_eq!(l.t_hat_range(l.n_blocks - 1).end, l.rho_u);
+        assert_eq!(l.rho_u_range(n).end, l.z);
         assert_eq!(l.z_hat_range().len(), l.width_a * l.tau);
         for p in [0, n + 1] {
             assert!(l.w0_hat_range(p).is_empty());
             assert!(l.t0_hat_range(p).is_empty());
-            assert!(l.rho_range(p).is_empty());
+            assert!(l.rho_v_range(p).is_empty());
+            assert!(l.rho_u_range(p).is_empty());
         }
-        // The named blocks tile [0, mu).
+        // The named blocks tile [0, mu - 1).
         let blocks = l.named_blocks();
         assert_eq!(blocks[0].start, 0);
         for w in blocks.windows(2) {
             assert_eq!(w[0].start + w[0].len, w[1].start);
         }
-        assert_eq!(blocks[6].start + blocks[6].len, l.mu);
+        assert_eq!(blocks[7].start + blocks[7].len, l.len_z);
+        assert_eq!(l.len_z + 1, l.mu);
         assert_eq!((l.width_d, l.t), (l.t, l.w + l.t));
         assert_eq!(l.ell_pp, l.ell_u + l.ell_l);
         assert_eq!(l.n_prime, l.row_a + l.n_a);
@@ -191,7 +198,7 @@ mod fixtures {
             // Named blocks: [name, start, length].
             let recorded = fx.get("/ring_to_linear/layout/blocks").unwrap();
             let recorded = recorded.as_array().unwrap();
-            assert_eq!(recorded.len(), 7);
+            assert_eq!(recorded.len(), 8);
             for (b, r) in l.named_blocks().iter().zip(recorded) {
                 assert_eq!(r[0].as_str(), Some(b.name), "{name}");
                 assert_eq!(r[1].as_u64(), Some(b.start as u64), "{name} {}", b.name);
@@ -210,7 +217,7 @@ mod fixtures {
             }
             assert_eq!(
                 fx.ints("/ring_to_linear/M_shape").unwrap(),
-                vec![l.n_prime as i64, l.mu as i64, l.d as i64]
+                vec![l.n_prime as i64, l.len_z as i64, l.d as i64]
             );
             // Partition S_1..S_n (merged ranges) and the unheld positions.
             for p in 1..=fx.n() {

@@ -6,10 +6,10 @@
 //! |---|---|---|
 //! | [`prg`] | [`ShakePrg`], a framed SHAKE128 stream implementing [`rand::Rng`] | — |
 //! | [`uniform`] | exact $[0, n)$, $[lo, hi]$, $\mathbb Z_q$, $[-\gamma, \gamma]^N$ and $S_\beta$ | 4_preliminaries.tex:88, 117 |
-//! | [`l1ball`] | $\lvert C \rvert$ and exactly uniform $c \in C = \lbrace c : \lVert c \rVert_1 \le \omega \rbrace$ | 5_Building_Blocks.tex:122 |
-//! | [`matrix`] | $A$, $B$, $D$ entry by entry from a seed | 6_Collaborative_Hachi.tex:283-287 |
+//! | [`l1ball`] | $\lvert C \rvert$ and exactly uniform $c \in C = \lbrace c : \lVert c \rVert_1 \le \omega \rbrace$ | 5_Building_Blocks.tex:134 |
+//! | [`matrix`] | $A$, $B$, $D$ entry by entry from a seed | 6_Collaborative_Hachi.tex:287-291 |
 //! | [`rej`] | $\mathsf{Rej}$, $\mathsf{SimRej}$, masks, the exact acceptance probability $1/M$ | 4_preliminaries.tex:117-127 |
-//! | [`gauss`] | $D_{\mathbb Z,\sigma}$ centred at 0 for $\sigma = 1, 2, 4, 8, 16$, from the certified tables of [`gauss_tables`] | 4_preliminaries.tex:334 (hiding Hachi) |
+//! | [`gauss`] | $D_{\mathbb Z,\sigma}$ centred at 0 for $\sigma = 1, 2, 4, 8, 16$, from the certified tables of [`gauss_tables`] | 4_preliminaries.tex:362 (hiding Hachi) |
 //!
 //! **Exactness.** Every uniform sampler is exactly uniform on its set given a uniform source, by
 //! rejection on whole words (no modular reduction, no floating point). The Gaussian sampler is

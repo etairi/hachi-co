@@ -35,14 +35,14 @@ pub const FS_DOMAIN_SC_ROUND: &str = "hachi-co/fs/sumcheck/a";
 ///
 /// **Call order.** Prover and verifier make the same calls in the same order. Absorb every public
 /// message, with a fixed label (a constant of the crate that sends the message), before drawing
-/// the coins that follow it. For the ring-to-linear step (`5_Building_Blocks.tex`:115-131), the
+/// the coins that follow it. For the ring-to-linear step (`5_Building_Blocks.tex`:127-144), the
 /// provers, for attempt $a = 0, 1, \dots$ until no party aborts, call
 /// [`begin_attempt`](Self::begin_attempt)`(a)`, absorb that attempt's first message $\mathbf v$,
 /// and draw [`r2l_challenges`](Self::r2l_challenges)`(a, 2^r, d, ω)`. A verifier that replays
 /// the accepted attempt $a^\ast$ calls `begin_attempt(a*)` once, before absorbing $\mathbf v$ and
 /// drawing the challenges.
 ///
-/// The base-PCS openings at the end of the sumcheck (`5_Building_Blocks.tex`:314-326) draw no
+/// The base-PCS openings at the end of the sumcheck (`5_Building_Blocks.tex`:346-358) draw no
 /// coins of their own here: each one takes a 32-byte [`context`](Self::context) derived from
 /// everything absorbed before it, under a label that names the opening.
 ///
@@ -62,7 +62,7 @@ pub trait Challenger<const K: usize> {
     /// Absorbs a public message made of vectors of 64-bit words, under `label`: for example the
     /// base-PCS commitments of every party, encoded by
     /// [`BasePcs::commitment_to_words`](crate::BasePcs::commitment_to_words), one vector per
-    /// party (`5_Building_Blocks.tex`:220-221, 230, 241).
+    /// party (`5_Building_Blocks.tex`:249-250, 260, 273).
     fn absorb_words(&mut self, label: &'static str, words: &[Vec<u64>]);
 
     /// Absorbs a public integer, under `label`.
@@ -79,7 +79,7 @@ pub trait Challenger<const K: usize> {
     fn context(&mut self, label: &str) -> [u8; 32];
 
     /// Starts attempt `attempt` of the ring-to-linear step (Fiat-Shamir with aborts; the attempt
-    /// counter of `5_Building_Blocks.tex`:129, `6_Collaborative_Hachi.tex`:417 and
+    /// counter of `5_Building_Blocks.tex`:141, `6_Collaborative_Hachi.tex`:435 and
     /// `ref/README.md`, choice 5). For [`FsChallenger`], the first call (whatever its index) saves
     /// the current state as the base of the step, and every call restores that base and absorbs
     /// the attempt index, so that the challenges of attempt $a$ depend on everything absorbed
@@ -93,7 +93,7 @@ pub trait Challenger<const K: usize> {
 
     /// The challenges $\mathbf c = (c\_1, \dots, c\_{\mathrm{count}})$ of attempt `attempt`, each
     /// uniform in $\mathcal C = \lbrace c \in \mathcal R\_q : \Vert c \Vert\_1 \le \omega \rbrace$
-    /// (`5_Building_Blocks.tex`:122-126; `ref/README.md`, choice 15), given by its $d$ signed
+    /// (`5_Building_Blocks.tex`:134-138; `ref/README.md`, choice 15), given by its $d$ signed
     /// coefficients. The ring-to-linear step draws `count` $= 2^r$ of them.
     ///
     /// # Errors
@@ -109,7 +109,7 @@ pub trait Challenger<const K: usize> {
 
     /// The coins $\alpha, \rho \in \mathbb F\_{q^K}$, $\tau\_0 \in \mathbb F\_{q^K}^{\ell'' +
     /// \lceil \log n \rceil}$ and $\tau\_1 \in \mathbb F\_{q^K}^{\lceil \log \nu \rceil}$ of
-    /// `5_Building_Blocks.tex`:243-250, uniform and independent.
+    /// `5_Building_Blocks.tex`:275-282, uniform and independent.
     ///
     /// # Errors
     /// Implementation-specific errors.
@@ -122,7 +122,7 @@ pub trait Challenger<const K: usize> {
     ) -> Result<SumcheckCoins<K>>;
 
     /// The coin $a\_r \in \mathbb F\_{q^K}$ of round $r \in \lbrace 1, \dots, \ell'' \rbrace$ of the
-    /// sumcheck (`5_Building_Blocks.tex`:312), uniform.
+    /// sumcheck (`5_Building_Blocks.tex`:344), uniform.
     ///
     /// # Errors
     /// [`Error::Challenger`] for round 0, and implementation-specific errors.

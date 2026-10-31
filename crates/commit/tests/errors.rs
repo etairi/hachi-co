@@ -93,7 +93,8 @@ fn party_local_functions_refuse_bad_arguments() {
         reshare(&ctx, &mut rng, &share[1..]),
         Err(Error::Shape { .. })
     ));
-    let state = party_state(&ctx, 1, share).unwrap();
+    let rho_u = vec![ctx.ring.zero(); l.m_u];
+    let state = party_state(&ctx, 1, share, rho_u.clone()).unwrap();
     let f_prime = state.blocks[0].f_prime.clone();
     assert!(matches!(
         block_state(&ctx, l.n_blocks, f_prime.clone()),
@@ -117,12 +118,19 @@ fn party_local_functions_refuse_bad_arguments() {
         Err(Error::DuplicateBlock { index: 0 })
     );
     assert_eq!(
-        fah_b_input(&ctx, &twice),
+        fah_b_input(&ctx, 1, &twice, &rho_u),
         Err(Error::DuplicateBlock { index: 0 })
     );
     let mut wrong = state.blocks.clone();
     wrong[1].t_hat.pop();
-    assert!(matches!(fah_b_input(&ctx, &wrong), Err(Error::Core(_))));
+    assert!(matches!(
+        fah_b_input(&ctx, 1, &wrong, &rho_u),
+        Err(Error::Core(_))
+    ));
+    assert!(matches!(
+        fah_b_input(&ctx, 1, &state.blocks, &rho_u[1..]),
+        Err(Error::Shape { .. })
+    ));
 }
 
 /// A loopback whose exchange adds $q$ to one received residue.

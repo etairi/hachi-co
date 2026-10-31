@@ -1,15 +1,15 @@
-# Hachi-Co Sage reference oracle (milestone 0)
+# Hachi-Co Sage reference oracle
 
 A SageMath/numpy reference implementation of the Hachi-Co protocol at the toy presets of `docs/m0-spec.md`, for
 n ∈ {1, 2, 3}, extended to n ∈ {4, 8} (see "Party counts 4 and 8" below). It is a test oracle and fixture generator for the Rust code. It is not secure and not optimized.
-Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `625ced1`).
+Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`).
 Line references use the short names `4_P` (4_preliminaries.tex), `5_BB` (5_Building_Blocks.tex),
-`6_CH` (6_Collaborative_Hachi.tex) and `F2R` (field-to-ring-rok.tex).
+`6_CH` (6_Collaborative_Hachi.tex), `F2R` (field-to-ring-rok.tex) and `tH` (t-hiding.tex).
 
-Implemented: Setup, Commit, Open (6_CH:263-406), PConv and Πconv (F2R:36-169), the ring-to-linear step with
-masks, ρ, rejection sampling, aborts and retries (5_BB:98-193), and the collaborative sumcheck with its verifier
-(5_BB:195-335). Hachi as the base PCS is deferred: its openings are checked by evaluating the committed
-polynomials directly.
+Implemented: Setup, Commit with ρᵘ, Open (6_CH:265-421), PConv and Πconv (F2R:65-198), the ring-to-linear step
+with masks, ρᵛ, rejection sampling, aborts and retries (5_BB:98-207), the collaborative sumcheck with the pad
+and its verifier (5_BB:209-367), and numerical checks of the formulas of the t-hiding proof (tH). Hachi as the
+base PCS is deferred: its openings are checked by evaluating the committed polynomials directly.
 
 ## Running
 
@@ -44,17 +44,18 @@ reproduces their fixtures.
 |---|---|
 | `run_oracle.py` | driver: self-tests, instances, negative tests, fixtures |
 | `hachico_ref/subfield.py` | R_q^H, Tr_H, ψ, ψ⁻¹, E, monomials (main session; read-only here) |
-| `hachico_ref/params.py` | Setup cascade 6_CH:265-281, τ rule, q rule, toy table (n = 1, 2, 3, 4, 8) and its check |
+| `hachico_ref/params.py` | Setup cascade 6_CH:267-285, τ rule, q rule, toy table (n = 1, 2, 3, 4, 8) and its check |
 | `hachico_ref/prg.py` | SHAKE128 counter-mode PRG, uniform/box/S_β samplers, exact ℓ₁-ball sampler |
 | `hachico_ref/ring.py` | R_q on numpy int64 (with an overflow guard), G, G⁻¹, J, J⁻¹ |
 | `hachico_ref/fqk.py` | vectorized F_{q^k} in Hachi's basis (product table taken from `subfield.py`), eq, MLE, Lagrange |
 | `hachico_ref/context.py` | per-instance context; a Sage (FLINT) R_q used only to check relations |
 | `hachico_ref/commit.py` | Setup matrices, input, AS.Share, PConv, Commit, Open |
 | `hachico_ref/conv.py` | Πconv: x′, b, a, v, d, ⟨u⟩, F_AH(E), the check y = E(u) |
-| `hachico_ref/r2l.py` | ring-to-linear: z′ layout, partition, M, masks, ρ, F_AH(D), Rej, retries, ẑ; verifier coins |
-| `hachico_ref/sumcheck.py` | quotient shares, ⟨w̃⟩ tables, blinders, M̃*, provers' rounds, verifier, ideal PCS |
+| `hachico_ref/r2l.py` | ring-to-linear: z′ layout, partition, M, masks, ρᵛ, F_AH(D), Rej, F_AH(1ⁿ), retries, ẑ; verifier coins |
+| `hachico_ref/sumcheck.py` | quotient shares, ⟨w̃⟩ tables, pads, blinders, M̃*, provers' rounds, verifier, ideal PCS |
 | `hachico_ref/oracle.py` | one honest run with every relation check; the verifier's public recomputation |
 | `hachico_ref/negative.py` | tampered transcripts and witnesses, Open negatives, Rej boundary, abort rate |
+| `hachico_ref/hiding_checks.py` | the formulas of the t-hiding proof (tH) on honest runs and with deviating corrupted parties |
 | `hachico_ref/selftest.py` | arithmetic self-tests against Sage, brute force and `subfield.py` |
 | `hachico_ref/fixtures.py` | fixture writer (format below) |
 | `fixtures/toy-n{1,2,3,4,8}.json` | the fixtures |
@@ -81,11 +82,15 @@ reproduces their fixtures.
   f′[t] = ψ(f̂[t·d/k .. t·d/k + d/k − 1]).
 - **Πconv.** x′ = 1^{⌈log n⌉} ‖ x[0 : ℓ−α+κ], b = monomials(x′[0:r]), a = monomials(x′[r:ℓ′]),
   v = ψ(monomials(x[ℓ−α+κ:])), and d[nat(i)·2^m + nat(j)] = b_i a_j.
-- **z′ layout.** z′ = [ŵ (2^rδ) | ŵ₀ (nδ) | t̂₀ (n n_A δ) | ρ (n m_ρ) | t̂ (2^r n_A δ) | ẑ (2^m δ τ) | ⟨u⟩ (1)].
-  Entry (jδ+e)τ+t of ẑ is digit t of z[jδ+e].
+- **z′ layout.** z′ = [ŵ (2^rδ) | ŵ₀ (nδ) | t̂₀ (n n_A δ) | ρᵛ (n m_v) | t̂ (2^r n_A δ) | ρᵘ (n m_u) |
+  ẑ (2^m δ τ) | ⟨u⟩ (1)], of length μ − 1 (6_CH:282). Entry (jδ+e)τ+t of ẑ is digit t of z[jδ+e].
 - **Rows of M.** D (n_D), B (n_B), bᵀG (1), the c row (1), the A rows (n_A); y = (v, u_com, 0, 0, 0).
-- **Shares.** ⟨z′⟩_p equals z′ on S_p and 0 elsewhere, except position μ−1 (⟨u⟩), which holds ⟨u⟩_p = dᵀ{f′}_p.
-  Prover 1 holds y and ẑ. S_p consists of p's blocks of ŵ and t̂, its own ŵ₀, t̂₀ and ρ, and, for p = 1, ẑ.
+- **Shares.** ⟨z′⟩_p equals z′ on S_p and 0 elsewhere, except position μ−2 (⟨u⟩), which holds ⟨u⟩_p = dᵀ{f′}_p.
+  Prover 1 holds y and ẑ. S_p consists of p's blocks of ŵ and t̂, its own ŵ₀, t̂₀, ρᵛ and ρᵘ, and, for p = 1, ẑ.
+- **Pad.** Table row μ−1 (the draft's row μ, in no S_p and without a column in M) holds the pad of prover p: by
+  default ρʷ_p ∈ F_{q^k} at the entry (μ, 1) (5_BB:252-256), so ⟨w̃⟩_p has coefficients in F_{q^k}. `pad="residues"`
+  puts 2k uniform residues at the slots 0..2k of that row instead; this is a hidden variant, not the draft's
+  (`docs/hachi-zk-options.md`). Both Boolean sums are unchanged (tH:65).
 - **Hypercube.** V = (U, L), with |U| = ⌈log(μ+n′)⌉ and |L| = log 2d. A point has index u0·2d + l0, and V₁ is
   the most significant bit. Round r binds V_r (the table update is T′[x] = T[x] + a_r(T[x+h] − T[x])).
 - **eq.** eq(τ₀, (U, L, bit(i))) pairs τ₀[0:ℓ″] with (U, L) and τ₀[ℓ″:] with the ⌈log n⌉ bits of i − 1.
@@ -103,48 +108,49 @@ reproduces their fixtures.
    (crates/hachi/src/arithmetic/utils.rs:100). The math crate must use the same rule, or the fixtures' s, t̂,
    ŵ, t̂₀ and ŵ₀ will differ. Separately, the spec writes the window as [−⌈b/2⌉S, (⌈b/2⌉−1)S]. With the digit set
    [⌈−b/2⌉, ⌈b/2⌉−1] the lower end is ⌈−b/2⌉S = −⌊b/2⌋S. The two agree for even b, including b = 4.
-3. **PConv runs once.** Both Commit (6_CH:310) and Πconv (F2R:124-126) call PConv. We run it in Commit and
+3. **PConv runs once.** Both Commit (6_CH:315) and Πconv (F2R:153-155) call PConv. We run it in Commit and
    reuse f′ from the states. PConv is deterministic, so the result is the same.
-4. **u stays shared.** F2R:100 and F2R:166 list u as public, but only E(u) is opened (F2R:160-164), and the
-   author comment at F2R:100 asks for u to stay secret-shared. Πconv outputs ⟨u⟩, not u, and ⟨u⟩ is the last
-   entry of z′ (5_BB:171).
-5. **Aborts and retries (6_CH:417, 5_BB:129).** An abort ends Eval with (⊥, ⊥), and the caller restarts it.
-   Πconv is deterministic, so the oracle re-runs only the ring-to-linear step, with fresh masks, ρ and c
+4. **u stays shared.** F2R:129 and F2R:195 list u as public, but only E(u) is opened (F2R:189-193), and the
+   author comment at F2R:129 asks for u to stay secret-shared. Πconv outputs ⟨u⟩, not u, and ⟨u⟩ is the last
+   entry of z′ (5_BB:185).
+5. **Aborts and retries (6_CH:435, 5_BB:129).** An abort ends Eval with (⊥, ⊥), and the caller restarts it.
+   Πconv is deterministic, so the oracle re-runs only the ring-to-linear step, with fresh masks, ρᵛ and c
    (attempt index in the PRG domain). Every attempt is recorded.
-6. **S_i when n is not a power of two (5_BB:197).** The draft calls (S_1..S_n) a partition of [μ−1]. For n = 3
+6. **S_i when n is not a power of two (5_BB:226).** The draft calls (S_1..S_n) a partition of [μ−2]. For n = 3
    the positions of the unowned zero blocks (ŵ and t̂ of blocks 6 and 7) belong to no prover. We leave them in
    no S_i, so F_{0,i} forces every prover's share there to be zero. The S_i together with these positions form
    the partition.
-7. **Variable order in ⟨w̃⟩_i and M̃_α (5_BB:207, 225, 254).** The order is (I′, U, L), with U before L. The
+7. **Variable order in ⟨w̃⟩_i and M̃_α (5_BB:236, 254, 286).** The order is (I′, U, L), with U before L. The
    order within each block follows nat, most significant bit first, and the sumcheck binds V₁ = U₁ first.
-8. **e_i and the zero-check term of F₀ (5_BB:262, 269-270).** We read the formula literally. S_i ⊆ [μ−1], so
-   ⟨u⟩ (draft position μ) and the quotient rows (μ+1..μ+n′) lie in no S_i, and on them the bracket
-   1 − e_i − Σ_{u=μ}^{μ+n′} χ_{bit(u)} is 0. These rows are therefore neither range-checked nor zero-checked per
-   prover: they are ordinary additive shares. Only their sums are constrained, by the E rows, the bᵀG row and
-   the third term of M̃. A test confirms that compensated changes to the ⟨u⟩ or quotient shares are accepted.
-   The padding rows (u > μ+n′) are zero-checked for every prover.
-9. **The E rows (5_BB:259, 264, 266).** Row n′+j of M̃ (1-indexed j ∈ [d]) has E_{j,ℓ} at u = μ for ℓ ∈ [d],
+8. **e_i and the zero-check term of F₀ (5_BB:294, 301-302).** We read the formula literally. S_i ⊆ [μ−2], so
+   ⟨u⟩ (draft position μ−1), the pad's row μ and the quotient rows (μ+1..μ+n′) lie in no S_i, and on them the
+   bracket 1 − e_i − Σ_{u=μ−1}^{μ+n′} χ_{bit(u)} is 0. These rows are therefore neither range-checked nor
+   zero-checked per prover: they are ordinary additive shares. Only their sums are constrained, by the E rows,
+   the bᵀG row and the third term of M̃; the pad is constrained by nothing. Tests confirm that compensated changes
+   to the ⟨u⟩ or quotient shares, and any pad, are accepted. The padding rows (u > μ+n′) are zero-checked for
+   every prover.
+9. **The E rows (5_BB:291, 296, 298).** Row n′+j of M̃ (1-indexed j ∈ [d]) has E_{j,ℓ} at u = μ−1 for ℓ ∈ [d],
    and pairs with y_{j−1}. Here E_{j,ℓ} = `E_matrix[j−1][ℓ−1]`, where `E_matrix[i][j]` is coefficient i of
    E(X^j). The draft's index ranges are consistent once translated. Only the d low coefficients of ⟨u⟩ enter
    these rows; the third term covers the high ones.
-10. **First term of M̃_α (5_BB:254-255).** For u ≤ μ it runs over all ℓ ∈ [2d], as written.
-11. **Evaluation nodes (5_BB:290-294).** [d₀+1] is read as {1, …, d₀+1}; H(0) comes from interpolation.
-12. **The y in the claimed sum a (5_BB:264).** It is the public claim y embedded in R_q^H, which equals E(u)
+10. **First term of M̃_α (5_BB:287-291).** For u ≤ μ−1 it runs over all ℓ ∈ [2d], as written.
+11. **Evaluation nodes (5_BB:322-326).** [d₀+1] is read as {1, …, d₀+1}; H(0) comes from interpolation.
+12. **The y in the claimed sum a (5_BB:296).** It is the public claim y embedded in R_q^H, which equals E(u)
     after Πconv's check.
-13. **Base PCS (6_CH:289-292, 5_BB:220-230, 314-326).** The PCS is not modelled. Commitments are omitted, and
+13. **Base PCS (6_CH:294-297, 5_BB:220-230, 314-326).** The PCS is not modelled. Commitments are omitted, and
     an opening is accepted iff the claimed value equals the committed polynomial evaluated directly (`IdealPCS`).
     ⟨w̃⟩_p(a) is evaluated as Σ_x eq(a, x)·W_p[x], a different path from the provers' folding.
 14. **Verifier coins.** They are interactive public coins derived from the instance seed with domain
     separation; Fiat–Shamir is not modelled. They never depend on the messages, so a tampered transcript can be
     re-verified with the same coins.
-15. **Challenge distribution (5_BB:122, unspecified).** c is uniform on C = {c : ‖c‖₁ ≤ ω}, drawn with the
+15. **Challenge distribution (5_BB:134, unspecified).** c is uniform on C = {c : ‖c‖₁ ≤ ω}, drawn with the
     exact sampler of the m0-spec: a weighted support size, then a subset, signs and a composition.
 16. **Randomness and matrices.** All randomness comes from a SHAKE128 counter-mode PRG (`prg.py`). Entry (i, j)
     of A, B and D comes from its own stream `Prg(setup_seed, "setup/A", i·cols + j)`, and so on. The Rust side
     reads the matrices and all sampled values from the fixtures and does not re-derive them.
-17. **Fold and ẑ (5_BB:128-133).** Σ c_{i′} s_{i′} is computed over Z[X]/(X^d+1) from centered digits. Rej
+17. **Fold and ẑ (5_BB:140-146).** Σ c_{i′} s_{i′} is computed over Z[X]/(X^d+1) from centered digits. Rej
     accepts iff ‖z_i‖∞ ≤ γ − β₁ (4_P:119), and ẑ = J⁻¹(z) of the integer z.
-18. **Open's slack space (6_CH:394).** c ∈ Z is tested as ‖c_i‖₁ ≤ ω̄ and gcd(c_i, X^d+1) = 1. Open is run
+18. **Open's slack space (6_CH:404).** c ∈ Z is tested as ‖c_i‖₁ ≤ ω̄ and gcd(c_i, X^d+1) = 1. Open is run
     with c* = (1, …, 1).
 19. **Fixture seed.** The fixture uses the smallest seed index whose run contains an aborted attempt, so that
     the fixtures cover the abort-and-retry path. This is test coverage, not selection of results: every run
@@ -154,16 +160,16 @@ reproduces their fixtures.
 
 ### Observations about the draft (no effect on correctness)
 
-- **d₀ is larger than needed (6_CH:281).** d₀ = 2b + n′ + 1, but the individual degree of F_{0,i} is 2b + 1: 1
+- **d₀ is larger than needed (6_CH:285).** d₀ = 2b + n′ + 1, but the individual degree of F_{0,i} is 2b + 1: 1
   from eq, 1 from e_i and 2b − 1 from the range product. The sum Σ_{u} χ_{bit(u)} is still multilinear. This is
   derived, and also measured: in every round of all five presets the unblinded round polynomials have degree
   ≤ 9 = 2b + 1 in the U rounds and 8 in the L rounds, while F₁ has degree 2 ≤ d₁ = 3 (fixture key
   `sumcheck.round_degrees_unblinded`). With g₀ of degree 2b + 1, each round message would be 2b + 2 field
   elements instead of 2b + n′ + 2.
-- **6_CH:313** says "the i-th prover holds ⟨f′⟩_i = f′_i" for i ∈ {0,1}^r, which mixes block and prover
-  indices. We follow 6_CH:406: block i belongs to the prover named by its top ⌈log n⌉ bits.
-- **5_BB:134** says "slices of v, u, y". The y vector holds v and the commitment u; the claimed evaluation y
-  enters only through a (5_BB:264).
+- **6_CH:318** says "the i-th prover holds ⟨f′⟩_i = f′_i" for i ∈ {0,1}^r, which mixes block and prover
+  indices. We follow 6_CH:421: block i belongs to the prover named by its top ⌈log n⌉ bits.
+- **5_BB:147** says "slices of v, u, y". The y vector holds v and the commitment u; the claimed evaluation y
+  enters only through a (5_BB:296).
 
 ## Party counts 4 and 8
 
@@ -173,8 +179,8 @@ reproduces their fixtures.
 
   | name | n | q | δ | r | m | β₁ | N | γ | β | τ | μ | ℓ″ | d₀ |
   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-  | toy-n4 | 4 | 134217757 | 14 | 3 | 3 | 16 | 1792 | 229376 | 917504 | 11 | 1577 | 16 | 14 |
-  | toy-n8 | 8 | 536871029 | 15 | 4 | 3 | 16 | 1920 | 491520 | 3932160 | 12 | 2177 | 17 | 14 |
+  | toy-n4 | 4 | 134217757 | 14 | 3 | 3 | 16 | 1792 | 229376 | 917504 | 11 | 1586 | 16 | 14 |
+  | toy-n8 | 8 | 536871029 | 15 | 4 | 3 | 16 | 1920 | 491520 | 3932160 | 12 | 2194 | 17 | 14 |
 
   toy-n4 has the modulus of toy-n3: both have τ = 11, so the binding guard 16ωb^τ = 2²⁷ is the largest bound
   for both. Both n are powers of two, so every block has an owner and no position is unheld; each prover owns
@@ -193,13 +199,13 @@ reproduces their fixtures.
 
 **Encodings.**
 - A residue is an integer in [0, q).
-- A ring element is a list of d residues (index j ↔ X^j). Short integer objects (masks r_i, ρ_i, challenges c,
-  z_i, z) are lists of signed integers.
+- A ring element is a list of d residues (index j ↔ X^j). Short integer objects (masks r_i, ρᵘ_i, ρᵛ_i,
+  challenges c, z_i, z) are lists of signed integers.
 - An F_{q^k} element is a list of k residues (Hachi-basis coordinates).
 - A quotient share is a list of 2d residues.
 - Nested lists put the outermost index first.
 - Large derived objects are given as SHA-256 digests of their residues written as little-endian u64 in
-  row-major order of the stated shape: M (n′ × μ × d), the ⟨w̃⟩_p tables (2^{ℓ″}), the M* table (2^{ℓ″} × k) and
+  row-major order of the stated shape: M (n′ × (μ−1) × d), the ⟨w̃⟩_p tables (2^{ℓ″}), the M* table (2^{ℓ″} × k) and
   the eq(τ₁) table (2^{⌈log ν⌉} × k).
 
 **Top-level keys.**
@@ -213,19 +219,20 @@ reproduces their fixtures.
   - `reshare[i][j]` = ⟨f_i⟩_j, and the summed shares ⟨f⟩_j;
   - f̂ and f′;
   - the owner of each block, and per owned block: s, t and t̂;
-  - the full t̂ and u.
+  - the full t̂, ρᵘ per prover, and u.
 - `open`: the bit and each sub-condition.
 - `conv`: x′, b, a, v, d, the shares ⟨u⟩_p, the sum u formed inside F_AH(E), E(u), the matrix of E, and V's
   check.
 - `ring_to_linear`:
   - w and ŵ;
-  - per attempt: for each prover the mask, ρ, t₀, t̂₀, w₀, ŵ₀, ‖fold‖∞, ‖z_i‖∞ and accept; then v, c,
+  - per attempt: for each prover the mask, ρᵛ, t₀, t̂₀, w₀, ŵ₀, ‖fold‖∞, ‖z_i‖∞ and accept; then v, c,
     abort, and the aborting provers;
-  - the accepted attempt, the z_i sent to prover 1, z, ‖z‖∞ and the norm check;
+  - the accepted attempt, the inputs z_i of F_AH(1ⁿ), z, ‖z‖∞ and the norm check;
   - the layout and row indices, the partition (as [start, end) ranges), the unowned positions;
   - z′, y, and the digest of M.
 - `sumcheck`:
   - the quotient shares ⟨r⟩_p and their sum (low half);
+  - the pads `rho_w` and their entry `pad_index`;
   - the blinder coefficients, G₀,p and G₁,p;
   - the coins α, ρ, τ₀, τ₁ and a₁..a_ℓ″, and the claimed sum a;
   - per round, H₀ and H₁ (public), with the per-prover F_AH(I) inputs;
@@ -242,7 +249,7 @@ reproduces their fixtures.
 - E·cf(u) = cf(E(u)); E(u) ∈ R_q^H; y = E(u), with y = f(x) computed independently by `subfield.py`.
 - c ∈ C; ‖z‖∞ ≤ β at prover 1; J ẑ = z; z = Σ c_{i′}s_{i′} + Σ r_p over Z.
 - M z′ = y over R_q, checked in Sage (FLINT), independently of the numpy ring code.
-- The meaning of each row block (5_BB:182), checked on the unpacked values.
+- The meaning of each row block (5_BB:196), checked on the unpacked values.
 - (X^d+1)·r = Mz′ − y over Z_q[X], with the high half of Σ⟨r⟩_p equal to 0, checked in Sage.
 - Share 1 of the quotient equals the literal ½(1−X^d)(…) mod X^{2d}+1, checked in Sage.
 - P_p(x) = 0 at every hypercube point for every prover (range and zero checks).
@@ -268,8 +275,8 @@ seeds (`--sweep`).
   - An in-range ŵ digit changed: only H₁ fails.
   - Prover 2 writes outside its slice with the sum unchanged: only H₀ fails.
   - A quotient whose sum has a nonzero coefficient of X^{d+1}: only H₁ fails.
-  - Compensated changes to the ⟨u⟩ shares or to the quotient shares: accepted.
-- **Open.** A changed digit of s, a changed f, or c outside Z each gives 0.
+  - Compensated changes to the ⟨u⟩ shares or to the quotient shares, and any pad: accepted.
+- **Open.** A changed digit of s, a changed coefficient of ρᵘ, a changed f, or c outside Z each gives 0.
 - **Rej.** Exhaustively at (N, γ, β₁) = (2, 4, 2), with the oracle's own Rej: for every v with ‖v‖∞ ≤ β₁ each
   z of the box is output by exactly one mask; for all 24 v with ‖v‖∞ = β₁+1 the accepted set differs. At the
   toy parameters, exactly: with v₁ = β₁+1 the first coordinate reaches 2γ−2β₁ of the 2γ−2β₁+1 box values, so
@@ -294,10 +301,9 @@ seeds (`--sweep`).
 
 ## Not covered
 
-- Hachi as the base PCS, hiding commitments (A′·r_i) and Fiat–Shamir are not modelled. F_AH is ideal: the
-  shares are summed.
+- Hachi as the base PCS and Fiat–Shamir are not modelled. F_AH is ideal: the shares are summed.
 - Only the toy presets were run. The numpy code asserts int64 headroom: d(q−1)² + (q−1) ≤ 2⁶³ − 1 for R_q
   (q ≤ 759250125 at d = 16), and q < 2³¹ for F_{q^k}.
-- The oracle checks completeness and that the listed tampering is rejected. It proves neither soundness nor
-  zero-knowledge.
+- The oracle checks completeness, that the listed tampering is rejected, and the formulas of the t-hiding proof
+  on the runs it makes. It proves neither soundness nor hiding.
 - The PRG is the oracle's own, so the Rust side must inject the recorded randomness to compare runs.

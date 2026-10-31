@@ -18,6 +18,7 @@ from collections import OrderedDict
 import numpy as np
 
 from .prg import l1ball_count
+from .sumcheck import pad_index as sc_pad_index
 
 
 def L(a):
@@ -57,32 +58,34 @@ CONVENTIONS = OrderedDict([
     ("pconv", "f_hat[nat(p) 2^l + nat(q)] = <f>_{nat(p)+1}[nat(q)] for nat(p) < n, else 0; "
               "f'[t] = psi(f_hat[t*(d/k) .. t*(d/k) + d/k - 1])."),
     ("commit_state", "s_i = G^{-1}_{2^m}(f'_i) (shape 2^m*delta x d), t_i = A s_i, t_hat_i = G^{-1}_{n_A}(t_i); "
-                     "t_hat = (t_hat_0, .., t_hat_{2^r-1}) with zero blocks for unowned i."),
+                     "t_hat = (t_hat_0, .., t_hat_{2^r-1}) with zero blocks for unowned i; u = B (t_hat, rho_u), "
+                     "rho_u = (rho_u_1, .., rho_u_n), each m_u short ring elements."),
     ("conv", "x' = 1^{ceil(log n)} || x[0 : l-alpha+kappa]; b = monomials(x'[0:r]); a = monomials(x'[r:l']); "
              "v_point = psi(monomials(x[l-alpha+kappa : l])); d[nat(i) 2^m + nat(j)] = b_i a_j; "
              "<u>_p = sum over p's blocks of d_t f'_t; F_AH(E) outputs E(u); u itself stays shared."),
-    ("z_prime_layout", "z' = [w_hat (2^r delta) | w0_hat (n delta) | t0_hat (n n_A delta) | rho (n m_rho) | "
-                       "t_hat (2^r n_A delta) | z_hat (2^m delta tau) | <u> (1)]; z_hat entry (j*delta+e)*tau+t is "
-                       "digit t of z[j*delta+e]."),
+    ("z_prime_layout", "z' = [w_hat (2^r delta) | w0_hat (n delta) | t0_hat (n n_A delta) | rho_v (n m_v) | "
+                       "t_hat (2^r n_A delta) | rho_u (n m_u) | z_hat (2^m delta tau) | <u> (1)], of length mu - 1; "
+                       "z_hat entry (j*delta+e)*tau+t is digit t of z[j*delta+e]."),
     ("M_rows", "rows of M: D (n_D), B (n_B), b^T G (1), c^T(x)G_1 | 1_n^T(x)G_1 | -a^T G J (1), "
                "1_n^T(x)G_{n_A} | c^T(x)G_{n_A} | -A J (n_A); y = (v, u_com, 0, 0, 0)."),
-    ("shares", "<z'>_p equals z' on the positions S_p and 0 elsewhere, except position mu-1 (<u>), which holds "
+    ("shares", "<z'>_p equals z' on the positions S_p and 0 elsewhere, except position mu-2 (<u>), which holds "
                "<u>_p. Prover 1 holds y; the other provers hold 0. S_p: p's blocks of w_hat and t_hat, its own "
-               "w0_hat, t0_hat, rho, and (p = 1) z_hat. Positions of unowned zero blocks are in no S_p."),
+               "w0_hat, t0_hat, rho_v, rho_u, and (p = 1) z_hat. Positions of unowned zero blocks are in no S_p."),
     ("quotient", "<r>_p = 1/2 (1 - X^d)(M <z'>_p - {y}_p) mod X^{2d}+1 with entries read as degree < d "
                  "polynomials; stored as 2d residues."),
     ("hypercube", "V = (U, L), |U| = ell_U = ceil(log(mu+n')), |L| = ell_L = log 2d; point index "
-                  "nat(V) = u0 * 2d + l0 with V_1 the most significant bit. <w~>_p table: (u0 < mu, l0 < d) -> "
-                  "<z'>_p[u0] coefficient l0; (mu <= u0 < mu+n', any l0) -> <r>_p[u0-mu] coefficient l0; else 0."),
+                  "nat(V) = u0 * 2d + l0 with V_1 the most significant bit. <w~>_p table: (u0 < mu-1, l0 < d) -> "
+                  "<z'>_p[u0] coefficient l0; (u0, l0) = (mu-1, 0) -> the pad rho^w_p in F_{q^k}; "
+                  "(mu <= u0 < mu+n', any l0) -> <r>_p[u0-mu] coefficient l0; else 0."),
     ("eq", "eq_table(tau)[nat(x)] = prod_j (tau_j x_j + (1-tau_j)(1-x_j)), tau_1 pairs with the most significant "
            "bit. eq(tau_0, (U, L, bit(i))) uses tau_0[0:ell_pp] for (U, L) and tau_0[ell_pp:] for the "
            "ceil(log n) bits of i-1. eq(tau_1, bit(i')) is eq_table(tau_1)[i'-1]."),
-    ("M_tilde", "M*(u0, l0) = sum_{i'} eq(tau_1, bit(i')) M~_alpha(bit(i'), u0, l0): (u0 < mu) c_u alpha^{l0} for all "
-                "l0 < 2d with c_u = sum_{i0 < n'} eq1[i0] M[i0][u0](alpha); (mu <= u0 < mu+n') -eq1[u0-mu] "
-                "(alpha^d + 1) alpha^{l0}; plus at u0 = mu-1, l0 < d: sum_{j0<d} eq1[n'+j0] E[j0][l0]; plus for "
+    ("M_tilde", "M*(u0, l0) = sum_{i'} eq(tau_1, bit(i')) M~_alpha(bit(i'), u0, l0): (u0 < mu-1) c_u alpha^{l0} for "
+                "all l0 < 2d with c_u = sum_{i0 < n'} eq1[i0] M[i0][u0](alpha); (mu <= u0 < mu+n') -eq1[u0-mu] "
+                "(alpha^d + 1) alpha^{l0}; plus at u0 = mu-2, l0 < d: sum_{j0<d} eq1[n'+j0] E[j0][l0]; plus for "
                 "u0 < mu+n', l0 >= d: eq1[n' + d + u0 + (l0-d)(mu+n')]."),
     ("F0", "F_{0,p} = eq(tau_0,(U,L,bit(p))) [ e_p prod_{c=-b+1}^{b-1} (<w~>_p - c) + (1 - e_p - ind) <w~>_p ], "
-           "e_p = indicator of S_p (rows), ind = indicator of rows mu-1 .. mu+n'-1 (the draft's mu .. mu+n')."),
+           "e_p = indicator of S_p (rows), ind = indicator of rows mu-2 .. mu+n'-1 (the draft's mu-1 .. mu+n')."),
     ("rounds", "round r binds V_r; messages are H_{0,r}(t) for t = 1..d0+1 and H_{1,r}(t) for t = 1..d1+1 "
                "(the F_AH(I) outputs); V interpolates H(0) and H(a_r)."),
     ("blinders", "g(V) = s0 + sum_{j=1}^{ell_pp} sum_{k=1}^{D} s[j-1][k-1] V_j^k, D = d0 for g0 and d1 for g1."),
@@ -105,7 +108,7 @@ def build_fixture(res, neg, command, selection=None):
     import sage.version
     fx["generated_by"] = OrderedDict([
         ("command", command), ("sage", sage.version.version), ("python", platform.python_version()),
-        ("numpy", np.__version__), ("draft", "collaborative-hatchi commit 625ced1"),
+        ("numpy", np.__version__), ("draft", "collaborative-hatchi commit 8834c9f"),
     ])
     fx["conventions"] = CONVENTIONS
     pd = P.as_dict()
@@ -133,7 +136,7 @@ def build_fixture(res, neg, command, selection=None):
     fx["commit"] = OrderedDict([
         ("reshare", L(cd["reshare"])), ("f_shares", L(cd["f_shares"])), ("f_hat", L(cd["f_hat"])),
         ("f_prime", L(cd["f_prime"])), ("block_owner", owner), ("blocks", blocks), ("t_hat", L(cd["t_hat"])),
-        ("u", L(res["u_com"])),
+        ("rho_u", L(cd["rho_u"])), ("u", L(res["u_com"])),
     ])
     oi = res["open_info"]
     fx["open"] = OrderedDict([("c", "c* = (1, ..., 1)"), ("bit", all(oi["checks"].values())),
@@ -151,7 +154,7 @@ def build_fixture(res, neg, command, selection=None):
         for p in range(1, P.n + 1):
             pr = a["provers"][p]
             provs.append(OrderedDict([
-                ("prover", p), ("mask", L(pr["mask"])), ("rho", L(pr["rho"])), ("t0", L(pr["t0"])),
+                ("prover", p), ("mask", L(pr["mask"])), ("rho_v", L(pr["rho_v"])), ("t0", L(pr["t0"])),
                 ("t0_hat", L(pr["t0_hat"])), ("w0", L(pr["w0"])), ("w0_hat", L(pr["w0_hat"])),
                 ("fold_norm", pr["fold_norm"]), ("z_norm", pr["z_norm"]), ("accept", pr["accept"])]))
         atts.append(OrderedDict([("attempt", a["attempt"]), ("provers", provs), ("v", L(a["v"])), ("c", L(a["c"])),
@@ -185,7 +188,7 @@ def build_fixture(res, neg, command, selection=None):
         ("blinders", [OrderedDict([("g0", OrderedDict([("s0", L(priv["g0"][p].s0)), ("s", L(priv["g0"][p].s))])),
                                    ("g1", OrderedDict([("s0", L(priv["g1"][p].s0)), ("s", L(priv["g1"][p].s))]))])
                       for p in range(P.n)]),
-        ("G0", L(tr["G0"])), ("G1", L(tr["G1"])),
+        ("G0", L(tr["G0"])), ("G1", L(tr["G1"])), ("rho_w", L(priv["pads"])), ("pad_index", sc_pad_index(ctx)),
         ("coins", OrderedDict([("alpha", L(ch["alpha"])), ("rho", L(ch["rho"])), ("tau0", L(ch["tau0"])),
                                ("tau1", L(ch["tau1"])), ("a", L(priv["a"]))])),
         ("a_claim", L(res["verifier_info"]["a_claim"])),

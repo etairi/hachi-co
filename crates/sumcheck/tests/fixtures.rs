@@ -282,9 +282,8 @@ fn rounds_final_values_and_mstar_at_a_match() {
         );
         // The final value of each party is its table's MLE at a.
         for (p0, private) in run.privates.iter().enumerate() {
-            let lifted: Vec<Ext<K>> = private.w_table.iter().map(|x| f.from_base(*x)).collect();
             assert_eq!(
-                mle_eval(f, &lifted, point).unwrap(),
+                mle_eval(f, &private.w_field_table(f), point).unwrap(),
                 run.transcript.finals.w[p0]
             );
         }

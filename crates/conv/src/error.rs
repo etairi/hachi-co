@@ -54,7 +54,7 @@ pub enum Error {
 /// The result type of the provers' side.
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Why the verifier's check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:160-164)
+/// Why the verifier's check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ (`field-to-ring-rok.tex`:189-193)
 /// rejects. Every malformed or tampered message gives one of these, never a panic.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]

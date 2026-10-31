@@ -212,7 +212,7 @@ impl Plan {
 
     /// The exact matrix-vector product $(\sum_j m_{ij} v_j)\_i$ over $\mathbb Z_q\[X\]/(X^n + 1)$,
     /// as for the commitments $\mathbf t = \mathbf A \mathbf s$ (draft
-    /// `6_Collaborative_Hachi.tex`:370-376).
+    /// `6_Collaborative_Hachi.tex`:375-381).
     /// Each entry of $v$ is transformed once; each row is an inner product as in
     /// [`Plan::inner`].
     ///

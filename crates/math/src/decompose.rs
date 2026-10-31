@@ -57,7 +57,7 @@ fn power(b: u64, k: usize) -> Option<u128> {
 /// This is the window of `docs/m0-spec.md` ("Digit sets"), which writes its negative end as
 /// $-\lceil b/2 \rceil S_k$: for even $b$ that is the same number, and for odd $b$ the
 /// representable negative end is $\lceil -b/2 \rceil S_k = -(\lceil b/2 \rceil - 1) S_k$, as the
-/// draft states (`6_Collaborative_Hachi.tex`:755-761: "the negative endpoint has at least the
+/// draft states (`6_Collaborative_Hachi.tex`:785-791: "the negative endpoint has at least the
 /// same magnitude").
 pub fn representable_range(b: u64, k: usize) -> (i128, i128) {
     let (lo, hi) = digit_range(b);
@@ -112,7 +112,7 @@ pub fn tight_tau(beta: u128, b: u64) -> Result<usize> {
     }
 }
 
-/// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (`6_Collaborative_Hachi.tex`:276,
+/// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (`6_Collaborative_Hachi.tex`:280,
 /// `4_preliminaries.tex`:65), kept as an option (`docs/m0-spec.md`, "τ rule").
 ///
 /// # Errors

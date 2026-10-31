@@ -4,10 +4,10 @@
 
 use crate::error::VerifyError;
 use hachi_co_core::{Blinder, Layout, Poly, SumcheckCoins};
-use hachi_co_math::Ext;
+use hachi_co_math::{Ext, Fqk};
 use hachi_co_mpc::PartyId;
 
-/// The provers' messages of one round $r$ (`5_Building_Blocks.tex`:293-300): the outputs of
+/// The provers' messages of one round $r$ (`5_Building_Blocks.tex`:325-332): the outputs of
 /// $\mathcal F\_{\mathsf{AH}}(\mathbb I)$, $H\_{0,r}(t)$ for $t = 1, \dots, d\_0 + 1$ and $H\_{1,r}(t)$
 /// for $t = 1, \dots, d\_1 + 1$ (fixture keys `sumcheck/rounds/<r-1>/H0` and `H1`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub struct RoundMessage<const K: usize> {
     pub h1: Vec<Ext<K>>,
 }
 
-/// The opened values of `5_Building_Blocks.tex`:314-320, one per party $p = 1, \dots, n$ (index
+/// The opened values of `5_Building_Blocks.tex`:346-352, one per party $p = 1, \dots, n$ (index
 /// $p - 1$; fixture keys `sumcheck/final/w`, `g0`, `g1`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinalValues<const K: usize> {
@@ -44,8 +44,8 @@ impl<const K: usize> FinalValues<K> {
 /// Words of the base PCS for the three committed polynomials of every party, one word vector
 /// per party $p = 1, \dots, n$ (index $p - 1$): the commitments
 /// ([`BasePcs::commitment_to_words`](hachi_co_core::BasePcs::commitment_to_words);
-/// `5_Building_Blocks.tex`:220-221, 230, sent at 241) or the opening proofs
-/// ([`BasePcs::proof_to_words`](hachi_co_core::BasePcs::proof_to_words); lines 316-320). The
+/// `5_Building_Blocks.tex`:249-250, 260, sent at 241) or the opening proofs
+/// ([`BasePcs::proof_to_words`](hachi_co_core::BasePcs::proof_to_words); lines 348-352). The
 /// sumcheck carries them as words so that its types do not depend on the base PCS; the verifier
 /// decodes them with the base PCS it is given.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -95,7 +95,7 @@ impl PcsWords {
     }
 }
 
-/// Everything the verifier of the sumcheck reads (`5_Building_Blocks.tex`:241, 300, 320), in the
+/// Everything the verifier of the sumcheck reads (`5_Building_Blocks.tex`:273, 332, 352), in the
 /// shape of the oracle's transcript with the base PCS added: the per-party hypercube sums of the
 /// blinders and base-PCS commitments, the $\ell''$ round messages, the per-party final values
 /// and the base-PCS opening proofs. (The oracle does not model the base PCS, `ref/README.md`,
@@ -109,7 +109,7 @@ pub struct SumcheckTranscript<const K: usize> {
     /// `sumcheck/G1`).
     pub g1_sums: Vec<Ext<K>>,
     /// The base-PCS commitments to $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$ of
-    /// every party (`5_Building_Blocks.tex`:220-221, 230, sent at 241), sent with the hypercube
+    /// every party (`5_Building_Blocks.tex`:249-250, 260, sent at 241), sent with the hypercube
     /// sums and absorbed after them, before the coins $\alpha, \rho, \tau\_0, \tau\_1$.
     pub commitments: PcsWords,
     /// The round messages, rounds $1, \dots, \ell''$ in order.
@@ -117,7 +117,7 @@ pub struct SumcheckTranscript<const K: usize> {
     /// The final values.
     pub finals: FinalValues<K>,
     /// The base-PCS proofs that open the commitments to the final values at the point
-    /// $\mathbf a$ (`5_Building_Blocks.tex`:314-320).
+    /// $\mathbf a$ (`5_Building_Blocks.tex`:346-352).
     pub openings: PcsWords,
 }
 
@@ -193,7 +193,7 @@ impl<const K: usize> SumcheckTranscript<K> {
 }
 
 /// One party's values of one round: its input to $\mathcal F\_{\mathsf{AH}}(\mathbb I)$
-/// (`5_Building_Blocks.tex`:293-300; fixture keys `sumcheck/rounds/<r-1>/F_AH_inputs_H0` and
+/// (`5_Building_Blocks.tex`:325-332; fixture keys `sumcheck/rounds/<r-1>/F_AH_inputs_H0` and
 /// `F_AH_inputs_H1`, entry $p - 1$) and the same values without the blinders (for the degree
 /// audit, fixture key `sumcheck/round_degrees_unblinded`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -218,9 +218,13 @@ pub struct SumcheckPrivate<const K: usize> {
     /// ([`quotient_share`](crate::quotient_share)).
     pub quotient: Vec<Poly>,
     /// The hypercube values of $\langle \widetilde w \rangle\_p$, $2^{\ell''}$ residues
-    /// ([`w_table`](crate::w_table)): the polynomial committed in `5_Building_Blocks.tex`:230
-    /// (by its monomial coefficients, [`hachi_co_core::base_pcs::mobius`] of this table).
+    /// ([`w_table`](crate::w_table)): the polynomial committed in `5_Building_Blocks.tex`:260
+    /// (by its monomial coefficients), with zero at the pad's entry if the pad is a field element.
     pub w_table: Vec<u64>,
+    /// The entry of the table and the value of the pad $\rho^w\_p \in \mathbb F\_{q^k}$
+    /// (`5_Building_Blocks.tex`:252-256), `None` for
+    /// [`PadRule::Residues`](hachi_co_params::PadRule), whose residues are in `w_table`.
+    pub pad: Option<(usize, Ext<K>)>,
     /// The coefficients of $g\_{0,p}$.
     pub g0: Blinder<K>,
     /// The coefficients of $g\_{1,p}$.
@@ -233,7 +237,19 @@ pub struct SumcheckPrivate<const K: usize> {
     pub rounds: Vec<RoundValues<K>>,
 }
 
-/// Which committed polynomial a [`Claim`] is about (`5_Building_Blocks.tex`:316-318).
+impl<const K: usize> SumcheckPrivate<K> {
+    /// The hypercube values of $\langle \widetilde w \rangle\_p$ over $\mathbb F\_{q^K}$, the
+    /// pad included.
+    pub fn w_field_table(&self, field: &Fqk<K>) -> Vec<Ext<K>> {
+        let mut table: Vec<Ext<K>> = self.w_table.iter().map(|x| field.from_base(*x)).collect();
+        if let Some((at, value)) = self.pad {
+            table[at] = value;
+        }
+        table
+    }
+}
+
+/// Which committed polynomial a [`Claim`] is about (`5_Building_Blocks.tex`:348-350).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClaimedPoly {
     /// The blinder $g\_{0,p}$, of individual degree $d\_0$ in $\ell''$ variables, committed by
@@ -278,7 +294,7 @@ impl ClaimedPoly {
 }
 
 /// An evaluation claim "the polynomial `poly` committed by party `party` takes the value `value`
-/// at the point $\mathbf a$" (`5_Building_Blocks.tex`:322-326), which the base PCS proves.
+/// at the point $\mathbf a$" (`5_Building_Blocks.tex`:354-358), which the base PCS proves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Claim<const K: usize> {
     /// The party $p \in \lbrace 1, \dots, n \rbrace$ that committed to the polynomial.

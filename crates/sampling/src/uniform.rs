@@ -108,7 +108,7 @@ pub fn uniform_range_i64<R: Rng + ?Sized>(rng: &mut R, lo: i64, hi: i64) -> Resu
 /// `len` $= d$, coefficient $j$ for $X^j$). Each entry is [`uniform_below`]$(q)$.
 ///
 /// This is the distribution of the public matrices $A, B, D \leftarrow R_q^{\cdot \times \cdot}$
-/// of Setup (6_Collaborative_Hachi.tex:283-287); see [`crate::matrix`].
+/// of Setup (6_Collaborative_Hachi.tex:287-291); see [`crate::matrix`].
 ///
 /// # Errors
 /// [`Error::EmptyRange`] if $q = 0$; [`Error::RejectionLimit`] as in [`uniform_below`].
@@ -146,7 +146,7 @@ pub(crate) fn boxed_with<D: Draw>(draw: &mut D, gamma: u64, len: usize) -> Resul
 /// `len` integers uniform in $[\lceil -\beta/2 \rceil, \lceil \beta/2 \rceil - 1]$, the coefficient
 /// range of $S_\beta$ (4_preliminaries.tex:88); for $\beta = b$ these are the uniform secrets
 /// $S_b$ of Module-LWE (4_preliminaries.tex:114) and the commitment randomness
-/// $\rho_i \leftarrow S_b^{m_\rho}$ (5_Building_Blocks.tex:110).
+/// $\rho_i \leftarrow S_b^{m_\rho}$ (5_Building_Blocks.tex:122).
 ///
 /// The range has exactly $\beta$ integers, from $-\lfloor \beta/2 \rfloor$ to
 /// $\lceil \beta/2 \rceil - 1$; each entry is [`uniform_below`]$(\beta) - \lfloor \beta/2 \rfloor$.

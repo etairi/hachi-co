@@ -138,11 +138,11 @@ fn every_fixture_records_a_passing_run() {
         }
         // Negative tests: 4 per party and 16 others on the transcript; 6 witnesses (3 for n = 1,
         // which has no second party to shift shares to); 3 openings.
-        let witnesses = if n >= 2 { 6 } else { 3 };
+        let witnesses = if n >= 2 { 7 } else { 4 };
         for (group, count) in [
             ("transcript", 16 + 4 * n),
             ("witness", witnesses),
-            ("open", 3),
+            ("open", 4),
         ] {
             let tests = fx.get(&format!("/negative_tests/{group}")).unwrap();
             let tests = tests.as_object().unwrap();
@@ -199,7 +199,7 @@ fn parameter_cross_check_detects_every_disagreement() {
             .keys()
             .cloned()
             .collect();
-        assert_eq!(keys.len(), 44, "{name}");
+        assert_eq!(keys.len(), 46, "{name}");
         for key in &keys {
             let mut root = fx.json().clone();
             let entry = root.pointer_mut(&format!("/params/{key}")).unwrap();

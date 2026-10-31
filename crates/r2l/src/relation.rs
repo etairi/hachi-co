@@ -1,6 +1,6 @@
 //! Relation checkers (test oracles): $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ for
-//! $\mathbf z' = \sum\_p \langle \mathbf z' \rangle\_p$ (`5_Building_Blocks.tex`:154-182), and the
-//! meaning of each row block of $\mathbf M$ checked on the unpacked values (line 182; the oracle's
+//! $\mathbf z' = \sum\_p \langle \mathbf z' \rangle\_p$ (`5_Building_Blocks.tex`:167-196), and the
+//! meaning of each row block of $\mathbf M$ checked on the unpacked values (line 196; the oracle's
 //! `row_block_checks` in `ref/hachico_ref/oracle.py`).
 
 use crate::local::{a_times_g, check_len, response_len};
@@ -41,7 +41,7 @@ pub fn sum_shares<const K: usize>(ctx: &Context<K>, shares: &[LinearShare]) -> R
 /// [`hachi_co_math::Ring::mat_vec`]).
 ///
 /// # Errors
-/// [`Error::Shape`](crate::Error::Shape) unless $\mathbf z'$ has $\mu$ entries and
+/// [`Error::Shape`](crate::Error::Shape) unless $\mathbf z'$ has $\mu - 1$ entries and
 /// $\mathbf M$, $\mathbf y$ have $n'$ rows; [`Error::Math`](crate::Error::Math) for entries
 /// without $d$ coefficients.
 pub fn residual<const K: usize>(
@@ -50,11 +50,11 @@ pub fn residual<const K: usize>(
     z_prime: &[Poly],
 ) -> Result<Vec<Poly>> {
     let l = &ctx.layout;
-    check_len("z'", l.mu, z_prime.len())?;
+    check_len("z'", l.len_z, z_prime.len())?;
     check_len("rows of M", l.n_prime, rel.m.len())?;
     check_len("y", l.n_prime, rel.y.len())?;
     for row in &rel.m {
-        check_len("row of M", l.mu, row.len())?;
+        check_len("row of M", l.len_z, row.len())?;
     }
     let mz = ctx.ring.mat_vec(&rel.m, z_prime)?;
     mz.iter()
@@ -63,7 +63,7 @@ pub fn residual<const K: usize>(
         .collect()
 }
 
-/// Whether $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ (`5_Building_Blocks.tex`:154;
+/// Whether $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ (`5_Building_Blocks.tex`:167;
 /// the oracle's `check_linear_relation`): [`residual`] is zero.
 ///
 /// # Errors
@@ -79,22 +79,22 @@ pub fn relation_holds<const K: usize>(
 }
 
 /// The values the row blocks of $\mathbf M$ speak about, before decomposition
-/// (`5_Building_Blocks.tex`:103-133), for [`row_block_checks`].
+/// (`5_Building_Blocks.tex`:115-146), for [`row_block_checks`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnpackedWitness {
-    /// $w\_i$ for every block $i \lt 2^r$ ($0$ for an unowned block), line 106.
+    /// $w\_i$ for every block $i \lt 2^r$ ($0$ for an unowned block), line 118.
     pub w: Vec<Poly>,
-    /// $\hat{\mathbf w} = (\hat{\mathbf w}\_i)\_{i \lt 2^r}$, $2^r\delta$ entries, line 107.
+    /// $\hat{\mathbf w} = (\hat{\mathbf w}\_i)\_{i \lt 2^r}$, $2^r\delta$ entries, line 119.
     pub w_hat: Vec<Poly>,
-    /// $w\_{0,p}$ of the accepted attempt for $p = 1, \dots, n$ (entry $p - 1$), line 113.
+    /// $w\_{0,p}$ of the accepted attempt for $p = 1, \dots, n$ (entry $p - 1$), line 125.
     pub w0: Vec<Poly>,
     /// $\mathbf t\_{0,p}$ of the accepted attempt for $p = 1, \dots, n$, $n\_A$ entries each,
-    /// line 112.
+    /// line 124.
     pub t0: Vec<Vec<Poly>>,
     /// $\mathbf t\_i = \mathbf A \mathbf s\_i$ for every block $i \lt 2^r$ ($\mathbf 0$ for an
-    /// unowned block), $n\_A$ entries each (`6_Collaborative_Hachi.tex`:374).
+    /// unowned block), $n\_A$ entries each (`6_Collaborative_Hachi.tex`:379).
     pub t: Vec<Vec<Poly>>,
-    /// $\mathbf z = \sum\_p \mathbf z\_p$ over the integers, flat, $N$ entries (line 130).
+    /// $\mathbf z = \sum\_p \mathbf z\_p$ over the integers, flat, $N$ entries (line 143).
     pub z: Vec<i64>,
     /// $u = \sum\_p \langle u \rangle\_p$ ($\Pi\_{\mathsf{conv}}$).
     pub u: Poly,
@@ -105,13 +105,13 @@ pub struct UnpackedWitness {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowBlockChecks {
     /// Row $\mathbf b^T \mathbf G\_{2^r} \mid -1$: $\sum\_i b\_i \mathbf G\_1 \hat{\mathbf w}\_i =
-    /// u$ (`r2l.row_b: sum_i b_i w_i = u`; `5_Building_Blocks.tex`:160).
+    /// u$ (`r2l.row_b: sum_i b_i w_i = u`; `5_Building_Blocks.tex`:173).
     pub row_b: bool,
     /// Row $\mathbf c$: $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T \mathbf G\_{2^m}
-    /// \mathbf z$ (`r2l.row_c: ...`; line 161 and 182).
+    /// \mathbf z$ (`r2l.row_c: ...`; line 174 and 196).
     pub row_c: bool,
     /// Rows $\mathbf A$: $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p} = \mathbf A
-    /// \mathbf z$ (`r2l.row_A: ...`; line 162 and 182).
+    /// \mathbf z$ (`r2l.row_A: ...`; line 175 and 196).
     pub row_a: bool,
 }
 
@@ -122,7 +122,7 @@ impl RowBlockChecks {
     }
 }
 
-/// The meaning of the row blocks of $\mathbf M$ (`5_Building_Blocks.tex`:160-162, 182), checked
+/// The meaning of the row blocks of $\mathbf M$ (`5_Building_Blocks.tex`:173-175, 196), checked
 /// directly on the unpacked values with the challenges $\mathbf c$, as the oracle's
 /// `row_block_checks`: $\sum\_i b\_i \mathbf G\_1 \hat{\mathbf w}\_i = u$,
 /// $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T \mathbf G\_{2^m} \mathbf z$ and

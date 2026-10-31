@@ -9,7 +9,9 @@
 //! |---|---|---|
 //! | `reshare` | `/commit/reshare/<p-1>/<j-1>` for $j = 1, \dots, n-1$ (share $n$ is recomputed) | $n \times 2^\ell \times k$ |
 //! | `mask(a, ..)` | `/ring_to_linear/attempts/<a>/provers/<p-1>/mask`, flattened | $\delta 2^m \times d$ |
-//! | `rho(a, ..)` | `/ring_to_linear/attempts/<a>/provers/<p-1>/rho`, flattened | $m\_\rho \times d$ |
+//! | `rho_u(..)` | `/commit/rho_u/<p-1>`, flattened | $m\_u \times d$ |
+//! | `rho_v(a, ..)` | `/ring_to_linear/attempts/<a>/provers/<p-1>/rho_v`, flattened | $m\_v \times d$ |
+//! | `rho_w(..)` | `/sumcheck/rho_w/<p-1>` | $k$ |
 //! | `blinder(G0, ..)` | `/sumcheck/blinders/<p-1>/g0/s0` and `.../g0/s` | $k$; $\ell'' \times d\_0 \times k$ |
 //! | `blinder(G1, ..)` | `/sumcheck/blinders/<p-1>/g1/s0` and `.../g1/s` | $k$; $\ell'' \times d\_1 \times k$ |
 //! | `r2l_challenges(a, ..)` | `/ring_to_linear/attempts/<a>/c` | $2^r \times d$ |
@@ -95,7 +97,9 @@ pub struct ReplayRandomness {
     /// `reshare[j][t]`: coordinates of element $t$ of share $j + 1$.
     reshare: Vec<Vec<Vec<u64>>>,
     masks: Vec<Vec<i64>>,
-    rhos: Vec<Vec<i64>>,
+    rho_u: Vec<i64>,
+    rhos_v: Vec<Vec<i64>>,
+    rho_w: Vec<u64>,
     g0: RecordedBlinder,
     g1: RecordedBlinder,
 }
@@ -125,7 +129,7 @@ impl ReplayRandomness {
             .as_array()
             .map_or(0, Vec::len);
         let mut masks = Vec::with_capacity(attempts);
-        let mut rhos = Vec::with_capacity(attempts);
+        let mut rhos_v = Vec::with_capacity(attempts);
         for a in 0..attempts {
             let prefix = format!("/ring_to_linear/attempts/{a}/provers/{p0}");
             let recorded = fixture.usize(&format!("{prefix}/prover"))?;
@@ -135,7 +139,7 @@ impl ReplayRandomness {
                 )));
             }
             masks.push(fixture.ints(&format!("{prefix}/mask"))?);
-            rhos.push(fixture.ints(&format!("{prefix}/rho"))?);
+            rhos_v.push(fixture.ints(&format!("{prefix}/rho_v"))?);
         }
         Ok(Self {
             party,
@@ -145,7 +149,9 @@ impl ReplayRandomness {
             b: fixture.u64("/params/b")?,
             reshare,
             masks,
-            rhos,
+            rho_u: fixture.ints(&format!("/commit/rho_u/{p0}"))?,
+            rhos_v,
+            rho_w: fixture.residues(&format!("/sumcheck/rho_w/{p0}"))?,
             g0: RecordedBlinder::load(fixture, &format!("/sumcheck/blinders/{p0}/g0"))?,
             g1: RecordedBlinder::load(fixture, &format!("/sumcheck/blinders/{p0}/g1"))?,
         })
@@ -226,14 +232,37 @@ impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
         Ok(self.recorded(&self.masks, "mask", attempt, len)?.clone())
     }
 
-    fn rho(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
-        if b != self.b {
+    fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
+        if b != self.b || len != self.rho_u.len() {
             return Err(Error::Replay(format!(
-                "rho over S_{b}, the recording has b = {}",
+                "rho^u of {len} entries over S_{b}, the recording has {} over S_{}",
+                self.rho_u.len(),
                 self.b
             )));
         }
-        Ok(self.recorded(&self.rhos, "rho", attempt, len)?.clone())
+        Ok(self.rho_u.clone())
+    }
+
+    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
+        if b != self.b {
+            return Err(Error::Replay(format!(
+                "rho^v over S_{b}, the recording has b = {}",
+                self.b
+            )));
+        }
+        Ok(self.recorded(&self.rhos_v, "rho_v", attempt, len)?.clone())
+    }
+
+    fn rho_w(&mut self, field: &Fqk<K>) -> Result<Ext<K>> {
+        check_modulus(field.modulus(), self.q)?;
+        to_ext(&self.rho_w)
+    }
+
+    /// The fixtures record the draft's pad only.
+    fn rho_w_residues(&mut self, _q: u64, _len: usize) -> Result<Vec<u64>> {
+        Err(Error::Replay(
+            "the fixtures record a field pad, not a pad of residues".into(),
+        ))
     }
 
     fn blinder(

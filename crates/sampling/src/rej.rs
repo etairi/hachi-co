@@ -11,8 +11,8 @@
 //! cites Lemma 4 of Del Pino and Niot, "Finally! A Compact Lattice-Based Threshold Signature",
 //! PKC 2025), for every $v$ with $\lVert v \rVert_\infty \le \beta_1$ the two have the same
 //! output distribution. In Hachi-Co each prover runs [`rej`] on its own fold
-//! (5_Building_Blocks.tex:127-130) with $N = d \delta 2^m$, $\beta_1 = 2^{r - \lceil \log n \rceil} \omega b$
-//! and $\gamma = 2 n N \beta_1$ (6_Collaborative_Hachi.tex:275).
+//! (5_Building_Blocks.tex:139-143) with $N = d \delta 2^m$, $\beta_1 = 2^{r - \lceil \log n \rceil} \omega b$
+//! and $\gamma = 2 n N \beta_1$ (6_Collaborative_Hachi.tex:279).
 //!
 //! Vectors are flat coefficient vectors of length $N$ (the $N/d$ ring elements' coefficients,
 //! as $\chi_r$ and $\chi_z$ are defined, 4_preliminaries.tex:117).
@@ -204,7 +204,7 @@ fn check_parameters(gamma: u64, beta1: u64) -> Result<()> {
 }
 
 /// A mask $r \leftarrow \chi_r$, uniform on $[-\gamma, \gamma]^N$ (4_preliminaries.tex:117;
-/// each prover's $r_i$, 5_Building_Blocks.tex:110).
+/// each prover's $r_i$, 5_Building_Blocks.tex:122).
 ///
 /// This is [`crate::uniform::boxed`] with a [`CryptoRng`] bound: a mask hides the secret fold,
 /// so it must come from a cryptographic generator, and it must never be reused or revealed
@@ -379,7 +379,7 @@ pub fn acceptance_probability(gamma: u64, beta1: u64, n: usize) -> Result<Ratio>
 
 /// $\log_2(1/M) = N \log_2\left(1 - \frac{2\beta_1}{2\gamma + 1}\right)$ in floating point,
 /// computed with `ln_1p` so that it stays accurate for $\beta_1 \ll \gamma$; $\log_2 M$ is its
-/// negation. The Setup constraint $M \le e^{1/n}$ (6_Collaborative_Hachi.tex:275) reads
+/// negation. The Setup constraint $M \le e^{1/n}$ (6_Collaborative_Hachi.tex:279) reads
 /// $\log_2(1/M) \ge -\log_2(e)/n$.
 ///
 /// # Errors

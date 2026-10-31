@@ -105,7 +105,7 @@ fn digit_counts_equal_brute_force_and_the_toy_table() {
                 let t = draft - 1;
                 assert!(BigUint::from(b).pow(t as u32) >= BigUint::from(beta));
                 assert!(t == 0 || BigUint::from(b).pow(t as u32 - 1) < BigUint::from(beta));
-                // The draft's tau is representable for b >= 3 (6_CH:753-761), hence >= tight.
+                // The draft's tau is representable for b >= 3 (6_CH:783-791), hence >= tight.
                 assert!(draft >= tau, "b {b} beta {beta}");
             }
         }

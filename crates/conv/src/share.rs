@@ -1,4 +1,4 @@
-//! Steps 4-6 of $\Pi\_{\mathsf{conv}}$ for one party (`field-to-ring-rok.tex`:124-164): the share
+//! Steps 4-6 of $\Pi\_{\mathsf{conv}}$ for one party (`field-to-ring-rok.tex`:153-193): the share
 //! $\langle u \rangle\_p = \mathbf d^T \lbrace \mathbf f' \rbrace\_p$, the map $E$ with its matrix,
 //! and the party's input $E(\langle u \rangle\_p)$ to $\mathcal F\_{\mathsf{AH}}(E)$.
 
@@ -8,13 +8,13 @@ use hachi_co_math::Poly;
 
 /// Party $p$'s share $\langle u \rangle\_p = \mathbf d^T \lbrace \mathbf f' \rbrace\_p =
 /// \sum\_{i} \sum\_{j \lt 2^m} d\_{i 2^m + j} f'\_{i,j} \in \mathcal R\_q$ over the blocks $i$ of its
-/// state (`field-to-ring-rok.tex`:128-131; the oracle's `conv.pi_conv`), with $d\_t$ embedded in
+/// state (`field-to-ring-rok.tex`:157-160; the oracle's `conv.pi_conv`), with $d\_t$ embedded in
 /// $\mathcal R\_q$ (exact products). The sum over the parties is $u = \mathbf d^T \mathbf f' =
 /// f'(\mathbf x')$.
 ///
 /// **Choice** (the oracle's, `ref/README.md`, choice 4): $u$ stays secret-shared; only $E(u)$ is
 /// opened, and $\langle u \rangle\_p$ is the last entry of party $p$'s share of $\mathbf z'$
-/// (`5_Building_Blocks.tex`:171).
+/// (`5_Building_Blocks.tex`:185).
 ///
 /// # Errors
 /// [`Error::Core`] if the state or the public vectors do not have the shapes of the layout
@@ -46,7 +46,7 @@ pub fn u_share<const K: usize>(
 }
 
 /// $E(u) = \frac{k}{d} \mathrm{Tr}\_H\bigl(u \cdot \sigma\_{-1}(v)\bigr) \in \mathcal R\_q^H$
-/// (`field-to-ring-rok.tex`:132-135, 162; [`hachi_co_math::Subfield::e_map`]). $E$ is
+/// (`field-to-ring-rok.tex`:161-164, 191; [`hachi_co_math::Subfield::e_map`]). $E$ is
 /// $\mathbb Z\_q$-linear (indeed $\mathcal R\_q^H$-linear), so the parties may apply it to their
 /// shares.
 ///
@@ -57,7 +57,7 @@ pub fn e_map<const K: usize>(ctx: &Context<K>, u: &Poly, v_point: &Poly) -> Resu
 }
 
 /// The $d \times d$ matrix $\mathbf E$ over $\mathbb Z\_q$ with $\mathrm{cf}(E(u)) = \mathbf E
-/// \cdot \mathrm{cf}(u)$ (`field-to-ring-rok.tex`:137-158), row-major: `e[i][j]` is coefficient
+/// \cdot \mathrm{cf}(u)$ (`field-to-ring-rok.tex`:166-187), row-major: `e[i][j]` is coefficient
 /// $i$ of $E(X^j)$ (the oracle's `conv.e_matrix`, fixture key `conv/E_matrix`;
 /// [`hachi_co_math::Subfield::e_matrix`]).
 ///
@@ -67,7 +67,7 @@ pub fn e_matrix<const K: usize>(ctx: &Context<K>, v_point: &Poly) -> Result<Vec<
     Ok(ctx.sub.e_matrix(v_point)?)
 }
 
-/// Party $p$'s input to $\mathcal F\_{\mathsf{AH}}(E)$ (`field-to-ring-rok.tex`:160-162):
+/// Party $p$'s input to $\mathcal F\_{\mathsf{AH}}(E)$ (`field-to-ring-rok.tex`:189-191):
 /// $E(\langle u \rangle\_p)$, the image of its share under the public linear map $E$ (the
 /// convention of [`hachi_co_mpc::Comm::fah`]). The sum over the parties is $E(u)$.
 ///

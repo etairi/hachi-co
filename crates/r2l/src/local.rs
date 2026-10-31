@@ -1,4 +1,4 @@
-//! The party-local steps of the ring-to-linear step (`5_Building_Blocks.tex`:103-130), as pure
+//! The party-local steps of the ring-to-linear step (`5_Building_Blocks.tex`:115-143), as pure
 //! functions of the party's data: $w\_i$ and $\hat{\mathbf w}\_i$ of the owned blocks, the mask
 //! and $\boldsymbol\rho$ of an attempt with their images, the input to
 //! $\mathcal F\_{\mathsf{AH}}(\mathbf D)$, the check $\mathbf c \in \mathcal C^{2^r}$, the integer
@@ -6,7 +6,7 @@
 //!
 //! Short vectors are flat (`docs/m1-spec.md`, "Conventions"): a vector of $L$ ring elements is
 //! $Ld$ integers, coefficient $j$ of element $i$ at $id + j$; masks, folds and responses have
-//! $N = d\delta 2^m$ entries (`6_Collaborative_Hachi.tex`:275).
+//! $N = d\delta 2^m$ entries (`6_Collaborative_Hachi.tex`:279).
 
 use crate::ct::{lift_polys, wipe_polys};
 use crate::{Error, Result};
@@ -55,14 +55,14 @@ pub(crate) fn check_party<const K: usize>(ctx: &Context<K>, party: PartyId) -> R
 }
 
 /// $N = d\delta 2^m$, the number of integer coefficients of a mask, a fold and a response
-/// (`6_Collaborative_Hachi.tex`:275).
+/// (`6_Collaborative_Hachi.tex`:279).
 pub fn response_len<const K: usize>(ctx: &Context<K>) -> usize {
     ctx.layout.width_a * ctx.layout.d
 }
 
 /// $\mathbf a^T \mathbf G\_{2^m} \mathbf x \in \mathcal R\_q$ for $\mathbf x \in
 /// \mathcal R\_q^{\delta 2^m}$ in the element-major gadget layout: the map of
-/// `5_Building_Blocks.tex`:106 ($\mathbf x = \mathbf s\_i$) and 113 ($\mathbf x = \mathbf r\_i$);
+/// `5_Building_Blocks.tex`:118 ($\mathbf x = \mathbf s\_i$) and 113 ($\mathbf x = \mathbf r\_i$);
 /// the oracle's `a_times_G`. $\mathbf G\_{2^m}\mathbf x$ is formed with
 /// [`decompose::g_apply`] and paired with `a_ring` ($2^m$ entries,
 /// [`PublicVectors::a_ring`]) by an exact inner product.
@@ -78,20 +78,20 @@ pub fn a_times_g<const K: usize>(ctx: &Context<K>, a_ring: &[Poly], x: &[Poly]) 
     Ok(ctx.ring.inner(a_ring, &g)?)
 }
 
-/// $w\_i$ and $\hat{\mathbf w}\_i$ of one block (`5_Building_Blocks.tex`:103-108).
+/// $w\_i$ and $\hat{\mathbf w}\_i$ of one block (`5_Building_Blocks.tex`:115-120).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockW {
     /// The block index $i = \mathrm{nat}(\mathbf i) \lt 2^r$.
     pub index: usize,
-    /// $w\_i = \mathbf a^T \mathbf G\_{2^m} \mathbf s\_i \in \mathcal R\_q$ (line 106).
+    /// $w\_i = \mathbf a^T \mathbf G\_{2^m} \mathbf s\_i \in \mathcal R\_q$ (line 118).
     pub w: Poly,
-    /// $\hat{\mathbf w}\_i = \mathbf G\_1^{-1}(w\_i) \in \mathcal R\_q^\delta$ (line 107): digit
+    /// $\hat{\mathbf w}\_i = \mathbf G\_1^{-1}(w\_i) \in \mathcal R\_q^\delta$ (line 119): digit
     /// $e$ at index $e$, as residues.
     pub w_hat: Vec<Poly>,
 }
 
 /// $w\_i$ and $\hat{\mathbf w}\_i$ of one block of the prover holding it
-/// (`5_Building_Blocks.tex`:103-108): [`a_times_g`] of $\mathbf s\_i$ and [`decompose::g_inv`]
+/// (`5_Building_Blocks.tex`:115-120): [`a_times_g`] of $\mathbf s\_i$ and [`decompose::g_inv`]
 /// (the representative rule of `ref/README.md`, choice 2).
 ///
 /// # Errors
@@ -118,7 +118,7 @@ pub fn block_w<const K: usize>(
     })
 }
 
-/// Step 1 for prover $p$ (`5_Building_Blocks.tex`:103-108): [`block_w`] of every block it holds,
+/// Step 1 for prover $p$ (`5_Building_Blocks.tex`:115-120): [`block_w`] of every block it holds,
 /// in increasing order of index ([`hachi_co_core::Layout::blocks_of`]).
 ///
 /// # Errors
@@ -132,7 +132,7 @@ pub fn owned_w<const K: usize>(
     state.blocks.iter().map(|b| block_w(ctx, pv, b)).collect()
 }
 
-/// The images of a mask $\mathbf r\_p$ (`5_Building_Blocks.tex`:111-114).
+/// The images of a mask $\mathbf r\_p$ (`5_Building_Blocks.tex`:123-126).
 #[derive(Clone, PartialEq, Eq)]
 pub struct MaskImages {
     /// $\mathbf t\_{0,p} = \mathbf A \mathbf r\_p \in \mathcal R\_q^{n\_A}$.
@@ -176,7 +176,7 @@ impl MaskImages {
 }
 
 /// $\mathbf t\_{0,p}$, $\hat{\mathbf t}\_{0,p}$, $w\_{0,p}$ and $\hat{\mathbf w}\_{0,p}$ of the
-/// mask $\mathbf r\_p$ (`5_Building_Blocks.tex`:111-114; the oracle's `ring_to_linear`, step 2).
+/// mask $\mathbf r\_p$ (`5_Building_Blocks.tex`:123-126; the oracle's `ring_to_linear`, step 2).
 ///
 /// `mask` is flat ($N$ integers). The mask is first checked to lie in $\[-\gamma, \gamma\]^N$
 /// and lifted to residues, both without branches on its values (best effort); the products by
@@ -216,23 +216,23 @@ pub fn mask_images<const K: usize>(
     images
 }
 
-/// Prover $p$'s private values of one attempt (`5_Building_Blocks.tex`:110-114).
+/// Prover $p$'s private values of one attempt (`5_Building_Blocks.tex`:122-126).
 ///
 /// All of it is secret. The mask must never be revealed or reused (plan
-/// `docs/hachi-co-plan.md`, finding F5); $\boldsymbol\rho\_p$ and the images enter $p$'s share of
+/// `docs/hachi-co-plan.md`, finding F5); $\boldsymbol\rho^v\_p$ and the images enter $p$'s share of
 /// $\mathbf z'$ if the attempt is accepted (as copies). `Debug` shows only the attempt index; the
 /// type is neither `Clone` nor comparable, so that the mask is not copied or compared by
-/// accident, and dropping it wipes the mask, $\boldsymbol\rho\_p$ and the images (best effort, see
+/// accident, and dropping it wipes the mask, $\boldsymbol\rho^v\_p$ and the images (best effort, see
 /// the crate documentation), also when an error ends the attempt early.
 pub struct AttemptSecrets {
     /// The attempt index $a = 0, 1, \dots$ (`ref/README.md`, choice 5).
     pub attempt: u64,
     /// The mask $\mathbf r\_p \leftarrow \chi\_r$, uniform in $\[-\gamma, \gamma\]^N$, flat
-    /// (line 110).
+    /// (line 122).
     pub mask: Vec<i64>,
-    /// $\boldsymbol\rho\_p \leftarrow S\_b^{m\_\rho}$, flat ($m\_\rho d$ integers in
-    /// $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, line 110).
-    pub rho: Vec<i64>,
+    /// $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, flat ($m\_v d$ integers in
+    /// $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, line 122).
+    pub rho_v: Vec<i64>,
     /// The images of the mask ([`mask_images`]).
     pub images: MaskImages,
 }
@@ -248,7 +248,7 @@ impl core::fmt::Debug for AttemptSecrets {
 impl Drop for AttemptSecrets {
     fn drop(&mut self) {
         self.wipe_mask();
-        crate::ct::wipe(&mut self.rho);
+        crate::ct::wipe(&mut self.rho_v);
         let images = &mut self.images;
         wipe_polys(&mut images.t0);
         wipe_polys(&mut images.t0_hat);
@@ -264,34 +264,34 @@ impl AttemptSecrets {
         crate::ct::wipe(&mut self.mask);
     }
 
-    /// $\boldsymbol\rho\_p$ as $m\_\rho$ ring elements with residues in $\[0, q)$ (checked to lie
+    /// $\boldsymbol\rho^v\_p$ as $m\_v$ ring elements with residues in $\[0, q)$ (checked to lie
     /// in $S\_b$).
     pub(crate) fn rho_polys<const K: usize>(&self, ctx: &Context<K>) -> Result<Vec<Poly>> {
         let l = &ctx.layout;
-        check_len("rho_p (m_rho d)", l.m_rho * l.d, self.rho.len())?;
+        check_len("rho^v_p (m_v d)", l.m_v * l.d, self.rho_v.len())?;
         let b = ctx.b();
         // S_b = [ceil(-b/2), ceil(b/2) - 1] = [-floor(b/2), floor((b-1)/2)] (4_preliminaries.tex:88).
         let (min, max) = (-((b / 2) as i64), ((b - 1) / 2) as i64);
         let out_of_range = || Error::OutOfRange {
-            what: "rho_p (S_b)",
+            what: "rho^v_p (S_b)",
             min,
             max,
         };
         // Check the asymmetric range exactly with one combined flag, then lift.
         let mut bad = 0u8;
-        for x in &self.rho {
+        for x in &self.rho_v {
             bad |= u8::from(*x < min) | u8::from(*x > max);
         }
         if bad != 0 {
             return Err(out_of_range());
         }
-        lift_polys(&self.rho, l.d, ctx.q(), b / 2, out_of_range)
+        lift_polys(&self.rho_v, l.d, ctx.q(), b / 2, out_of_range)
     }
 }
 
-/// Step 2 for one attempt (`5_Building_Blocks.tex`:110-114): draws the mask
+/// Step 2 for one attempt (`5_Building_Blocks.tex`:122-126): draws the mask
 /// $\mathbf r\_p \leftarrow \chi\_r$ ([`PartyRandomness::mask`], $N$ entries, width $\gamma$)
-/// and $\boldsymbol\rho\_p \leftarrow S\_b^{m\_\rho}$ ([`PartyRandomness::rho`], $m\_\rho d$
+/// and $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$ ([`PartyRandomness::rho_v`], $m\_v d$
 /// entries), both with index `attempt`, checks what the randomness source returned (lengths and
 /// ranges), and computes the [`mask_images`].
 ///
@@ -311,7 +311,7 @@ pub fn sample_attempt<const K: usize, R: PartyRandomness<K>>(
     let mut secrets = AttemptSecrets {
         attempt,
         mask,
-        rho: Vec::new(),
+        rho_v: Vec::new(),
         images: MaskImages {
             t0: Vec::new(),
             t0_hat: Vec::new(),
@@ -325,16 +325,16 @@ pub fn sample_attempt<const K: usize, R: PartyRandomness<K>>(
         response_len(ctx),
         secrets.mask.len(),
     )?;
-    secrets.rho = rng.rho(attempt, ctx.b(), l.m_rho * l.d)?;
+    secrets.rho_v = rng.rho_v(attempt, ctx.b(), l.m_v * l.d)?;
     secrets.rho_polys(ctx)?;
     secrets.images = mask_images(ctx, pv, &secrets.mask)?;
     Ok(secrets)
 }
 
 /// Writes prover $p$'s values of $(\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
-/// \boldsymbol\rho)$ into `out` $= \mathbf z'\[0, t)$ (positions of [`hachi_co_core::Layout`]):
+/// \boldsymbol\rho^v)$ into `out` $= \mathbf z'\[0, t)$ (positions of [`hachi_co_core::Layout`]):
 /// its blocks of $\hat{\mathbf w}$, its own $\hat{\mathbf w}\_{0,p}$, $\hat{\mathbf t}\_{0,p}$
-/// and $\boldsymbol\rho\_p$; other entries are left untouched.
+/// and $\boldsymbol\rho^v\_p$; other entries are left untouched.
 pub(crate) fn fill_first_message_part<const K: usize>(
     ctx: &Context<K>,
     party: PartyId,
@@ -362,12 +362,12 @@ pub(crate) fn fill_first_message_part<const K: usize>(
     out[l.w0_hat_range(party)].clone_from_slice(&secrets.images.w0_hat);
     out[l.t0_hat_range(party)].clone_from_slice(&secrets.images.t0_hat);
     let rho = secrets.rho_polys(ctx)?;
-    out[l.rho_range(party)].clone_from_slice(&rho);
+    out[l.rho_v_range(party)].clone_from_slice(&rho);
     Ok(())
 }
 
 /// Prover $p$'s slice $\lbrace (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
-/// \boldsymbol\rho) \rbrace\_p \in \mathcal R\_q^{t}$ (`5_Building_Blocks.tex`:115-121;
+/// \boldsymbol\rho) \rbrace\_p \in \mathcal R\_q^{t}$ (`5_Building_Blocks.tex`:127-133;
 /// $\mathsf{Slice}$ of `4_preliminaries.tex`:167-177): the values $p$ holds at their positions of
 /// $\mathbf z'\[0, t)$ and zero elsewhere. It equals the first $t$ entries of $p$'s share of
 /// $\mathbf z'$ ([`crate::z_prime_share`]).
@@ -387,12 +387,12 @@ pub fn d_slice<const K: usize>(
     Ok(slice)
 }
 
-/// Prover $p$'s input to $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ (`5_Building_Blocks.tex`:119-121):
+/// Prover $p$'s input to $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ (`5_Building_Blocks.tex`:131-133):
 /// $\mathbf D \cdot \lbrace (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
 /// \boldsymbol\rho) \rbrace\_p \in \mathcal R\_q^{n\_D}$ for the slice of [`d_slice`]. The sum of
 /// the provers' inputs is the first message
 /// $\mathbf v = \mathbf D\_{\hat{\mathbf w}} \hat{\mathbf w} + \mathbf D\_0 \hat{\mathbf w}\_0 +
-/// \mathbf D\_1 \hat{\mathbf t}\_0 + \mathbf D\_\rho \boldsymbol\rho$ (line 120).
+/// \mathbf D\_1 \hat{\mathbf t}\_0 + \mathbf D\_\rho \boldsymbol\rho$ (line 132).
 ///
 /// # Errors
 /// [`Error::Shape`] unless the slice has $t$ entries; [`Error::Math`] for a polynomial without
@@ -406,7 +406,7 @@ pub fn fah_d_input<const K: usize>(ctx: &Context<K>, slice: &[Poly]) -> Result<V
     Ok(ctx.ring.mat_vec(&ctx.pp.d, slice)?)
 }
 
-/// Checks $\mathbf c \in \mathcal C^{2^r}$ (`5_Building_Blocks.tex`:122-126): $2^r$ challenges
+/// Checks $\mathbf c \in \mathcal C^{2^r}$ (`5_Building_Blocks.tex`:134-138): $2^r$ challenges
 /// of $d$ signed coefficients each, with $\Vert c\_i \Vert\_1 \le \omega$, computed exactly
 /// ([`l1ball::contains`]). Every prover runs it before using $\mathbf c$ (plan
 /// `docs/hachi-co-plan.md`, finding F5), and the verifier runs it on the proof's challenges. The
@@ -435,12 +435,12 @@ pub fn check_challenges<const K: usize>(ctx: &Context<K>, c: &[Vec<i64>]) -> Res
 }
 
 /// Prover $p$'s fold $\sum\_{i \in \mathcal I\_p} c\_i \mathbf s\_i$ over
-/// $\mathbb Z\[X\]/(X^d + 1)$ (`5_Building_Blocks.tex`:127-128; `ref/README.md`, choice 17): the
+/// $\mathbb Z\[X\]/(X^d + 1)$ (`5_Building_Blocks.tex`:139-140; `ref/README.md`, choice 17): the
 /// digits of $\mathbf s\_i$ are taken as centered integers and multiplied exactly by the signed
 /// challenge ([`hachi_co_core::short::negacyclic_mul`]). Returned flat: $N$ integers, coefficient
 /// $l$ of entry $j \lt \delta 2^m$ at $jd + l$, the layout of the mask. For honest data
 /// $\Vert \cdot \Vert\_\infty \le |\mathcal I\_p| \omega \lfloor b/2 \rfloor \le \beta\_1$
-/// (line 129); [`respond`] refuses a fold above $\beta\_1$.
+/// (line 141); [`respond`] refuses a fold above $\beta\_1$.
 ///
 /// The digits are secret: they are centered without branches on their values (best effort,
 /// [`hachi_co_core::short::center_poly`]), the product branches only on the public challenge's
@@ -489,7 +489,7 @@ fn centered_digits(s: &Poly, q: u64) -> Result<Vec<i64>> {
 }
 
 /// Prover $p$'s response $\mathbf z\_p = \mathsf{Rej}(\sum\_{i \in \mathcal I\_p} c\_i
-/// \mathbf s\_i, \chi\_z, \chi\_r, M; \mathbf r\_p)$ (`5_Building_Blocks.tex`:128;
+/// \mathbf s\_i, \chi\_z, \chi\_r, M; \mathbf r\_p)$ (`5_Building_Blocks.tex`:140;
 /// `4_preliminaries.tex`:119): `Some(fold + mask)` if
 /// $\Vert \mathrm{fold} + \mathrm{mask} \Vert\_\infty \le \gamma - \beta\_1$, and `None`
 /// ($\bot$, the prover announces an abort) otherwise; [`rej::rej`] with the context's $\gamma$

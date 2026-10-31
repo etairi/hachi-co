@@ -1,15 +1,17 @@
 //! The interface to the base polynomial commitment scheme of the collaborative sumcheck
-//! (`5_Building_Blocks.tex`:209-241, 314-333), and the conversions around it.
+//! (`5_Building_Blocks.tex`:238-273, 346-365), and the conversions around it.
 //!
 //! Each prover commits, on its own, to three polynomials before the sumcheck's coins and opens
 //! them at the sumcheck's point $\mathbf a$ after the last round (the authors' answers of
 //! 2026-10-21, plan `docs/hachi-co-plan.md`, §0):
 //! - its share polynomial $\langle \widetilde w \rangle\_p$, multilinear in $\ell''$ variables
-//!   with $\mathbb Z\_q$ coefficients, defined by its values on the hypercube
-//!   (`5_Building_Blocks.tex`:223-229): the values are converted to monomial coefficients
-//!   ([`mobius`]), committed with [`BasePcs::commit_multilinear`] and opened as a multilinear
-//!   evaluation ([`BasePcs::prove_multilinear`]);
-//! - its blinders $g\_{0,p}$ and $g\_{1,p}$ (lines 209-214): their coefficient vectors over
+//!   and defined by its values on the hypercube (`5_Building_Blocks.tex`:252-259): the values are
+//!   converted to monomial coefficients ([`mobius_ext`]), committed with
+//!   [`BasePcs::commit_multilinear_ext`] and opened as a multilinear evaluation
+//!   ([`BasePcs::prove_multilinear_ext`]). Its pad puts one entry in $\mathbb F\_{q^k}$, so the
+//!   coefficients lie there; a polynomial over $\mathbb Z\_q$ has the cheaper
+//!   [`BasePcs::commit_multilinear`] and [`BasePcs::prove_multilinear`];
+//! - its blinders $g\_{0,p}$ and $g\_{1,p}$ (lines 238-243): their coefficient vectors over
 //!   $\mathbb F\_{q^k}$ are committed with [`BasePcs::commit_vector`] and opened as inner products
 //!   with public weights ([`BasePcs::prove_inner_product`]).
 //!
@@ -22,7 +24,7 @@ use core::fmt::Debug;
 use hachi_co_math::{Ext, Fqk, Zq};
 
 /// A base polynomial commitment scheme over $\mathbb F\_{q^K}$, as the collaborative sumcheck
-/// uses it (`5_Building_Blocks.tex`:209-241, 314-333): every prover commits on its own, before
+/// uses it (`5_Building_Blocks.tex`:238-273, 346-365): every prover commits on its own, before
 /// the sumcheck's coins, and opens at the public point $\mathbf a$ (or against public weights
 /// derived from it) after the last round; the verifier checks every opening against the final
 /// value the provers announced.
@@ -77,11 +79,11 @@ use hachi_co_math::{Ext, Fqk, Zq};
 /// malformed input.
 pub trait BasePcs<const K: usize>: Send + Sync {
     /// A commitment: public, sent to the verifier and absorbed before the sumcheck's coins
-    /// (`5_Building_Blocks.tex`:220-221, 230, 241).
+    /// (`5_Building_Blocks.tex`:249-250, 260, 273).
     type Commitment: Clone + Debug + PartialEq + Eq + Send + Sync;
     /// What a prover keeps after committing, to open later (private).
     type State: Send + Sync;
-    /// An opening proof (`5_Building_Blocks.tex`:316-318).
+    /// An opening proof (`5_Building_Blocks.tex`:348-350).
     type Proof: Clone + Debug + PartialEq + Eq + Send + Sync;
 
     /// Commits to the multilinear polynomial with the monomial coefficients `coeffs`
@@ -108,6 +110,19 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         seed: &[u8; 32],
     ) -> Result<(Self::Commitment, Self::State)>;
 
+    /// Commits to the multilinear polynomial with the monomial coefficients `coeffs`
+    /// ($2^\ell$ elements of $\mathbb F\_{q^K}$, in the convention of the trait), with the secret
+    /// `seed`.
+    ///
+    /// # Errors
+    /// Implementation-specific, for example [`Error::Shape`] unless the length is a power of
+    /// two.
+    fn commit_multilinear_ext(
+        &self,
+        coeffs: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)>;
+
     /// Opens a commitment of [`commit_multilinear`](Self::commit_multilinear) at `point`
     /// ($\ell$ coordinates) under `context`, with the secret `seed`: returns $f(\mathbf a)$ and
     /// a proof of it.
@@ -116,6 +131,21 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     /// Implementation-specific, for example a state of a vector commitment or a point of the
     /// wrong length.
     fn prove_multilinear(
+        &self,
+        st: &Self::State,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Self::Proof)>;
+
+    /// Opens a commitment of [`commit_multilinear_ext`](Self::commit_multilinear_ext) at `point`
+    /// ($\ell$ coordinates) under `context`, with the secret `seed`: returns $f(\mathbf a)$ and
+    /// a proof of it.
+    ///
+    /// # Errors
+    /// Implementation-specific, for example a state of another kind of commitment or a point of
+    /// the wrong length.
+    fn prove_multilinear_ext(
         &self,
         st: &Self::State,
         point: &[Ext<K>],
@@ -153,6 +183,21 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         context: &[u8; 32],
     ) -> core::result::Result<(), String>;
 
+    /// Checks that `proof` opens `com`, a commitment to a multilinear polynomial over
+    /// $\mathbb F\_{q^K}$ in `num_vars` variables, to `value` at `point`, under `context`.
+    ///
+    /// # Errors
+    /// The reason of the rejection.
+    fn verify_multilinear_ext(
+        &self,
+        com: &Self::Commitment,
+        num_vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Self::Proof,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), String>;
+
     /// Checks that `proof` opens `com`, a commitment to a vector of `len` elements, to the
     /// inner product `value` with `weights`, under `context`.
     ///
@@ -169,7 +214,7 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     ) -> core::result::Result<(), String>;
 
     /// A digest of the scheme's own public parameters. Hachi-Co absorbs it into the statement
-    /// of every proof (`6_Collaborative_Hachi.tex`:289-292: $\mathsf{pp}\_{\mathsf{PCS}}$ is part
+    /// of every proof (`6_Collaborative_Hachi.tex`:294-297: $\mathsf{pp}\_{\mathsf{PCS}}$ is part
     /// of $\mathsf{pp}$), so that a proof is bound to the base PCS it was made with. Two
     /// instances with different parameters must have different digests.
     fn params_digest(&self) -> [u8; 32];
@@ -208,7 +253,7 @@ fn check_power_of_two(what: &'static str, len: usize) -> Result<()> {
 
 /// One butterfly pass per variable: `op(low, high)` replaces `high` for every pair of entries
 /// that differ only in one bit, the entry with the bit unset being `low`.
-fn butterflies(table: &mut [u64], op: impl Fn(u64, u64) -> u64) {
+fn butterflies<T: Copy>(table: &mut [T], op: impl Fn(T, T) -> T) {
     let mut half = 1;
     while half < table.len() {
         for chunk in table.chunks_exact_mut(2 * half) {
@@ -231,7 +276,7 @@ fn butterflies(table: &mut [u64], op: impl Fn(u64, u64) -> u64) {
 /// and 0 otherwise. The bits of the index play the same role in values and coefficients, so the
 /// MSB-first convention carries over. $\ell 2^{\ell - 1}$ subtractions; every entry is reduced
 /// modulo $q$. Hachi-Co converts the table of $\langle \widetilde w \rangle\_p$
-/// (`5_Building_Blocks.tex`:223-229) with it before committing (the authors' answer 2 of
+/// (`5_Building_Blocks.tex`:252-259) with it before committing (the authors' answer 2 of
 /// 2026-10-21, plan `docs/hachi-co-plan.md`, §0).
 ///
 /// # Errors
@@ -242,6 +287,20 @@ pub fn mobius(zq: &Zq, table: &mut [u64]) -> Result<()> {
         *x = zq.reduce(*x);
     }
     butterflies(table, |low, high| zq.sub(high, low));
+    Ok(())
+}
+
+/// The Möbius transform over $\mathbb F\_{q^K}$, in place: [`mobius`] for a table with values in
+/// the field. Every entry is reduced.
+///
+/// # Errors
+/// [`Error::Shape`] unless the length is a power of two.
+pub fn mobius_ext<const K: usize>(field: &Fqk<K>, table: &mut [Ext<K>]) -> Result<()> {
+    check_power_of_two("hypercube table (2^l entries)", table.len())?;
+    for x in table.iter_mut() {
+        *x = field.reduce(x);
+    }
+    butterflies(table, |low, high| field.sub(&high, &low));
     Ok(())
 }
 
@@ -292,6 +351,37 @@ pub fn evaluate_multilinear<const K: usize>(
         .map(|(c0, c1)| field.add(&field.from_base(*c0), &field.scale(first, *c1)))
         .collect();
     for a in rest {
+        let half = table.len() / 2;
+        let (low, high) = table.split_at_mut(half);
+        for (l, h) in low.iter_mut().zip(high.iter()) {
+            *l = field.add(l, &field.mul(a, h));
+        }
+        table.truncate(half);
+    }
+    Ok(table[0])
+}
+
+/// [`evaluate_multilinear`] for coefficients in $\mathbb F\_{q^K}$.
+///
+/// # Errors
+/// [`Error::Shape`] unless `coeffs` has $2^\ell$ entries for a point of $\ell$ coordinates;
+/// [`Error::Overflow`] if $2^\ell$ does not fit in `usize`.
+pub fn evaluate_multilinear_ext<const K: usize>(
+    field: &Fqk<K>,
+    coeffs: &[Ext<K>],
+    point: &[Ext<K>],
+) -> Result<Ext<K>> {
+    let size = u32::try_from(point.len())
+        .ok()
+        .and_then(|e| 1usize.checked_shl(e))
+        .ok_or(Error::Overflow("2^l coefficients"))?;
+    check_len(
+        "multilinear coefficients (2^l for a point of l coordinates)",
+        size,
+        coeffs.len(),
+    )?;
+    let mut table = coeffs.to_vec();
+    for a in point {
         let half = table.len() / 2;
         let (low, high) = table.split_at_mut(half);
         for (l, h) in low.iter_mut().zip(high.iter()) {

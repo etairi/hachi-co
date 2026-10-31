@@ -1,5 +1,5 @@
 //! Univariate polynomials through their values at the nodes $1, 2, \dots, m$: the round messages
-//! of the sumcheck are $H\_r(1), \dots, H\_r(D + 1)$ (`5_Building_Blocks.tex`:290-294; oracle
+//! of the sumcheck are $H\_r(1), \dots, H\_r(D + 1)$ (`5_Building_Blocks.tex`:322-326; oracle
 //! `ref/README.md`, choice 11), the verifier interpolates $H\_r(0)$ and $H\_r(a\_r)$ from them, and
 //! the provers extend the values of $F\_{0,p}$ and $F\_{1,p}$ computed at a few nodes to all of
 //! them ([`Extrapolation`]); plus the oracle's degree audit ([`degree_at_nodes`]).

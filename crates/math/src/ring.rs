@@ -293,7 +293,7 @@ impl Ring {
     }
 
     /// The exact matrix-vector product $(\sum_j m_{ij} v_j)\_i$ over $\mathcal R_q$, as for
-    /// $\mathbf t = \mathbf A \mathbf s$ (draft `6_Collaborative_Hachi.tex`:370-376;
+    /// $\mathbf t = \mathbf A \mathbf s$ (draft `6_Collaborative_Hachi.tex`:375-381;
     /// [`crate::rns::Plan::mat_vec`]).
     ///
     /// # Errors

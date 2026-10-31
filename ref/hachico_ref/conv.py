@@ -1,17 +1,17 @@
-"""Pi_conv, the collaborative reduction from R_eval,F_{q^k} to R_eval,R_q (F2R:89-169).
+"""Pi_conv, the collaborative reduction from R_eval,F_{q^k} to R_eval,R_q (F2R:118-198).
 
 Choices (see ref/README.md):
   * PConv already ran in Commit; Pi_conv reuses f' from the provers' states instead of running PConv again
-    (F2R:124-126 runs it again; the output is identical because PConv is deterministic).
+    (F2R:153-155 runs it again; the output is identical because PConv is deterministic).
   * u stays secret-shared: the provers hold <u>_p = d^T {f'}_p and only E(u) is opened through F_AH(E)
-    (the author comment at F2R:100; 5_BB:171 keeps <u> in the witness).  The "public" u of F2R:100/166
+    (the author comment at F2R:129; 5_BB:185 keeps <u> in the witness).  The "public" u of F2R:129/166
     is therefore not output.
 """
 import numpy as np
 
 
 def public_vectors(ctx, x):
-    """x' = 1^{ceil(log n)} || (x_1..x_{l-alpha+kappa}), b, a, v, d (F2R:111-122), all from public data.
+    """x' = 1^{ceil(log n)} || (x_1..x_{l-alpha+kappa}), b, a, v, d (F2R:140-151), all from public data.
 
     b[nat(i)] = prod_j x'_j^{i_j} over the first r coordinates, a[nat(j)] over the next m (monomials in the
     m0-spec bit order), v = psi(monomials(x_{l-alpha+kappa+1}, ..., x_l)), d[nat(i) 2^m + nat(j)] = b_i a_j."""
@@ -58,7 +58,7 @@ def pi_conv(ctx, states, x):
 
 
 def verify_conv(ctx, y, E_u):
-    """V's check y = E(u) (F2R:164), with E(u) interpreted in F_{q^k} through R_q^H."""
+    """V's check y = E(u) (F2R:193), with E(u) interpreted in F_{q^k} through R_q^H."""
     if not ctx.in_subfield(E_u):
         return False
     return bool(np.array_equal(ctx.extract(E_u), np.asarray(y) % ctx.P.q))
