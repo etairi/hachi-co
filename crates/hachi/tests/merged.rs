@@ -8,12 +8,13 @@
 //!   value fitted to its trace check in the iterations, where $\lambda$ combines the claims.
 //! - a ring value moved along the kernel of the trace, another point, other weights and another
 //!   context are rejected.
-//! - commitments and openings are randomized by their seeds.
+//! - commitments and openings are randomized by their seeds, and a merged state, and every clone
+//!   of it, opens once.
 //! - without hiding the option is refused, and the proofs of the other kinds are not accepted as
 //!   merged ones or the other way round.
 //! - the encodings round-trip, every altered word is rejected, and the outputs are pinned.
 
-use hachi::{HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
+use hachi::{Error, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -296,7 +297,7 @@ fn merged_commitments_and_openings_are_randomized() {
     let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
     let coeffs = exts_mod(Q, "f", 30, 1 << 8);
     let (g0, g1) = (exts_mod(Q, "g0", 30, 33), exts_mod(Q, "g1", 30, 9));
-    let (a, state) = pcs.commit_merged(&coeffs, [&g0, &g1], &seed(1, 0)).unwrap();
+    let (a, _) = pcs.commit_merged(&coeffs, [&g0, &g1], &seed(1, 0)).unwrap();
     let same = pcs
         .commit_merged(&coeffs, [&g0, &g1], &seed(1, 0))
         .unwrap()
@@ -309,7 +310,9 @@ fn merged_commitments_and_openings_are_randomized() {
     assert_ne!(a, other, "randomized by the seed");
     let point = exts_mod(Q, "x", 30, 8);
     let (e0, e1) = (exts_mod(Q, "e0", 30, 33), exts_mod(Q, "e1", 30, 9));
+    // A masked state opens once, so each opening commits again with the seed of `a`.
     let open = |s: &[u8; 32]| {
+        let (_, state) = pcs.commit_merged(&coeffs, [&g0, &g1], &seed(1, 0)).unwrap();
         pcs.prove_merged(&state, &point, [&e0, &e1], &CONTEXT, s)
             .unwrap()
     };
@@ -432,4 +435,31 @@ fn outputs_are_pinned() {
         proof,
         "2b5d7925a93538b0875cfaf28e31e0836f99e4ce63c5e96189e3e978fb0635c2"
     );
+}
+
+#[test]
+fn a_merged_state_opens_once() {
+    // As every masked state (`tests/hiding.rs`): an opening refused for its inputs does not
+    // count, and the state and its clones open once.
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
+    let coeffs = exts_mod(Q, "f", 50, 1 << 8);
+    let (g0, g1) = (exts_mod(Q, "g0", 50, 33), exts_mod(Q, "g1", 50, 9));
+    let point = exts_mod(Q, "x", 50, 8);
+    let (e0, e1) = (exts_mod(Q, "e0", 50, 33), exts_mod(Q, "e1", 50, 9));
+    let (_, state) = pcs
+        .commit_merged(&coeffs, [&g0, &g1], &seed(1, 50))
+        .unwrap();
+    let copy = state.clone();
+    assert!(matches!(
+        pcs.prove_merged(&state, &point[..7], [&e0, &e1], &CONTEXT, &seed(2, 50)),
+        Err(Error::Shape(_))
+    ));
+    pcs.prove_merged(&state, &point, [&e0, &e1], &CONTEXT, &seed(2, 50))
+        .unwrap();
+    for st in [&state, &copy] {
+        assert!(matches!(
+            pcs.prove_merged(st, &point, [&e0, &e1], &CONTEXT, &seed(2, 51)),
+            Err(Error::Protocol(m)) if m.contains("opens once")
+        ));
+    }
 }

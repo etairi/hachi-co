@@ -75,7 +75,10 @@
 //! commitment draws from the PRG streams `(seed, "hachi/commit/r", 0)` and `(seed,
 //! "hachi/commit/mask", 0)`, an opening from the streams of [`crate::iteration`]. Every commitment
 //! and every opening needs a fresh seed: an opening of the same state with a reused seed repeats
-//! its masks.
+//! its masks. The state of a masked commitment opens once, and a second opening of it, or of a
+//! clone, is refused: `Eval` in `hachi-pcs.tex`, Appendix A.2, opens a commitment once, since its
+//! masking rows hide the values of step 2(a) for one evaluation only. Committing again with the
+//! same seed gives the same commitment, so that is a second opening too.
 //!
 //! **Schedule.** Unless [`HachiChoices::fixed_iterations`] fixes it, an opening runs the number
 //! of iterations, from 0 to [`HachiChoices::max_iterations`], whose proof has the fewest words
@@ -124,6 +127,8 @@ use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
 /// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 6 since hiding masks the
@@ -164,10 +169,50 @@ enum Input<const K: usize> {
 }
 
 /// The prover's state after committing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The state of a masked commitment opens once (module documentation, "Randomness"). Its clones
+/// share that one opening, and two states are equal when their inputs and commitments are.
+#[derive(Clone, Debug)]
 pub struct State<const K: usize> {
     input: Input<K>,
     committed: Committed,
+    /// Set by the opening of a masked commitment, and shared by the clones of the state.
+    opened: Arc<AtomicBool>,
+}
+
+impl<const K: usize> PartialEq for State<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input && self.committed == other.committed
+    }
+}
+
+impl<const K: usize> Eq for State<K> {}
+
+impl<const K: usize> State<K> {
+    /// The state of a new commitment, not opened.
+    fn new(input: Input<K>, committed: Committed) -> Self {
+        Self {
+            input,
+            committed,
+            opened: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Takes the one opening of a masked commitment, after the inputs of the opening are checked
+    /// and before anything is computed from the secrets. An unmasked commitment opens any number
+    /// of times.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if the commitment is masked and this state, or a clone of it, was
+    /// opened before.
+    fn take_opening(&self) -> Result<()> {
+        if self.committed.layout.masked && self.opened.swap(true, Ordering::SeqCst) {
+            return Err(Error::Protocol(
+                "a masked commitment opens once, and this state was opened".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// An evaluation proof.
@@ -554,10 +599,7 @@ impl<const K: usize> HachiPcs<K> {
             Commitment {
                 u: committed.u.clone(),
             },
-            State {
-                input: Input::Multilinear { vars, coeffs },
-                committed,
-            },
+            State::new(Input::Multilinear { vars, coeffs }, committed),
         ))
     }
 
@@ -647,10 +689,7 @@ impl<const K: usize> HachiPcs<K> {
             Commitment {
                 u: committed.u.clone(),
             },
-            State {
-                input: Input::MultilinearExt { vars },
-                committed,
-            },
+            State::new(Input::MultilinearExt { vars }, committed),
         ))
     }
 
@@ -675,10 +714,7 @@ impl<const K: usize> HachiPcs<K> {
             Commitment {
                 u: committed.u.clone(),
             },
-            State {
-                input: Input::Vector { values },
-                committed,
-            },
+            State::new(Input::Vector { values }, committed),
         ))
     }
 
@@ -1022,7 +1058,7 @@ impl<const K: usize> HachiPcs<K> {
     ///
     /// # Errors
     /// [`Error::Shape`] for a point of the wrong length or a state of another kind; prover
-    /// errors.
+    /// errors. [`Error::Protocol`] for a second opening of a masked commitment.
     pub fn prove_multilinear_ext(
         &self,
         state: &State<K>,
@@ -1042,6 +1078,7 @@ impl<const K: usize> HachiPcs<K> {
                 "a point of {vars} coordinates is expected"
             )));
         }
+        state.take_opening()?;
         let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
         let layout = state.committed.layout;
         let (b, a, v) = self.ring_weights(&layout, &point)?;
@@ -1097,7 +1134,7 @@ impl<const K: usize> HachiPcs<K> {
     ///
     /// # Errors
     /// [`Error::Shape`] for weights of the wrong length or a state of a polynomial; prover
-    /// errors.
+    /// errors. [`Error::Protocol`] for a second opening of a masked commitment.
     pub fn prove_inner_product(
         &self,
         state: &State<K>,
@@ -1116,6 +1153,7 @@ impl<const K: usize> HachiPcs<K> {
                 values.len()
             )));
         }
+        state.take_opening()?;
         let weights: Vec<Ext<K>> = weights.iter().map(|x| field.reduce(x)).collect();
         let value = values
             .iter()
@@ -1639,10 +1677,7 @@ impl<const K: usize> HachiPcs<K> {
             Commitment {
                 u: committed.u.clone(),
             },
-            State {
-                input: Input::Merged { vars, values },
-                committed,
-            },
+            State::new(Input::Merged { vars, values }, committed),
         ))
     }
 
@@ -1725,7 +1760,7 @@ impl<const K: usize> HachiPcs<K> {
     ///
     /// # Errors
     /// [`Error::Shape`] for a state of another kind, a point or weights of the wrong length, and
-    /// prover errors.
+    /// prover errors. [`Error::Protocol`] for a second opening.
     pub fn prove_merged(
         &self,
         state: &State<K>,
@@ -1749,6 +1784,7 @@ impl<const K: usize> HachiPcs<K> {
                 return Err(Error::Shape(format!("{} weights are expected", v.len())));
             }
         }
+        state.take_opening()?;
         let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
         let weights: [Vec<Ext<K>>; 2] =
             weights.map(|e| e.iter().map(|x| field.reduce(x)).collect());

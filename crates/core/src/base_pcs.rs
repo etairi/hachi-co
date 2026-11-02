@@ -86,7 +86,8 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     /// A commitment: public, sent to the verifier and absorbed before the sumcheck's coins
     /// (`5_Building_Blocks.tex`:249-250, 260, 273).
     type Commitment: Clone + Debug + PartialEq + Eq + Send + Sync;
-    /// What a prover keeps after committing, to open later (private).
+    /// What a prover keeps after committing, to open later (private). Hachi-Co opens each state
+    /// once, and a hiding scheme may refuse a second opening, as Hachi's masked states do.
     type State: Send + Sync;
     /// An opening proof (`5_Building_Blocks.tex`:348-350).
     type Proof: Clone + Debug + PartialEq + Eq + Send + Sync;

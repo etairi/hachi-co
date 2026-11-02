@@ -7,6 +7,8 @@
 //! - the parameters are those of Setup, recomputed here from the appendix's formulas.
 //! - the encodings round-trip and have the sizes of the formulas, recomputed here;
 //! - a commitment and an opening are randomized by their seeds and determined by them.
+//! - a masked state, and every clone of it, opens once, and an unmasked one opens any number of
+//!   times.
 //! - a masked witness needs an iteration, and the $\mathbb Z_q$ shortcut is refused.
 //! - vectors are masked as the vector chains of Appendix A.2 (one chunk, $\mathbf b = (1)$,
 //!   $v = 1$): their openings verify at several lengths, ranks and heights, are randomized by the
@@ -18,7 +20,7 @@
 //! - the automatic schedule is still the smallest among those with an iteration.
 //! - unusable choices are refused, and the outputs are pinned.
 
-use hachi::{HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
+use hachi::{Error, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -274,12 +276,14 @@ fn the_seeds_randomize_commitments_and_openings() {
     let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
     let coeffs = exts_mod(Q, "f", 7, 1 << 8);
     let point = exts_mod(Q, "x", 7, 8);
-    let (a, state) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
+    let (a, _) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
     let (same, _) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
     let (other, _) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 1)).unwrap();
     assert_eq!(a, same, "determined by the seed");
     assert_ne!(a, other, "randomized by the seed");
+    // A masked state opens once, so each opening commits again with the seed of `a`.
     let open = |s: &[u8; 32]| {
+        let (_, state) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
         pcs.prove_multilinear_ext(&state, &point, &CONTEXT, s)
             .unwrap()
             .1
@@ -460,7 +464,7 @@ fn vector_commitments_and_openings_are_randomized() {
     let plain = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
     let values = exts_mod(Q, "s", 30, 37);
     let weights = exts_mod(Q, "e", 30, 37);
-    let (a, state) = pcs.commit_vector(&values, &seed(3, 0)).unwrap();
+    let (a, _) = pcs.commit_vector(&values, &seed(3, 0)).unwrap();
     assert_eq!(
         a,
         pcs.commit_vector(&values, &seed(3, 0)).unwrap().0,
@@ -476,7 +480,9 @@ fn vector_commitments_and_openings_are_randomized() {
         plain.commit_vector(&values, &seed(3, 0)).unwrap().0,
         "masked"
     );
+    // A masked state opens once, so each opening commits again with the seed of `a`.
     let open = |s: &[u8; 32]| {
+        let (_, state) = pcs.commit_vector(&values, &seed(3, 0)).unwrap();
         pcs.prove_inner_product(&state, &weights, &CONTEXT, s)
             .unwrap()
     };
@@ -729,4 +735,71 @@ fn outputs_are_pinned() {
         vector_proof,
         "adf7e6513b4f3adb073689bbf58ee9cfff147c34a8aa67076384bff09db97b2a"
     );
+}
+
+/// Whether `result` is the refusal of a second opening of a masked commitment.
+fn refused<T>(result: Result<T, Error>) -> bool {
+    matches!(result, Err(Error::Protocol(m)) if m.contains("opens once"))
+}
+
+#[test]
+fn a_masked_state_opens_once() {
+    // Appendix A.2 opens a commitment once (its masking rows hide one evaluation), so a masked
+    // state, and every clone of it, opens once. An opening refused for its inputs does not count.
+    // Without masks a state opens any number of times.
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
+    let pcs_vectors = HachiPcs::<K>::new(Q, masked(1, 1, None)).unwrap();
+    let plain = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
+    let coeffs = exts_mod(Q, "f", 50, 1 << 8);
+    let point = exts_mod(Q, "x", 50, 8);
+    let (values, weights) = (exts_mod(Q, "s", 50, 37), exts_mod(Q, "e", 50, 37));
+    // A polynomial over the field.
+    let (_, state) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 50)).unwrap();
+    let copy = state.clone();
+    assert!(matches!(
+        pcs.prove_multilinear_ext(&state, &point[..7], &CONTEXT, &seed(2, 50)),
+        Err(Error::Shape(_))
+    ));
+    pcs.prove_multilinear_ext(&state, &point, &CONTEXT, &seed(2, 50))
+        .unwrap();
+    assert!(refused(pcs.prove_multilinear_ext(
+        &state,
+        &point,
+        &CONTEXT,
+        &seed(2, 51)
+    )));
+    assert!(refused(pcs.prove_multilinear_ext(
+        &copy,
+        &point,
+        &CONTEXT,
+        &seed(2, 52)
+    )));
+    // A vector.
+    let (_, state) = pcs_vectors.commit_vector(&values, &seed(3, 50)).unwrap();
+    assert!(matches!(
+        pcs_vectors.prove_inner_product(&state, &weights[1..], &CONTEXT, &seed(4, 50)),
+        Err(Error::Shape(_))
+    ));
+    pcs_vectors
+        .prove_inner_product(&state, &weights, &CONTEXT, &seed(4, 50))
+        .unwrap();
+    assert!(refused(pcs_vectors.prove_inner_product(
+        &state,
+        &weights,
+        &CONTEXT,
+        &seed(4, 51)
+    )));
+    // Without masks.
+    let (_, state) = plain.commit_multilinear_ext(&coeffs, &seed(1, 50)).unwrap();
+    for s in [50, 51] {
+        plain
+            .prove_multilinear_ext(&state, &point, &CONTEXT, &seed(2, s))
+            .unwrap();
+    }
+    let (_, state) = plain.commit_vector(&values, &seed(3, 50)).unwrap();
+    for s in [50, 51] {
+        plain
+            .prove_inner_product(&state, &weights, &CONTEXT, &seed(4, s))
+            .unwrap();
+    }
 }
