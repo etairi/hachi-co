@@ -159,7 +159,8 @@ fn field_multilinear_openings_verify_with_and_without_iterations() {
     for ((vars, iterations), hiding) in cases.into_iter().zip([false, true].into_iter().cycle()) {
         let choices = HachiChoices {
             fixed_iterations: Some(iterations),
-            ..if hiding {
+            // A masked witness needs an iteration.
+            ..if hiding && iterations > 0 {
                 HachiChoices::toy_hiding(16)
             } else {
                 HachiChoices::toy(16)
@@ -685,6 +686,7 @@ fn iterations_whose_digits_pass_half_of_q_are_refused() {
         m: 1,
         decomposed: true,
         beta_s: max_digit(4),
+        masked: false,
     };
     assert!(Schedule::fixed(&toy, q, layout(18), 1).is_ok());
     let err = Schedule::fixed(&toy, q, layout(19), 1)
@@ -847,7 +849,7 @@ fn malformed_encodings_are_rejected() {
     assert!(proof_err(&[words.clone(), vec![0]].concat()).is_some());
     assert!(com_err(&[com_words.clone(), vec![0]].concat()).is_some());
     // The version.
-    for version in [0u64, 1, 2, 3, 5] {
+    for version in [0u64, 1, 2, 3, 4, 6] {
         assert!(proof_err(&edited(&words, 0, version)).is_some());
         assert!(com_err(&edited(&com_words, 0, version)).is_some());
     }
@@ -1019,31 +1021,32 @@ fn outputs_are_pinned() {
     // (header and statement) and the input batching, and the iterated proofs also in the
     // per-iteration batching fields. Updated on 2026-10-31 for version 4 (ring-switching with 2
     // field elements per round, K - 1 partial evaluations): again the commitments differ only
-    // in their version word.
+    // in their version word. Updated on 2026-11-01 for version 5, which changes only the hiding
+    // format: the pins of version 4 still held after that change, before the version word moved.
     let pinned: [(&str, usize, &str, &str); 4] = [
         (
             "multilinear",
             0,
-            "bfca2c0106cdeff677adc2ea05aaa8d702985d440777b1596ddb0f52a7acfea9",
-            "3314bbcddf60b01a9492f6a6e1aff375df9c1c75e541623bf785d488acb07d74",
+            "533b09fb839232b50aefe780e85088f381a591296e3818ecd600c546afa83d19",
+            "c5a218feb853dba113bba16001cfd96a79f0a914b57dbac8446eb76ab9f394dd",
         ),
         (
             "multilinear",
             1,
-            "bfca2c0106cdeff677adc2ea05aaa8d702985d440777b1596ddb0f52a7acfea9",
-            "050d1bcbfd30b3e50a61a6d6ca98d51d0e8c777ec20d57143845023c86f4a084",
+            "533b09fb839232b50aefe780e85088f381a591296e3818ecd600c546afa83d19",
+            "2733371e59f96a2c3f85b071758e74c8528a9b941bfc779c899aa7c0cb49daa3",
         ),
         (
             "vector",
             0,
-            "e7807f80b88a0a8ff8667b482993e2bae0d86966840b3c5b63a37d41a70aeac4",
-            "824a438db4f3b13f1dd4cc6aeb55ed36bf0a68e07c50c67740d86a472643d5dc",
+            "176f6beb438304a9afccd90e4a645e9781dda5c1e4efc459e98a105e5d96a6b4",
+            "9a91277143379c987c8841d26d0590ec72401c4af49b103dc99075794ac77c79",
         ),
         (
             "vector",
             1,
-            "e7807f80b88a0a8ff8667b482993e2bae0d86966840b3c5b63a37d41a70aeac4",
-            "73f75d2123d3e78678ed85bed3fcd24351d506a65685349354f34c13138f5894",
+            "176f6beb438304a9afccd90e4a645e9781dda5c1e4efc459e98a105e5d96a6b4",
+            "27fb4917376c66d229f33ff91c0b1753026fc961bbc867504e5ba19b58321108",
         ),
     ];
     let mut failures = Vec::new();

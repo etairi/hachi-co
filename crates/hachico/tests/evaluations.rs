@@ -251,6 +251,32 @@ fn both_pads<P: BasePcs<K> + Sync>(ctx: &Context<K>, pcs: &P, words: &BasePcsWor
 }
 
 #[test]
+fn the_residue_pad_is_refused_with_masks() {
+    // That pad opens through the Z_q shortcut, whose partial evaluations reveal more than the value.
+    // So its default choices have no masks, and asking for them is refused.
+    let ctx = context(2, PadRule::Residues, 6);
+    let setup = seed("setup/evaluations", &[2, pad_word(PadRule::Residues), 6]);
+    let plain = HachiBase::default_choices(&ctx, &setup);
+    assert_eq!(plain.hiding, None);
+    let field_ctx = context(2, PadRule::Field, 6);
+    assert!(
+        HachiBase::default_choices(&field_ctx, &setup)
+            .hiding
+            .is_some()
+    );
+    let masked = HachiBase::<K>::new(
+        ctx.q(),
+        HachiChoices {
+            hiding: HachiChoices::toy_hiding(ctx.layout.d).hiding,
+            ..plain
+        },
+    )
+    .unwrap();
+    assert!(masked.words(&ctx.layout).is_err());
+    assert!(masked.commit_multilinear(&[0; 1 << 8], &[1; 32]).is_err());
+}
+
+#[test]
 fn both_pads_are_accepted_with_clear_pcs() {
     for n in [1u64, 2, 3] {
         for pad in [PadRule::Field, PadRule::Residues] {

@@ -1,19 +1,23 @@
 //! The linear relation of one iteration (paper, Eq. (20)) and its ring switching (Section 4.3).
 //!
-//! The witness $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf t}, \hat{\mathbf z})$, with
-//! [`Hiding`](crate::params::Hiding) also $\hat{\boldsymbol\rho} = \mathbf J^{-1}(\boldsymbol\rho)$
-//! and $\hat{\mathbf r}_z = \mathbf J^{-1}(\mathbf r_z)$, satisfies, over $\mathcal R_q$, the rows
-//! 1. $\mathbf D \hat{\mathbf w} = \mathbf v$ ($n_D$ rows), with hiding
-//!    $\mathbf D \hat{\mathbf w} + \mathbf D' \mathbf J \hat{\boldsymbol\rho} = \mathbf v$;
+//! The witness $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf t}, \hat{\mathbf z})$ satisfies, over
+//! $\mathcal R_q$, the rows
+//! 1. $\mathbf D \hat{\mathbf w} = \mathbf v$ ($n_D$ rows).
 //! 2. $\mathbf B \hat{\mathbf t} = \mathbf u$ ($n_B$ rows, the commitment);
 //! 3. $\mathbf b^\top \mathbf G \hat{\mathbf w} = T$ (the claim $\sum_i b_i \mathbf a^\top
 //!    \mathbf f_i = T$, since $w_i = \mathbf a^\top \mathbf f_i$);
 //! 4. $(\mathbf c^\top \otimes \mathbf G_1) \hat{\mathbf w} - \mathbf a^\top \mathbf G \mathbf J
 //!    \hat{\mathbf z} = 0$ ($\mathbf G$ only for a decomposed witness);
 //! 5. $(\mathbf c^\top \otimes \mathbf G_{n_A}) \hat{\mathbf t} - \mathbf A \mathbf J \hat{\mathbf
-//!    z} = 0$ ($n_A$ rows), with hiding $\dots - \mathbf A' \mathbf J \hat{\mathbf r}_z = 0$, since
-//!    $\sum_i c_i \mathbf t_i = \mathbf A \mathbf z + \mathbf A' \mathbf r_z$ for
-//!    $\mathbf r_z = \sum_i c_i \mathbf r_i$.
+//!    z} = 0$ ($n_A$ rows).
+//!
+//! At a masked level ([`Hiding`](crate::params::Hiding), `hachi-pcs.tex`, step 2(c) of `Eval`)
+//! the witness is $\mathbf z' = (\hat{\mathbf w}, \hat w_0, \hat{\mathbf t}_0, \hat{\mathbf t},
+//! \hat{\mathbf z}, \hat{\mathbf z}_\varrho)$, row 1 applies $\mathbf D$ to $(\hat{\mathbf w},
+//! \hat w_0, \hat{\mathbf t}_0)$, row 4 gains $\mathbf G_1 \hat w_0$, and row 5 gains
+//! $\mathbf G_{n_A} \hat{\mathbf t}_0 - \mathbf A' \mathbf J \hat{\mathbf z}_\varrho$, since
+//! $\sum_i c_i w_i + w_0 = \mathbf a^\top \mathbf G \mathbf z$ and $\sum_i c_i \mathbf t_i +
+//! \mathbf t_0 = \mathbf A \mathbf z + \mathbf A' \mathbf z_\varrho$.
 //!
 //! Over $\mathbb Z_q\[X\]$ each row holds up to $(X^d + 1) q_i$; the quotients are decomposed,
 //! $\hat q_i = \mathbf G^{-1}(q_i)$, so that every entry of the next witness is a digit. The next
@@ -22,15 +26,15 @@
 //!
 //! **Columns** (ring elements), in order:
 //! - $\hat{\mathbf w}$ at $[0, 2^r\delta)$, chunk $i$ and digit $k$ at $i\delta + k$;
+//! - at a masked level, $\hat w_0$, digit $k$ at offset $k$, then $\hat{\mathbf t}_0$, row $i$ and
+//!   digit $k$ at offset $i\delta + k$.
 //! - $\hat{\mathbf t}$, chunk $j$, row $i$ and digit $k$ at offset $j n_A\delta + i\delta + k$;
 //! - $\hat{\mathbf z}$, element $x$ and digit $t$ at offset $x\tau + t$;
-//! - with hiding, $\hat{\boldsymbol\rho}$, entry $x$ and digit $t$ at offset $x\tau_\rho + t$,
-//!   then $\hat{\mathbf r}_z$, entry $x$ and digit $t$ at offset $x\tau_r + t$;
+//! - at a masked level, $\hat{\mathbf z}_\varrho$, entry $x$ and digit $t$ at offset $x\tau + t$.
 //! - $\hat{\mathbf q}$, row $i$ and digit $k$ at $\mu + i\delta + k$.
 //!
-//! In $\mathbf A' = [\mathbf A_1' \mid \mathbf I_{n_A}]$ and
-//! $\mathbf D' = [\mathbf D_1' \mid \mathbf I_{n_D}]$, entry $x < \nu$ of the randomness meets
-//! column $x$ of $\mathbf A_1'$ or $\mathbf D_1'$, and entry $\nu + i$ meets row $i$ alone.
+//! In $\mathbf A' = [\mathbf A_1' \mid \mathbf I_{n_A}]$, entry $x < \nu$ of the randomness meets
+//! column $x$ of $\mathbf A_1'$, and entry $\nu + i$ meets row $i$ alone.
 
 use crate::commit::Ctx;
 use crate::mle::eval_poly;
@@ -46,22 +50,20 @@ pub struct Public<'a> {
     pub params: &'a IterParams,
     /// $\mathbf b \in \mathcal R_q^{2^r}$ of the claim.
     pub b: &'a [Poly],
-    /// $\mathbf a \in \mathcal R_q^{2^m}$ of the claim.
+    /// $\mathbf a$ of the claim, one entry per ring element of a chunk.
     pub a: &'a [Poly],
     /// The claimed value $T \in \mathcal R_q$.
     pub target: &'a Poly,
     /// The challenges $c_i$ as ring elements.
     pub c: &'a [Poly],
-    /// $\mathbf D$ ($n_D \times 2^r\delta$).
+    /// $\mathbf D$ ($n_D \times$ [`IterParams::d_cols`]).
     pub d_mat: &'a [Vec<Poly>],
     /// $\mathbf B$ ($n_B \times 2^r n_A \delta$).
     pub b_mat: &'a [Vec<Poly>],
     /// $\mathbf A$ ($n_A \times W$).
     pub a_mat: &'a [Vec<Poly>],
-    /// $\mathbf A_1'$ ($n_A \times \nu$) with [`Hiding`](crate::params::Hiding), else empty.
+    /// $\mathbf A_1'$ ($n_A \times \nu$) at a masked level, else empty.
     pub a_rand: &'a [Vec<Poly>],
-    /// $\mathbf D_1'$ ($n_D \times \nu$) with [`Hiding`](crate::params::Hiding), else empty.
-    pub d_rand: &'a [Vec<Poly>],
     /// $\mathbf v$ ($n_D$).
     pub v: &'a [Poly],
     /// The commitment $\mathbf u$ ($n_B$).
@@ -71,13 +73,15 @@ pub struct Public<'a> {
 /// The column offsets of the table ([`Public`], module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Columns {
+    /// Start of $\hat w_0$ (equal to the start of $\hat{\mathbf t}$ without masks).
+    pub w0: usize,
+    /// Start of $\hat{\mathbf t}_0$ (equal to the start of $\hat{\mathbf t}$ without masks).
+    pub t0: usize,
     /// Start of $\hat{\mathbf t}$.
     pub t: usize,
     /// Start of $\hat{\mathbf z}$.
     pub z: usize,
-    /// Start of $\hat{\boldsymbol\rho}$ (equal to the start of $\hat{\mathbf q}$ without hiding).
-    pub rho: usize,
-    /// Start of $\hat{\mathbf r}_z$ (equal to the start of $\hat{\mathbf q}$ without hiding).
+    /// Start of $\hat{\mathbf z}_\varrho$ (equal to the start of $\hat{\mathbf q}$ without masks).
     pub r: usize,
     /// Start of $\hat{\mathbf q}$ ($= \mu$).
     pub q: usize,
@@ -86,22 +90,42 @@ pub struct Columns {
 }
 
 impl Columns {
-    /// The offsets of an iteration; `rho_len` is the length $\nu + n_D$ of
-    /// $\boldsymbol\rho$ (0 without hiding).
-    pub fn of(params: &IterParams, n_a: usize, alpha: usize, rho_len: usize) -> Self {
-        let chunks = params.layout.chunks();
-        let t = chunks * params.delta;
-        let z = t + chunks * n_a * params.delta;
-        let rho = z + params.layout.width(params.delta) * params.tau;
+    /// The offsets of an iteration.
+    pub fn of(params: &IterParams, alpha: usize) -> Self {
+        let (chunks, delta, n_a) = (params.layout.chunks(), params.delta, params.n_a);
+        let w0 = chunks * delta;
+        let (t0, t) = if params.layout.masked {
+            (w0 + delta, w0 + delta + n_a * delta)
+        } else {
+            (w0, w0)
+        };
+        let z = t + chunks * n_a * delta;
         Self {
+            w0,
+            t0,
             t,
             z,
-            rho,
-            r: rho + rho_len * params.tau_rho,
+            r: z + params.layout.width(delta) * params.tau,
             q: params.mu,
             total: 1 << (params.table_vars - alpha),
         }
     }
+}
+
+/// The masked parts of the witness of a level with masks, undecomposed like the arguments of
+/// [`quotients`]: $w_0$, $\hat w_0$, $\mathbf t_0$, $\hat{\mathbf t}_0$ and $\mathbf z_\varrho$.
+#[derive(Clone, Copy, Debug)]
+pub struct Masked<'a> {
+    /// $w_0$.
+    pub w0: &'a Poly,
+    /// $\hat w_0 = \mathbf G_1^{-1}(w_0)$.
+    pub w0_hat: &'a [Poly],
+    /// $\mathbf t_0$.
+    pub t0: &'a [Poly],
+    /// $\hat{\mathbf t}_0 = \mathbf G_{n_A}^{-1}(\mathbf t_0)$.
+    pub t0_hat: &'a [Poly],
+    /// $\mathbf z_\varrho$.
+    pub z_r: &'a [Poly],
 }
 
 /// The rows of the relation: $n_D$, $n_B$, the claim row, the fold row and $n_A$ rows.
@@ -150,13 +174,12 @@ fn exact_inner(ring2: &Ring, x: &[Poly], y: &[Poly]) -> Result<Poly> {
 
 /// The quotients $q_i$ of the rows: $(\text{row}_i(\mathbf z') - y_i) = (X^d + 1) q_i$ in
 /// $\mathbb Z_q\[X\]$, from the undecomposed values $\mathbf w$, the inner commitments
-/// $\mathbf t_j$, $\mathbf z$, and with hiding $\boldsymbol\rho$ and $\mathbf r_z$ (equal, digit for
-/// digit, to the recompositions of $\hat{\mathbf w}$, $\hat{\mathbf t}$, $\hat{\mathbf z}$,
-/// $\hat{\boldsymbol\rho}$ and $\hat{\mathbf r}_z$; `rho` and `r_z` are empty without hiding).
+/// $\mathbf t_j$, $\mathbf z$, and at a masked level the parts in `masked` (equal, digit for digit,
+/// to the recompositions of the digits).
 ///
 /// # Errors
-/// [`Error::Shape`] for randomness or randomness matrices of the wrong shape;
-/// [`Error::Protocol`] if a row does not vanish modulo $X^d + 1$ (a bug); arithmetic errors.
+/// [`Error::Shape`] for masks of the wrong shape. [`Error::Protocol`] if a row does not vanish
+/// modulo $X^d + 1$ (a bug). Arithmetic errors.
 #[allow(clippy::too_many_arguments)] // the parts of the witness
 pub fn quotients<const K: usize>(
     ctx: &Ctx<K>,
@@ -166,8 +189,7 @@ pub fn quotients<const K: usize>(
     t: &[Vec<Poly>],
     t_hat: &[Poly],
     z: &[Poly],
-    rho: &[Poly],
-    r_z: &[Poly],
+    masked: Option<&Masked<'_>>,
 ) -> Result<Vec<Poly>> {
     let (ring, ring2, d) = (&ctx.ring, &ctx.ring2, ctx.d());
     let p = public.params;
@@ -187,56 +209,56 @@ pub fn quotients<const K: usize>(
     } else {
         z.to_vec()
     };
-    let nu = ctx.hiding().map_or(0, |h| h.nu);
-    let (n_a, n_d) = (ctx.choices.n_a, ctx.choices.n_d);
-    let (rand_a, rand_d) = if nu == 0 { (0, 0) } else { (n_a, n_d) };
-    if public.a_rand.len() != rand_a
-        || public.d_rand.len() != rand_d
-        || public
-            .a_rand
-            .iter()
-            .chain(public.d_rand)
-            .any(|row| row.len() != nu)
-        || r_z.len() != ctx.rand_len(n_a)
-        || rho.len() != ctx.rand_len(n_d)
-    {
+    if masked.is_some() != p.layout.masked {
         return Err(Error::Shape(
-            "the randomness does not fit the hiding choices".into(),
+            "the masks do not fit the iteration's layout".into(),
         ));
     }
-    // [A1' | I] r or [D1' | I] r for row i, exactly: the matrix's row i against the first nu
-    // entries, plus entry nu + i.
-    let rand_row = |m1: &[Vec<Poly>], r: &[Poly], i: usize| -> Result<Poly> {
-        if r.is_empty() {
-            return Ok(ring2.zero());
+    let nu = ctx.hiding().map_or(0, |h| h.nu);
+    let mut d_columns: Vec<Poly> = w_hat.to_vec();
+    if let Some(m) = masked {
+        if public.a_rand.len() != p.n_a
+            || public.a_rand.iter().any(|row| row.len() != nu)
+            || m.z_r.len() != nu + p.n_a
+            || m.t0.len() != p.n_a
+        {
+            return Err(Error::Shape(
+                "the masks do not fit the hiding choices".into(),
+            ));
         }
+        d_columns.extend_from_slice(m.w0_hat);
+        d_columns.extend_from_slice(m.t0_hat);
+    }
+    // [A1' | I] r for row i, exactly: the matrix's row i against the first nu entries, plus entry
+    // nu + i.
+    let rand_row = |m1: &[Vec<Poly>], r: &[Poly], i: usize| -> Result<Poly> {
         let prod = exact_inner(ring2, &m1[i], &r[..nu])?;
         Ok(ring2.add(&prod, &lift(ring2, &r[nu + i]))?)
     };
     let mut sums: Vec<(Poly, Poly)> = Vec::new();
     for (i, row) in public.d_mat.iter().enumerate() {
-        let s = ring2.add(
-            &exact_inner(ring2, row, w_hat)?,
-            &rand_row(public.d_rand, rho, i)?,
-        )?;
-        sums.push((s, public.v[i].clone()));
+        sums.push((exact_inner(ring2, row, &d_columns)?, public.v[i].clone()));
     }
     for (i, row) in public.b_mat.iter().enumerate() {
         sums.push((exact_inner(ring2, row, t_hat)?, public.u[i].clone()));
     }
     sums.push((exact_inner(ring2, public.b, w)?, public.target.clone()));
-    let fold = ring2.sub(
-        &exact_inner(ring2, public.c, w)?,
-        &exact_inner(ring2, public.a, &z_msg)?,
-    )?;
+    let mut fold = exact_inner(ring2, public.c, w)?;
+    if let Some(m) = masked {
+        fold = ring2.add(&fold, &lift(ring2, m.w0))?;
+    }
+    let fold = ring2.sub(&fold, &exact_inner(ring2, public.a, &z_msg)?)?;
     sums.push((fold, ring.zero()));
     for (i, row) in public.a_mat.iter().enumerate() {
         let ti: Vec<Poly> = t.iter().map(|tj| tj[i].clone()).collect();
-        let s = ring2.sub(
-            &exact_inner(ring2, public.c, &ti)?,
-            &exact_inner(ring2, row, z)?,
-        )?;
-        let s = ring2.sub(&s, &rand_row(public.a_rand, r_z, i)?)?;
+        let mut s = exact_inner(ring2, public.c, &ti)?;
+        if let Some(m) = masked {
+            s = ring2.add(&s, &lift(ring2, &m.t0[i]))?;
+        }
+        let mut s = ring2.sub(&s, &exact_inner(ring2, row, z)?)?;
+        if let Some(m) = masked {
+            s = ring2.sub(&s, &rand_row(public.a_rand, m.z_r, i)?)?;
+        }
         sums.push((s, ring.zero()));
     }
     let mut out = Vec::with_capacity(sums.len());
@@ -298,20 +320,14 @@ pub fn mstar<const K: usize>(
 ) -> Result<(Vec<Ext<K>>, Ext<K>)> {
     let field: &Fqk<K> = ctx.field();
     let p = public.params;
-    let (n_a, n_b, n_d, delta, tau) = (
-        ctx.choices.n_a,
-        ctx.choices.n_b,
-        ctx.choices.n_d,
-        p.delta,
-        p.tau,
-    );
+    let (n_a, n_b, n_d, delta, tau) = (p.n_a, ctx.choices.n_b, ctx.choices.n_d, p.delta, p.tau);
     let rows = Rows::of(ctx);
     let nu = ctx.hiding().map_or(0, |h| h.nu);
-    let cols = Columns::of(p, n_a, ctx.alpha(), ctx.rand_len(n_d));
+    let cols = Columns::of(p, ctx.alpha());
     let chunks = p.layout.chunks();
     let width = p.layout.width(delta);
     let d = ctx.d();
-    let (rand_a, rand_d) = if nu == 0 { (0, 0) } else { (n_a, n_d) };
+    let rand_rows = if p.layout.masked { n_a } else { 0 };
     if eq1.len() < p.rows
         || alpha_pows.len() < d + 1
         || public.b.len() != chunks
@@ -322,24 +338,15 @@ pub fn mstar<const K: usize>(
         || public.a_mat.len() != n_a
         || public.v.len() != n_d
         || public.u.len() != n_b
-        || public.a_rand.len() != rand_a
-        || public.d_rand.len() != rand_d
-        || public
-            .a_rand
-            .iter()
-            .chain(public.d_rand)
-            .any(|row| row.len() != nu)
+        || public.a_rand.len() != rand_rows
+        || public.a_rand.iter().any(|row| row.len() != nu)
     {
         return Err(Error::Shape(
             "the relation's public data does not fit its parameters".into(),
         ));
     }
     let ev = |x: &Poly| eval_poly(field, x, &alpha_pows[..d]);
-    let pow = base_powers(
-        &ctx.ring,
-        ctx.choices.b,
-        delta.max(tau).max(p.tau_rho).max(p.tau_r),
-    );
+    let pow = base_powers(&ctx.ring, ctx.choices.b, delta.max(tau));
     let mut m = vec![field.zero(); cols.total];
     // w-hat.
     let (b_alpha, c_alpha): (Vec<Ext<K>>, Vec<Ext<K>>) = (
@@ -358,6 +365,17 @@ pub fn mstar<const K: usize>(
         for (k, pk) in pow[..delta].iter().enumerate() {
             let col = i * delta + k;
             m[col] = field.add(&m[col], &field.scale(&both, *pk));
+        }
+    }
+    // w0-hat (row 4) and t0-hat (rows 5), at a masked level.
+    if p.layout.masked {
+        for (k, pk) in pow[..delta].iter().enumerate() {
+            let c = cols.w0 + k;
+            m[c] = field.add(&m[c], &field.scale(&eq1[rows.fold], *pk));
+            for i in 0..n_a {
+                let c = cols.t0 + i * delta + k;
+                m[c] = field.add(&m[c], &field.scale(&eq1[rows.a_rows + i], *pk));
+            }
         }
     }
     // t-hat.
@@ -398,31 +416,16 @@ pub fn mstar<const K: usize>(
             m[cols.z + x * tau + t] = field.scale(&neg, *pt);
         }
     }
-    // rho-hat (row 1, +D') and r_z-hat (rows 5, -A'), digit t weighted by b^t.
-    if nu > 0 {
-        let (tau_rho, tau_r) = (p.tau_rho, p.tau_r);
-        for (r, row) in public.d_rand.iter().enumerate() {
-            let mut entries: Vec<(usize, Ext<K>)> =
-                row.iter().enumerate().map(|(x, m)| (x, ev(m))).collect();
-            entries.push((nu + r, field.one()));
-            for (x, e) in entries {
-                let weight = field.mul(&eq1[r], &e);
-                for (t, pt) in pow[..tau_rho].iter().enumerate() {
-                    let c = cols.rho + x * tau_rho + t;
-                    m[c] = field.add(&m[c], &field.scale(&weight, *pt));
-                }
-            }
-        }
-        for (i, row) in public.a_rand.iter().enumerate() {
-            let mut entries: Vec<(usize, Ext<K>)> =
-                row.iter().enumerate().map(|(x, m)| (x, ev(m))).collect();
-            entries.push((nu + i, field.one()));
-            for (x, e) in entries {
-                let weight = field.neg(&field.mul(&eq1[rows.a_rows + i], &e));
-                for (t, pt) in pow[..tau_r].iter().enumerate() {
-                    let c = cols.r + x * tau_r + t;
-                    m[c] = field.add(&m[c], &field.scale(&weight, *pt));
-                }
+    // z_varrho-hat (rows 5, -A'), digit t weighted by b^t.
+    for (i, row) in public.a_rand.iter().enumerate() {
+        let mut entries: Vec<(usize, Ext<K>)> =
+            row.iter().enumerate().map(|(x, m)| (x, ev(m))).collect();
+        entries.push((nu + i, field.one()));
+        for (x, e) in entries {
+            let weight = field.neg(&field.mul(&eq1[rows.a_rows + i], &e));
+            for (t, pt) in pow[..tau].iter().enumerate() {
+                let c = cols.r + x * tau + t;
+                m[c] = field.add(&m[c], &field.scale(&weight, *pt));
             }
         }
     }

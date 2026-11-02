@@ -35,24 +35,14 @@
 //! - **Packed encodings**: $\lceil \log_2 q \rceil$ bits per residue and $\lceil \log_2 b
 //!   \rceil$ bits per digit of the final witness, with exact word counts (`pcs`,
 //!   "Encodings").
-//! - **Randomized commitments**, optional ([`HachiChoices::hiding`]; the Hachi-Co draft's item
-//!   (i), 4_P:362; `docs/hachi-hiding.md` §6):
-//!   - $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \mathbf r_i$ and
-//!     $\mathbf v = \mathbf D \hat{\mathbf w} + \mathbf D' \boldsymbol\rho$, with discrete
-//!     Gaussian or uniform-digit randomness drawn from the prover's 32-byte seeds;
-//!   - by the draft's argument, a commitment then hides the committed object under MLWE, at
-//!     an MLWE rank $\nu$ of real security (the toy choices have $\nu = 1$).
+//! - **Masks**, optional ([`HachiChoices::hiding`], `hachi-pcs.tex`, Appendix A.2, after Jindo
+//!   Section 2.4) for multilinear polynomials over the field: randomized commitments with a
+//!   masking row per chunk, a first claim mixed with the masks by a challenge, and a first
+//!   iteration masked by discrete Gaussians with rejection sampling (`pcs`, "Hiding").
 //!
 //! **Not implemented:**
-//! - **Hiding openings.** An opening reveals what it revealed before:
-//!   - the partial evaluations, the batching sumcheck and $Y$;
-//!   - per iteration, the rounds, the partial evaluations and the batching sumcheck of its
-//!     reduction, and the evaluations of the next witness;
-//!   - the last witness and its randomness.
-//!
-//!   So a commitment hides only until it is opened, and with no iteration the opening sends the
-//!   committed object itself. The rest of the Hwang-Seo-Song route waits for the co-authors'
-//!   answers (`docs/hachi-hiding.md` §8).
+//! - **Hiding for vectors.** The vectors of an inner-product opening are not masked yet, so
+//!   Hachi-Co's blinders, and with them its proofs, are not hiding (`pcs`, "Hiding").
 //! - **Secure parameters.** [`HachiChoices::toy`] and [`HachiChoices::toy_hiding`] are test
 //!   parameters.
 //!
@@ -82,5 +72,5 @@ pub mod relation;
 pub mod sumcheck;
 
 pub use error::{Error, Result, VerifyError};
-pub use params::{HachiChoices, Hiding, Layout, Noise, Schedule};
+pub use params::{HachiChoices, Hiding, Layout, Schedule};
 pub use pcs::{Commitment, HachiPcs, Proof, State, VERSION};

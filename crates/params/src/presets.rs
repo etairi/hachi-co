@@ -253,9 +253,9 @@ pub struct PerObject {
     pub g1: usize,
 }
 
-/// Hachi's parameters for one secure preset, without hiding: an estimate of the Module-SIS
-/// instances of its binding at the preset's $\lambda$ (`scripts/hachi-parameters/choose.py`), one
-/// choice for the three objects that Hachi opens. Hiding is not covered.
+/// Hachi's parameters for one secure preset: an estimate of the Module-SIS instances of its
+/// binding at the preset's $\lambda$ (`scripts/hachi-parameters/choose.py`), one choice for the
+/// three objects that Hachi opens, and the masks of the share polynomial if the preset has them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HachiPreset {
@@ -273,6 +273,23 @@ pub struct HachiPreset {
     pub proof_words: PerObject,
     /// The iterations of the openings.
     pub iterations: PerObject,
+    /// The masks of the share polynomial, or `None` for a preset that has no parameters with
+    /// them. The words and iterations above include them.
+    #[serde(default)]
+    pub hiding: Option<HachiMasks>,
+}
+
+/// The masks of one secure preset (`hachi::Hiding`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HachiMasks {
+    /// The MLWE rank of the commitment randomness.
+    pub nu: usize,
+    /// The height of $\mathbf A$ and $\mathbf A'$ at the first level.
+    pub n_a: usize,
+    /// $\lambda$ of the statistical errors.
+    pub lambda: u32,
+    /// $\phi$ of the Gaussian parameter.
+    pub phi: u32,
 }
 
 #[derive(Deserialize)]

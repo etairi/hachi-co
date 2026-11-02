@@ -34,23 +34,33 @@
 //! sends the last witness in the clear (paper, Section 4.4): the verifier recomputes its
 //! commitment and checks the claim directly.
 //!
-//! **Hiding.** With [`HachiChoices::hiding`] every commitment is randomized
-//! ([`Hiding`](crate::params::Hiding), `docs/hachi-hiding.md` §6; the draft's item (i),
-//! 4_preliminaries.tex:362).
-//! - Under MLWE the inner commitments $\mathbf t_i$ are pseudorandom, so $\mathbf u$ is
-//!   indistinguishable from the commitment of uniform $\mathbf t_i$, which does not depend on
-//!   the committed object: the commitment hides it. This holds at an MLWE rank $\nu$ of real
-//!   security; the toy choices have $\nu = 1$.
-//! - The final step also sends the last commitment's randomness, and the verifier checks that it
-//!   lies in the support of $\chi$.
-//! - The openings reveal what they revealed before, the last witness and its randomness
-//!   included. So a commitment hides only until it is opened, and with no iteration the opening
-//!   sends the committed object itself.
+//! **Hiding.** With [`HachiChoices::hiding`], multilinear polynomials over the field are committed
+//! and opened as the blue parts of `hachi-pcs.tex`, Appendix A.2, specify (after Jindo Section 2.4):
+//! - **Commit.** Every chunk gets a uniform masking row $\mathfrak m_i$, and $\mathbf t_i =
+//!   \mathbf A \mathbf s_i + \mathbf A' \boldsymbol\varrho_i$ with $\boldsymbol\varrho_i$ of
+//!   uniform digits. Under MLWE the $\mathbf t_i$ are pseudorandom, at an MLWE rank $\nu$ of real
+//!   security (the toy choices have $\nu = 1$).
+//! - **Step 1 of an opening.** With $Y = \sum_i b_i \mathbf a^\top \mathbf f_i$ and $Y_{\mathfrak
+//!   m} = \sum_i b_i \mathfrak m_i$, the prover sends $y_{\mathfrak m} = E(Y_{\mathfrak m})$, then
+//!   receives $x^* \in \mathbb F_{q^K} \setminus \lbrace 0 \rbrace$ and sends $Y^* = Y + x^*
+//!   Y_{\mathfrak m}$. The verifier checks $E(Y^*) = y + x^* y_{\mathfrak m}$, and the first claim
+//!   has the weights $(\mathbf a, x^*)$ and the value $Y^*$.
+//! - **The first iteration** is masked and repeated until it is accepted
+//!   ([`crate::iteration`]). The later ones are unchanged, and there is at least one iteration.
 //!
-//! **Randomness.** The prover's methods take a secret 32-byte seed, which only hiding uses; a
-//! commitment draws from the PRG stream `(seed, "hachi/commit/r", 0)`, an opening from the
-//! streams of [`crate::iteration`]. Every commitment and every opening needs a fresh seed: an
-//! opening of the same state with a reused seed repeats its randomness.
+//! Two limits, both enforced or documented here:
+//! - The polynomials over $\mathbb Z_q$ of [`HachiPcs::commit_multilinear`] are **refused**: their
+//!   partial evaluations reveal more than the value, so that opening cannot hide. Commit such a
+//!   polynomial over the field instead.
+//! - The vectors of [`HachiPcs::commit_vector`] are **not masked yet**: they are committed and
+//!   opened as without hiding, so an opening with no iteration sends the vector in the clear.
+//!   Hachi-Co's blinders are such vectors, so its proofs are not hiding yet.
+//!
+//! **Randomness.** The prover's methods take a secret 32-byte seed, which only hiding uses. A
+//! commitment draws from the PRG streams `(seed, "hachi/commit/r", 0)` and `(seed,
+//! "hachi/commit/mask", 0)`, an opening from the streams of [`crate::iteration`]. Every commitment
+//! and every opening needs a fresh seed: an opening of the same state with a reused seed repeats
+//! its masks.
 //!
 //! **Schedule.** Unless [`HachiChoices::fixed_iterations`] fixes it, an opening runs the number
 //! of iterations, from 0 to [`HachiChoices::max_iterations`], whose proof has the fewest words
@@ -74,16 +84,14 @@
 //!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K - 1$ partial
 //!   evaluations, the $L_i - \kappa$ batching rounds (2 field elements each), the packed value
 //!   $\hat w(\mathbf r)$ and $p'$; and the final message. The per-iteration batching-round count
-//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with the number $R$
-//!   of ring elements of the final randomness, which follows the final message, each coefficient
-//!   $x$ as $x - \mathrm{lo}$ in $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1) \rceil$ bits for
-//!   the support $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$. Without hiding the encodings are those
-//!   of the non-hiding scheme, unchanged.
+//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with a word $M$, 1 if
+//!   the proof carries $y_{\mathfrak m}$, which then comes just before $Y$, and 0 otherwise. Without
+//!   hiding the encodings are those of the non-hiding scheme, unchanged.
 //!
 //! Every value has a single encoding: the decoders reject residues not below $q$, digit indices
-//! outside the digit set, randomness outside the support of $\chi$, non-zero padding, and any
-//! length other than the one the header and the parameters imply. The verifier checks the
-//! counts of a header: $B$ against $\ell - \kappa$, the others against the schedule.
+//! outside the digit set, non-zero padding, and any length other than the one the header and the
+//! parameters imply. The verifier checks the counts of a header: $B$ against $\ell - \kappa$, the
+//! others against the schedule.
 
 use crate::commit::{Committed, Ctx, commit};
 use crate::error::VerifyError;
@@ -97,16 +105,19 @@ use crate::sumcheck::RoundMessage;
 use crate::{Error, Result};
 use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
+use hachi_co_sampling::ShakePrg;
+use hachi_co_sampling::uniform::uniform_mod_q;
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
-/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 4 since the sumcheck that
-/// binds the partial evaluations is ring-switching, with 2 field elements per round, and a proof
-/// sends $K - 1$ partial evaluations ([`crate::partials`]). Version 3 batched the same claims on
-/// the orbit of the point, with 3 field elements per round and $K$ partial evaluations. Version
-/// 2 had no such sumcheck, and accepted false values; it packed the values and chose the
-/// schedule that minimises the proof's size (version 1 had a 64-bit word per value and stopped at
-/// the first iteration that did not shrink the witness).
-pub const VERSION: u64 = 4;
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 5 since hiding masks the first
+/// iteration, with a masks' value in place of a final randomness. Version 4 randomized every level,
+/// and its sumcheck that binds the partial evaluations was already ring-switching, with 2 field
+/// elements per round and $K - 1$ partial evaluations ([`crate::partials`]). Version 3 batched the
+/// same claims on the orbit of the point, with 3 field elements per round and $K$ partial
+/// evaluations. Version 2 had no such sumcheck, and accepted false values. It packed the values and
+/// chose the schedule that minimises the proof's size (version 1 had a 64-bit word per value and
+/// stopped at the first iteration that did not shrink the witness).
+pub const VERSION: u64 = 5;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,15 +153,14 @@ pub struct Proof<const K: usize> {
     pub batch_rounds: Vec<RoundValues<K>>,
     /// $f'(\mathbf r)$ at the point of those rounds; `None` for an inner product.
     pub batch_eval: Option<Ext<K>>,
-    /// The ring element $Y$ of the reduction to $\mathcal R_q$.
+    /// With a masked opening, $y_{\mathfrak m}$, and `None` otherwise.
+    pub mask_eval: Option<Ext<K>>,
+    /// The ring element $Y$ of the reduction to $\mathcal R_q$, and $Y^*$ in a masked opening.
     pub ring_value: Poly,
     /// The iterations.
     pub iterations: Vec<IterationProof<K>>,
     /// The final witness's message, chunk after chunk.
     pub final_message: Vec<Poly>,
-    /// With hiding, the final witness's commitment randomness, chunk after chunk ($\nu + n_A$
-    /// ring elements per chunk); empty without.
-    pub final_randomness: Vec<Poly>,
 }
 
 /// What a proof carries ahead of its iterations besides $Y$, by the kind of opening; the choice
@@ -165,6 +175,8 @@ enum Reduction {
     },
     /// An inner product, or a polynomial over $\mathbb F_{q^K}$: none of these.
     Direct,
+    /// A masked polynomial over $\mathbb F_{q^K}$: $y_{\mathfrak m}$.
+    Masked,
 }
 
 impl Reduction {
@@ -172,7 +184,7 @@ impl Reduction {
     fn partials(self, k: usize) -> usize {
         match self {
             Self::Multilinear { .. } => k - 1,
-            Self::Direct => 0,
+            Self::Direct | Self::Masked => 0,
         }
     }
 
@@ -180,18 +192,19 @@ impl Reduction {
     fn rounds(self) -> usize {
         match self {
             Self::Multilinear { rounds } => rounds,
-            Self::Direct => 0,
+            Self::Direct | Self::Masked => 0,
         }
     }
 
     /// The residues ahead of the iterations, $Y$ included: $K(K - 1) + 2K(\ell - \kappa) + K +
-    /// d$ for a multilinear opening, $d$ otherwise; `None` on overflow.
+    /// d$ for a multilinear opening, $K + d$ for a masked one, $d$ otherwise, and `None` on overflow.
     fn residues(self, k: usize, d: usize) -> Option<usize> {
         match self {
             Self::Multilinear { rounds } => {
                 rounds.checked_mul(2 * k)?.checked_add(k * (k - 1) + k + d)
             }
             Self::Direct => Some(d),
+            Self::Masked => Some(k + d),
         }
     }
 }
@@ -209,9 +222,13 @@ const LABEL_POINT: &[u8] = b"hachi/point";
 const LABEL_VALUE: &[u8] = b"hachi/value";
 const LABEL_PARTIALS: &[u8] = b"hachi/input/partials";
 const LABEL_RING_VALUE: &[u8] = b"hachi/input/ring-value";
+const LABEL_MASK_EVAL: &[u8] = b"hachi/input/mask-eval";
+const LABEL_MASK_COIN: &[u8] = b"hachi/input/mask-coin";
 
 /// The PRG domain of a commitment's randomness (index 0).
 pub const DOMAIN_COMMIT_R: &[u8] = b"hachi/commit/r";
+/// The PRG domain of a commitment's masking rows (index 0).
+pub const DOMAIN_COMMIT_MASK: &[u8] = b"hachi/commit/mask";
 
 impl<const K: usize> HachiPcs<K> {
     /// Hachi over $\mathbb F_{q^K}$ with the given choices.
@@ -247,11 +264,13 @@ impl<const K: usize> HachiPcs<K> {
             n,
             true,
             max_digit(self.ctx.choices.b),
+            false,
         )
     }
 
     /// The layout of a vector of `len` $\ge 1$ field elements: one chunk of
-    /// $2^{\lceil \log_2 \lceil len K/d \rceil \rceil}$ ring elements, decomposed.
+    /// $2^{\lceil \log_2 \lceil len K/d \rceil \rceil}$ ring elements, decomposed. Vectors are not
+    /// masked yet (module documentation, "Hiding").
     ///
     /// # Errors
     /// [`Error::Shape`] for an empty vector.
@@ -265,6 +284,7 @@ impl<const K: usize> HachiPcs<K> {
             m: blocks.next_power_of_two().trailing_zeros() as usize,
             decomposed: true,
             beta_s: max_digit(self.ctx.choices.b),
+            masked: false,
         })
     }
 
@@ -293,12 +313,37 @@ impl<const K: usize> HachiPcs<K> {
 
     /// The layout of a multilinear polynomial over $\mathbb F_{q^K}$ in `vars` $\ge \alpha -
     /// \kappa$ variables: $2^{\ell - \alpha + \kappa}$ ring elements (paper, Section 3.1),
-    /// decomposed, split as [`HachiPcs::multilinear_layout`] splits them.
+    /// decomposed, split as [`HachiPcs::multilinear_layout`] splits them, and masked with
+    /// [`HachiChoices::hiding`].
     ///
     /// # Errors
     /// [`Error::Parameter`] if `vars` $< \alpha - \kappa$.
     pub fn multilinear_ext_layout(&self, vars: usize) -> Result<Layout> {
-        self.multilinear_layout(vars + self.ctx.kappa())
+        let n = (vars + self.ctx.kappa())
+            .checked_sub(self.ctx.alpha())
+            .ok_or_else(|| {
+                Error::Parameter(format!(
+                    "a polynomial over the field needs at least alpha - kappa = {} variables",
+                    self.ctx.alpha() - self.ctx.kappa()
+                ))
+            })?;
+        best_layout(
+            &self.ctx.choices,
+            self.ctx.q,
+            n,
+            true,
+            max_digit(self.ctx.choices.b),
+            self.ctx.hiding().is_some(),
+        )
+    }
+
+    /// The reduction of an opening of a polynomial over the field.
+    fn ext_reduction(&self) -> Reduction {
+        if self.ctx.hiding().is_some() {
+            Reduction::Masked
+        } else {
+            Reduction::Direct
+        }
     }
 
     /// The schedule of an opening of a multilinear polynomial over $\mathbb F_{q^K}$ in `vars`
@@ -308,7 +353,7 @@ impl<const K: usize> HachiPcs<K> {
     /// As [`HachiPcs::multilinear_ext_layout`]; [`Error::Parameter`] if the fixed number of
     /// iterations cannot be parametrised.
     pub fn multilinear_ext_schedule(&self, vars: usize) -> Result<Schedule> {
-        self.schedule(self.multilinear_ext_layout(vars)?, Reduction::Direct)
+        self.schedule(self.multilinear_ext_layout(vars)?, self.ext_reduction())
     }
 
     /// The reduction of a multilinear opening in `vars` variables: $\ell - \kappa$ batching
@@ -350,17 +395,6 @@ impl<const K: usize> HachiPcs<K> {
         (u64::BITS - (self.ctx.choices.b - 1).leading_zeros()) as usize
     }
 
-    /// With hiding, the support $[\mathrm{lo}, \mathrm{hi}]$ of $\chi$ and the bits of a
-    /// coefficient of the final randomness, $\lceil \log_2(\mathrm{hi} - \mathrm{lo} + 1)
-    /// \rceil$; `None` without.
-    fn noise_field(&self) -> Option<(i64, i64, usize)> {
-        let h = self.ctx.hiding()?;
-        // The range is valid: `check` accepted the choices.
-        let (lo, hi) = h.noise.range(self.ctx.choices.b).ok()?;
-        let width = (hi - lo) as u64;
-        Some((lo, hi, (u64::BITS - width.leading_zeros()) as usize))
-    }
-
     /// The number of words of [`HachiPcs::commitment_to_words`]: the version, then $n_B d$
     /// packed residues.
     pub fn commitment_words(&self) -> usize {
@@ -395,20 +429,20 @@ impl<const K: usize> HachiPcs<K> {
     /// # Errors
     /// As [`HachiPcs::multilinear_ext_schedule`].
     pub fn multilinear_ext_proof_words(&self, vars: usize) -> Result<usize> {
-        self.proof_words(&self.multilinear_ext_schedule(vars)?, Reduction::Direct)
+        self.proof_words(&self.multilinear_ext_schedule(vars)?, self.ext_reduction())
     }
 
     /// The words of [`HachiPcs::proof_to_words`] for the schedule `schedule` and the reduction
     /// `reduction` (module documentation, "Encodings"): the header ($5 + k$ words for $k$
     /// iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue: for a
     /// multilinear opening the $K - 1$ partial evaluations ($K$ residues each), the $\ell -
-    /// \kappa$ batching rounds ($2K$ each) and $f'(\mathbf r)$ ($K$); $Y$ ($d$); per iteration
+    /// \kappa$ batching rounds ($2K$ each) and $f'(\mathbf r)$ ($K$), for a masked opening
+    /// $y_{\mathfrak m}$ ($K$), $Y$ ($d$), per iteration
     /// $\mathbf v$ ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3
     /// field elements), $y'$ ($K$), the partial evaluations ($K(K - 1)$), the $L - \kappa$
     /// batching rounds ($2K$ each), $\hat w(\mathbf r)$ ($K$) and $p'$ ($d$); the final
     /// message, $2^{r+m} d$ residues without iterations, else as many digits of
-    /// $\lceil \log_2 b \rceil$ bits; and with hiding the final randomness,
-    /// $2^r (\nu + n_A) d$ coefficients of the bits of [`Noise`](crate::params::Noise)'s support.
+    /// $\lceil \log_2 b \rceil$ bits.
     ///
     /// # Errors
     /// [`Error::Parameter`] if the count of the reduction's residues overflows.
@@ -432,27 +466,30 @@ impl<const K: usize> HachiPcs<K> {
         } else {
             self.digit_bits()
         };
-        let mut bits = residues * self.residue_bits() + entries * entry_bits;
-        let mut header = 5 + schedule.iterations.len();
-        if let Some((_, _, noise_bits)) = self.noise_field() {
-            header += 1;
-            bits += last.chunks() * self.ctx.rand_len(c.n_a) * d * noise_bits;
-        }
+        let bits = residues * self.residue_bits() + entries * entry_bits;
+        let header = 5 + schedule.iterations.len() + usize::from(self.ctx.hiding().is_some());
         Ok(header + bits.div_ceil(64))
     }
 
     /// Commits to the multilinear polynomial with monomial coefficients `coeffs` ($2^\ell$
-    /// residues, $\ell \ge \alpha$; module documentation for the order), with randomness from
-    /// the secret `seed` if the choices hide (module documentation, "Randomness").
+    /// residues, $\ell \ge \alpha$, in the order of the module documentation).
     ///
     /// # Errors
-    /// [`Error::Shape`] unless the length is a power of two of at least $d$; arithmetic errors.
+    /// [`Error::Parameter`] with hiding: this opening's partial evaluations reveal more than the
+    /// value (module documentation, "Hiding"). [`Error::Shape`] unless the length is a power of
+    /// two of at least $d$. Arithmetic errors.
     pub fn commit_multilinear(
         &self,
         coeffs: &[u64],
-        seed: &[u8; 32],
+        _seed: &[u8; 32],
     ) -> Result<(Commitment, State<K>)> {
         let ctx = &self.ctx;
+        if ctx.hiding().is_some() {
+            return Err(Error::Parameter(
+                "polynomials over Z_q cannot be opened with hiding: commit them over the field"
+                    .into(),
+            ));
+        }
         if !coeffs.len().is_power_of_two() || coeffs.len() < ctx.d() {
             return Err(Error::Shape(format!(
                 "2^l coefficients with l >= alpha = {} are expected",
@@ -463,8 +500,7 @@ impl<const K: usize> HachiPcs<K> {
         let layout = self.multilinear_layout(vars)?;
         let coeffs: Vec<u64> = coeffs.iter().map(|c| ctx.ring.zq().reduce(*c)).collect();
         let message = self.multilinear_message(&layout, vars, &coeffs)?;
-        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
-        let committed = commit(ctx, 0, layout, message, r)?;
+        let committed = commit(ctx, 0, layout, message, Vec::new())?;
         Ok((
             Commitment {
                 u: committed.u.clone(),
@@ -501,9 +537,21 @@ impl<const K: usize> HachiPcs<K> {
             .map(|block| ctx.sub.psi(block))
             .collect::<hachi_co_math::Result<Vec<_>>>()?;
         Ok(elements
-            .chunks_exact(layout.chunk_len())
+            .chunks_exact(layout.message_len())
             .map(<[Poly]>::to_vec)
             .collect())
+    }
+
+    /// The masking rows of a masked layout, one per chunk, from the secret `seed`: uniform in
+    /// $\mathcal R_q$. None otherwise.
+    fn masking_rows(&self, layout: &Layout, seed: &[u8; 32]) -> Result<Vec<Poly>> {
+        if !layout.masked {
+            return Ok(Vec::new());
+        }
+        let d = self.ctx.d();
+        let mut prg = ShakePrg::new(seed, DOMAIN_COMMIT_MASK, 0);
+        let residues = uniform_mod_q(&mut prg, self.ctx.q, layout.chunks() * d)?;
+        Ok(residues.chunks_exact(d).map(|c| Poly(c.to_vec())).collect())
     }
 
     /// Commits to the multilinear polynomial over $\mathbb F_{q^K}$ with monomial coefficients
@@ -528,8 +576,8 @@ impl<const K: usize> HachiPcs<K> {
         let layout = self.multilinear_ext_layout(vars)?;
         let g = ctx.d_over_k();
         let mut block = Vec::with_capacity(g);
-        let message = coeffs
-            .chunks_exact(g * layout.chunk_len())
+        let mut message = coeffs
+            .chunks_exact(g * layout.message_len())
             .map(|chunk| {
                 chunk
                     .chunks_exact(g)
@@ -541,7 +589,10 @@ impl<const K: usize> HachiPcs<K> {
                     .collect::<hachi_co_math::Result<Vec<Poly>>>()
             })
             .collect::<hachi_co_math::Result<Vec<_>>>()?;
-        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
+        for (chunk, row) in message.iter_mut().zip(self.masking_rows(&layout, seed)?) {
+            chunk.push(row);
+        }
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R)?;
         let committed = commit(ctx, 0, layout, message, r)?;
         Ok((
             Commitment {
@@ -554,22 +605,21 @@ impl<const K: usize> HachiPcs<K> {
         ))
     }
 
-    /// Commits to the vector `values` ($N \ge 1$ field elements), with randomness from the
-    /// secret `seed` if the choices hide.
+    /// Commits to the vector `values` ($N \ge 1$ field elements). Vectors are not masked yet
+    /// (module documentation, "Hiding"), so `seed` is unused.
     ///
     /// # Errors
     /// [`Error::Shape`] for an empty vector; arithmetic errors.
     pub fn commit_vector(
         &self,
         values: &[Ext<K>],
-        seed: &[u8; 32],
+        _seed: &[u8; 32],
     ) -> Result<(Commitment, State<K>)> {
         let ctx = &self.ctx;
         let layout = self.vector_layout(values.len())?;
         let values: Vec<Ext<K>> = values.iter().map(|v| ctx.field().reduce(v)).collect();
         let message = vec![self.vector_blocks(&layout, &values)?];
-        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R, 0)?;
-        let committed = commit(ctx, 0, layout, message, r)?;
+        let committed = commit(ctx, 0, layout, message, Vec::new())?;
         Ok((
             Commitment {
                 u: committed.u.clone(),
@@ -630,8 +680,7 @@ impl<const K: usize> HachiPcs<K> {
         );
         // Only with hiding, after the other words: a non-hiding statement is unchanged.
         if let Some(h) = c.hiding {
-            words.push(h.nu as u64);
-            words.extend(h.noise.words());
+            words.extend(h.words());
         }
         fs.words(LABEL_STATEMENT, &words);
         fs.polys(LABEL_COMMITMENT, commitment);
@@ -702,6 +751,97 @@ impl<const K: usize> HachiPcs<K> {
         Ok(Claim { b, a, target })
     }
 
+    /// $x^* \in \mathbb F_{q^K} \setminus \lbrace 0 \rbrace$ from the transcript, which has absorbed
+    /// $y_{\mathfrak m}$: uniform field elements until one is not zero.
+    fn mask_coin(&self, fs: &mut Fs) -> Result<Ext<K>> {
+        let field = self.ctx.field();
+        for _ in 0..hachi_co_sampling::uniform::MAX_TRIES {
+            let coin = fs.field_coins::<K>(LABEL_MASK_COIN, self.ctx.q, 1)?[0];
+            if !field.is_zero(&coin) {
+                return Ok(coin);
+            }
+        }
+        Err(Error::Protocol("no nonzero masking challenge".into()))
+    }
+
+    /// Step 1 of `Eval` with masks, for the prover: from the weights $\mathbf b, \mathbf a, v$ it
+    /// computes $Y$ and $Y_{\mathfrak m}$, absorbs $y_{\mathfrak m}$, draws $x^*$ and absorbs
+    /// $Y^*$. Returns $y_{\mathfrak m}$ and the first claim, whose target is $Y^*$.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if the honest check fails. Arithmetic errors.
+    fn masked_claim(
+        &self,
+        state: &State<K>,
+        b: Vec<Poly>,
+        a: Vec<Poly>,
+        v: &Poly,
+        value: &Ext<K>,
+        fs: &mut Fs,
+    ) -> Result<(Ext<K>, Claim)> {
+        let (ctx, ring) = (&self.ctx, &self.ctx.ring);
+        let field = ctx.field();
+        let len = state.committed.layout.message_len();
+        let mut y = ring.zero();
+        let mut y_mask = ring.zero();
+        for (bi, chunk) in b.iter().zip(&state.committed.message) {
+            let (message, rows) = chunk.split_at(len);
+            y = ring.add(&y, &ring.mul(bi, &ring.inner(&a, message)?)?)?;
+            y_mask = ring.add(&y_mask, &ring.mul(bi, &rows[0])?)?;
+        }
+        let mask_eval = self.traced(&y_mask, v)?;
+        fs.exts(LABEL_MASK_EVAL, core::slice::from_ref(&mask_eval));
+        let coin = self.mask_coin(fs)?;
+        let embedded = ctx.sub.embed(&coin);
+        let target = ring.add(&y, &ring.mul(&embedded, &y_mask)?)?;
+        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&target));
+        if self.traced(&target, v)? != field.add(value, &field.mul(&coin, &mask_eval)) {
+            return Err(Error::Protocol(
+                "the trace check of the masked claim fails".into(),
+            ));
+        }
+        let mut a = a;
+        a.push(embedded);
+        Ok((mask_eval, Claim { b, a, target }))
+    }
+
+    /// The verifier's step 1 with masks: absorbs $y_{\mathfrak m}$, draws $x^*$, checks
+    /// $E(Y^*) = y + x^* y_{\mathfrak m}$, absorbs $Y^*$, and returns the first claim.
+    ///
+    /// # Errors
+    /// [`VerifyError::Check`] if the trace check fails.
+    fn verify_masked_claim(
+        &self,
+        proof: &Proof<K>,
+        b: Vec<Poly>,
+        a: Vec<Poly>,
+        v: &Poly,
+        value: &Ext<K>,
+        fs: &mut Fs,
+    ) -> core::result::Result<Claim, VerifyError> {
+        let ctx = &self.ctx;
+        let field = ctx.field();
+        let Some(mask_eval) = &proof.mask_eval else {
+            return Err(VerifyError::Malformed(
+                "a masked opening carries the masks' value".into(),
+            ));
+        };
+        check_exts(ctx, "masks' value", core::slice::from_ref(mask_eval), 1)?;
+        fs.exts(LABEL_MASK_EVAL, core::slice::from_ref(mask_eval));
+        let coin = self.mask_coin(fs)?;
+        if self.traced(&proof.ring_value, v)? != field.add(value, &field.mul(&coin, mask_eval)) {
+            return Err(VerifyError::Check("the trace of the masked claim".into()));
+        }
+        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
+        let mut a = a;
+        a.push(ctx.sub.embed(&coin));
+        Ok(Claim {
+            b,
+            a,
+            target: proof.ring_value.clone(),
+        })
+    }
+
     /// The weights $\sigma_{-1}(\psi(\mathbf e_t))$ of an inner product, zero-padded.
     fn vector_weights(&self, layout: &Layout, weights: &[Ext<K>]) -> Result<Vec<Poly>> {
         self.vector_blocks(layout, weights)?
@@ -711,8 +851,8 @@ impl<const K: usize> HachiPcs<K> {
     }
 
     /// Runs the iterations and the final step for the prover; `reduction` is what the proof
-    /// carries ahead of them (it enters the choice of the schedule). Returns the iterations, the
-    /// final message and the final randomness.
+    /// carries ahead of them (it enters the choice of the schedule). Returns the iterations and
+    /// the final message.
     fn prove_rest(
         &self,
         layout: Layout,
@@ -721,7 +861,7 @@ impl<const K: usize> HachiPcs<K> {
         claim: Claim,
         fs: &mut Fs,
         seed: &[u8; 32],
-    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>, Vec<Poly>)> {
+    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
         let schedule = self.schedule(layout, reduction)?;
         let mut later: Option<Committed> = None;
         let mut claim = claim;
@@ -735,7 +875,7 @@ impl<const K: usize> HachiPcs<K> {
             claim = next_claim;
         }
         let last = later.as_ref().unwrap_or(committed);
-        Ok((proofs, last.message.concat(), last.r.concat()))
+        Ok((proofs, last.message.concat()))
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
@@ -791,7 +931,7 @@ impl<const K: usize> HachiPcs<K> {
         let claim = self.ring_claim(state, &r, &at_r)?;
         let ring_value = claim.target.clone();
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let (iterations, final_message, final_randomness) = self.prove_rest(
+        let (iterations, final_message) = self.prove_rest(
             state.committed.layout,
             self.multilinear_reduction(*vars),
             &state.committed,
@@ -805,10 +945,10 @@ impl<const K: usize> HachiPcs<K> {
                 partials: sent,
                 batch_rounds,
                 batch_eval: Some(at_r),
+                mask_eval: None,
                 ring_value,
                 iterations,
                 final_message,
-                final_randomness,
             },
         ))
     }
@@ -845,18 +985,30 @@ impl<const K: usize> HachiPcs<K> {
         let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
         let layout = state.committed.layout;
         let (b, a, v) = self.ring_weights(&layout, &point)?;
-        let ring_value = evaluate_claim(ctx, &b, &a, &state.committed.message)?;
-        let value = self.traced(&ring_value, &v)?;
-        let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
-        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let claim = Claim {
-            b,
-            a,
-            target: ring_value.clone(),
+        let (value, mask_eval, claim, mut fs) = if layout.masked {
+            // The value from the message alone: the masking rows are not part of it.
+            let message: Vec<Vec<Poly>> = state
+                .committed
+                .message
+                .iter()
+                .map(|chunk| chunk[..layout.message_len()].to_vec())
+                .collect();
+            let y = evaluate_claim(ctx, &b, &a, &message)?;
+            let value = self.traced(&y, &v)?;
+            let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
+            let (mask_eval, claim) = self.masked_claim(state, b, a, &v, &value, &mut fs)?;
+            (value, Some(mask_eval), claim, fs)
+        } else {
+            let target = evaluate_claim(ctx, &b, &a, &state.committed.message)?;
+            let value = self.traced(&target, &v)?;
+            let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
+            fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&target));
+            (value, None, Claim { b, a, target }, fs)
         };
-        let (iterations, final_message, final_randomness) = self.prove_rest(
+        let ring_value = claim.target.clone();
+        let (iterations, final_message) = self.prove_rest(
             layout,
-            Reduction::Direct,
+            self.ext_reduction(),
             &state.committed,
             claim,
             &mut fs,
@@ -868,10 +1020,10 @@ impl<const K: usize> HachiPcs<K> {
                 partials: Vec::new(),
                 batch_rounds: Vec::new(),
                 batch_eval: None,
+                mask_eval,
                 ring_value,
                 iterations,
                 final_message,
-                final_randomness,
             },
         ))
     }
@@ -932,7 +1084,7 @@ impl<const K: usize> HachiPcs<K> {
             a,
             target: ring_value.clone(),
         };
-        let (iterations, final_message, final_randomness) = self.prove_rest(
+        let (iterations, final_message) = self.prove_rest(
             layout,
             Reduction::Direct,
             &state.committed,
@@ -946,10 +1098,10 @@ impl<const K: usize> HachiPcs<K> {
                 partials: Vec::new(),
                 batch_rounds: Vec::new(),
                 batch_eval: None,
+                mask_eval: None,
                 ring_value,
                 iterations,
                 final_message,
-                final_randomness,
             },
         ))
     }
@@ -995,38 +1147,18 @@ impl<const K: usize> HachiPcs<K> {
                 }
             }
         }
-        let rand_len = ctx.rand_len(ctx.choices.n_a);
-        check_polys(
-            ctx,
-            "final randomness",
-            &proof.final_randomness,
-            last.chunks() * rand_len,
-        )?;
-        if let Some((lo, hi, _)) = self.noise_field() {
-            let zq = ctx.ring.zq();
-            for x in proof.final_randomness.iter().flat_map(|p| &p.0) {
-                if !(lo..=hi).contains(&zq.to_centered(*x)) {
-                    return Err(VerifyError::Check(
-                        "the final randomness is outside the support of chi".into(),
-                    ));
-                }
-            }
-        }
         let message: Vec<Vec<Poly>> = proof
             .final_message
             .chunks_exact(last.chunk_len())
             .map(<[Poly]>::to_vec)
             .collect();
-        let r: Vec<Vec<Poly>> = if rand_len == 0 {
-            Vec::new()
-        } else {
-            proof
-                .final_randomness
-                .chunks_exact(rand_len)
-                .map(<[Poly]>::to_vec)
-                .collect()
-        };
-        let recomputed = commit(ctx, schedule.iterations.len(), last, message.clone(), r)?;
+        let recomputed = commit(
+            ctx,
+            schedule.iterations.len(),
+            last,
+            message.clone(),
+            Vec::new(),
+        )?;
         if recomputed.u != u {
             return Err(VerifyError::Check(
                 "the final witness does not open the commitment".into(),
@@ -1069,6 +1201,11 @@ impl<const K: usize> HachiPcs<K> {
         check_exts(ctx, "point", point, vars)?;
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
         check_exts(ctx, "partial evaluations", &proof.partials, K - 1)?;
+        if ctx.hiding().is_some() || proof.mask_eval.is_some() {
+            return Err(VerifyError::Malformed(
+                "polynomials over Z_q are not opened with hiding".into(),
+            ));
+        }
         // The layout exists only for vars >= alpha > kappa.
         let layout = self.multilinear_layout(vars)?;
         let x = &point[ctx.kappa()..];
@@ -1174,21 +1311,30 @@ impl<const K: usize> HachiPcs<K> {
         )?;
         let layout = self.multilinear_ext_layout(vars)?;
         let (b, a, v) = self.ring_weights(&layout, point)?;
-        if self.traced(&proof.ring_value, &v)? != *value {
-            return Err(VerifyError::Check(
-                "the trace of the input reduction".into(),
-            ));
-        }
         let mut fs = self.statement(context, 3, vars, &commitment.u, point, value);
-        fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
-        let claim = Claim {
-            b,
-            a,
-            target: proof.ring_value.clone(),
+        let claim = if layout.masked {
+            self.verify_masked_claim(proof, b, a, &v, value, &mut fs)?
+        } else {
+            if proof.mask_eval.is_some() {
+                return Err(VerifyError::Malformed(
+                    "only a masked opening carries the masks' value".into(),
+                ));
+            }
+            if self.traced(&proof.ring_value, &v)? != *value {
+                return Err(VerifyError::Check(
+                    "the trace of the input reduction".into(),
+                ));
+            }
+            fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&proof.ring_value));
+            Claim {
+                b,
+                a,
+                target: proof.ring_value.clone(),
+            }
         };
         self.verify_rest(
             layout,
-            Reduction::Direct,
+            self.ext_reduction(),
             &commitment.u,
             claim,
             proof,
@@ -1220,6 +1366,11 @@ impl<const K: usize> HachiPcs<K> {
         {
             return Err(VerifyError::Malformed(
                 "an inner product has no partial evaluations and no batching sumcheck".into(),
+            ));
+        }
+        if proof.mask_eval.is_some() {
+            return Err(VerifyError::Malformed(
+                "vectors are not masked, so an inner product has no masks' value".into(),
             ));
         }
         check_polys(
@@ -1454,9 +1605,8 @@ impl<const K: usize> HachiPcs<K> {
         ];
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
         out.push(proof.final_message.len() as u64);
-        let noise = self.noise_field();
-        if noise.is_some() {
-            out.push(proof.final_randomness.len() as u64);
+        if self.ctx.hiding().is_some() {
+            out.push(u64::from(proof.mask_eval.is_some()));
         }
         let mut w = BitWriter::default();
         self.put_exts(&mut w, &proof.partials);
@@ -1465,6 +1615,9 @@ impl<const K: usize> HachiPcs<K> {
         }
         if let Some(at_r) = &proof.batch_eval {
             self.put_exts(&mut w, core::slice::from_ref(at_r));
+        }
+        if let Some(y_mask) = &proof.mask_eval {
+            self.put_exts(&mut w, core::slice::from_ref(y_mask));
         }
         self.put_polys(&mut w, core::slice::from_ref(&proof.ring_value));
         for it in &proof.iterations {
@@ -1496,29 +1649,20 @@ impl<const K: usize> HachiPcs<K> {
                 }
             }
         }
-        if let Some((lo, _, bits)) = noise {
-            let zq = self.ctx.ring.zq();
-            for x in proof.final_randomness.iter().flat_map(|p| &p.0) {
-                w.push(
-                    (i128::from(zq.to_centered(*x)) - i128::from(lo)) as u64,
-                    bits,
-                );
-            }
-        }
         out.extend(w.words);
         out
     }
 
     /// The inverse of [`HachiPcs::proof_to_words`]. The counts of the header (batching rounds,
-    /// iterations, rounds, final ring elements, and with hiding the final randomness) are
-    /// checked by the verifier, against $\ell - \kappa$ and the schedule.
+    /// iterations, rounds, final ring elements) are checked by the verifier, against $\ell -
+    /// \kappa$ and the schedule.
     ///
     /// # Errors
     /// [`Error::Shape`] for any input that [`HachiPcs::proof_to_words`] does not produce from a
     /// proof of this scheme's shape: another version, a number of partial evaluations other
-    /// than 0 and $K - 1$, batching rounds without partial evaluations, a length other than the
-    /// one the header implies, a residue not below $q$, a digit index outside the digit set, a
-    /// randomness coefficient outside the support of $\chi$, or non-zero padding.
+    /// than 0 and $K - 1$, batching rounds without partial evaluations, a masks' value next to
+    /// partial evaluations, a length other than the one the header implies, a residue not below
+    /// $q$, a digit index outside the digit set, or non-zero padding.
     pub fn proof_from_words(&self, words: &[u64]) -> Result<Proof<K>> {
         let shape = |what: &str| Error::Shape(what.into());
         let too_large = || shape("a count in the header is too large");
@@ -1528,7 +1672,7 @@ impl<const K: usize> HachiPcs<K> {
         if *version != VERSION {
             return Err(shape("unknown proof version"));
         }
-        let reduction = match (*partials, *batch_rounds) {
+        let mut reduction = match (*partials, *batch_rounds) {
             (0, 0) => Reduction::Direct,
             (p, rounds) if p == K as u64 - 1 => Reduction::Multilinear {
                 rounds: usize::try_from(rounds).map_err(|_| too_large())?,
@@ -1545,22 +1689,25 @@ impl<const K: usize> HachiPcs<K> {
         let Some((&final_count, stream)) = rest.split_first() else {
             return Err(shape("the encoding ends early"));
         };
-        let noise = self.noise_field();
-        let (rand_count, stream) = match noise {
-            None => (0, stream),
-            Some(_) => {
-                let Some((&r, stream)) = stream.split_first() else {
-                    return Err(shape("the encoding ends early"));
-                };
-                (r, stream)
+        let stream = if self.ctx.hiding().is_some() {
+            let Some((&masked, stream)) = stream.split_first() else {
+                return Err(shape("the encoding ends early"));
+            };
+            match (masked, reduction) {
+                (0, _) => {}
+                (1, Reduction::Direct) => reduction = Reduction::Masked,
+                (1, _) => return Err(shape("a masks' value next to partial evaluations")),
+                _ => return Err(shape("the masked word of the header is not a bit")),
             }
+            stream
+        } else {
+            stream
         };
         let round_counts = round_counts
             .iter()
             .map(|l| usize::try_from(*l).map_err(|_| too_large()))
             .collect::<Result<Vec<_>>>()?;
         let final_count = usize::try_from(final_count).map_err(|_| too_large())?;
-        let rand_count = usize::try_from(rand_count).map_err(|_| too_large())?;
         // The length the header implies, checked before anything is allocated.
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
@@ -1584,19 +1731,12 @@ impl<const K: usize> HachiPcs<K> {
         } else {
             self.digit_bits()
         };
-        let noise_bits = noise.map_or(0, |(_, _, bits)| bits);
         let bits = residues
             .and_then(|r| r.checked_mul(self.residue_bits()))
             .and_then(|b| {
                 final_count
                     .checked_mul(d)?
                     .checked_mul(entry_bits)?
-                    .checked_add(b)
-            })
-            .and_then(|b| {
-                rand_count
-                    .checked_mul(d)?
-                    .checked_mul(noise_bits)?
                     .checked_add(b)
             })
             .ok_or_else(too_large)?;
@@ -1613,7 +1753,11 @@ impl<const K: usize> HachiPcs<K> {
             .collect::<Result<Vec<_>>>()?;
         let batch_eval = match reduction {
             Reduction::Multilinear { .. } => Some(self.take_ext(&mut r)?),
-            Reduction::Direct => None,
+            Reduction::Direct | Reduction::Masked => None,
+        };
+        let mask_eval = match reduction {
+            Reduction::Masked => Some(self.take_ext(&mut r)?),
+            _ => None,
         };
         let ring_value = self.take_poly(&mut r)?;
         let mut iterations = Vec::with_capacity(count);
@@ -1652,38 +1796,15 @@ impl<const K: usize> HachiPcs<K> {
                 .map(|_| self.take_digit_poly(&mut r))
                 .collect::<Result<Vec<_>>>()?
         };
-        let final_randomness = match noise {
-            None => Vec::new(),
-            Some((lo, hi, bits)) => {
-                let zq = self.ctx.ring.zq();
-                let width = (hi - lo) as u64;
-                (0..rand_count)
-                    .map(|_| {
-                        (0..d)
-                            .map(|_| {
-                                let x = r.take(bits)?;
-                                if x > width {
-                                    return Err(shape(
-                                        "a randomness coefficient outside the support of chi",
-                                    ));
-                                }
-                                Ok(zq.from_i128(i128::from(lo) + i128::from(x)))
-                            })
-                            .collect::<Result<Vec<_>>>()
-                            .map(Poly)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
-        };
         r.finish()?;
         Ok(Proof {
             partials,
             batch_rounds,
             batch_eval,
+            mask_eval,
             ring_value,
             iterations,
             final_message,
-            final_randomness,
         })
     }
 }
@@ -1816,7 +1937,7 @@ mod tests {
                 a,
                 target: ring_value.clone(),
             };
-            let (iterations, final_message, final_randomness) = pcs
+            let (iterations, final_message) = pcs
                 .prove_rest(
                     committed.layout,
                     pcs.multilinear_reduction(VARS),
@@ -1830,10 +1951,10 @@ mod tests {
                 partials: sent.to_vec(),
                 batch_rounds,
                 batch_eval: Some(at_r),
+                mask_eval: None,
                 ring_value,
                 iterations,
                 final_message,
-                final_randomness,
             }
         }
 

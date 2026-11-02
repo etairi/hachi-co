@@ -1,23 +1,23 @@
-//! Randomized commitments ([`hachi::Hiding`], `docs/hachi-hiding.md` §6).
+//! Masking the first iteration ([`hachi::Hiding`], `hachi-pcs.tex`, the blue parts of Appendix
+//! A.2).
 //!
 //! What is tested:
-//! - multilinear openings and inner products verify with both distributions of the randomness,
-//!   several widths and MLWE ranks, 0 to 3 iterations and the automatic schedule, at moduli of
-//!   24, 34 and 63 bits;
-//! - the final randomness has its length and stays in its support;
+//! - openings of polynomials over the field verify, at several widths, ranks, heights, moduli and
+//!   numbers of iterations, and a false value, another point or another context is rejected.
+//! - the parameters are those of Setup, recomputed here from the appendix's formulas.
 //! - the encodings round-trip and have the sizes of the formulas, recomputed here;
-//! - a commitment is randomized by its seed and determined by it, and so is an opening; without
-//!   hiding the seeds change nothing;
+//! - a commitment and an opening are randomized by their seeds and determined by them.
+//! - a masked witness needs an iteration, and the $\mathbb Z_q$ shortcut is refused.
+//! - vectors are not masked yet, which the tests state so that a change is noticed.
 //! - proofs do not verify across hiding choices;
-//! - every altered word is rejected, and so is malformed randomness, by the decoder and by the
-//!   verifier; whatever decodes re-encodes to the same words;
-//! - the automatic schedule is still the smallest;
+//! - every altered word is rejected, and each masked value is checked by the verifier, and whatever
+//!   decodes re-encodes to the same words.
+//! - the automatic schedule is still the smallest among those with an iteration.
 //! - unusable choices are refused, and the outputs are pinned.
 
-use hachi::{HachiChoices, HachiPcs, Hiding, Noise, Proof, VerifyError};
+use hachi::{HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
-use hachi_co_sampling::gauss;
 use hachi_co_sampling::uniform::uniform_mod_q;
 use sha2::{Digest, Sha256};
 
@@ -31,9 +31,7 @@ const Q34: u64 = 8589934621;
 /// The modulus of the secure presets with $\ell = 30$, $\alpha = 8$ (63 bits).
 const Q63: u64 = 6618259129420972141;
 
-const GAUSS1: Noise = Noise::Gaussian { log_sigma: 0 };
-const GAUSS8: Noise = Noise::Gaussian { log_sigma: 3 };
-const GAUSS16: Noise = Noise::Gaussian { log_sigma: 4 };
+const CONTEXT: [u8; 32] = [4u8; 32];
 
 fn residues_mod(q: u64, tag: &str, index: u64, len: usize) -> Vec<u64> {
     uniform_mod_q(
@@ -61,45 +59,40 @@ fn seed(tag: u8, index: usize) -> [u8; 32] {
 }
 
 /// $f(\mathbf x) = \sum_i f_i \prod_j x_j^{i_j}$, $i_1$ the most significant bit.
-fn evaluate(field: &Fqk<K>, coeffs: &[u64], x: &[Ext<K>]) -> Ext<K> {
+fn evaluate(field: &Fqk<K>, coeffs: &[Ext<K>], x: &[Ext<K>]) -> Ext<K> {
     let mut mono = vec![field.one()];
     for xj in x {
         mono = mono.iter().flat_map(|m| [*m, field.mul(m, xj)]).collect();
     }
     coeffs.iter().zip(&mono).fold(field.zero(), |acc, (c, m)| {
-        field.add(&acc, &field.scale(m, *c))
+        field.add(&acc, &field.mul(m, c))
     })
 }
 
-/// Toy choices with randomized commitments, and the number of iterations fixed if `Some`.
-fn hiding(nu: usize, noise: Noise, iterations: Option<usize>) -> HachiChoices {
+/// Toy choices with masks, and the number of iterations fixed if `Some`.
+fn masked(nu: usize, n_a: usize, iterations: Option<usize>) -> HachiChoices {
     HachiChoices {
-        hiding: Some(Hiding { nu, noise }),
+        hiding: Some(Hiding {
+            nu,
+            n_a,
+            lambda: 128,
+            phi: 13,
+        }),
         fixed_iterations: iterations,
         ..HachiChoices::toy(16)
     }
 }
 
-/// The support of the noise at base `b`, recomputed: the digit set, or $\pm$ the table length.
-fn support(noise: Noise, b: u64) -> (i64, i64) {
-    match noise {
-        Noise::Digits => (-((b / 2) as i64), ((b - 1) / 2) as i64),
-        Noise::Gaussian { log_sigma } => {
-            let bound = gauss::table(log_sigma).unwrap().len() as i64;
-            (-bound, bound)
-        }
-    }
-}
-
 /// The words of a proof's encoding, recomputed from its parts (module documentation of
 /// `hachi::pcs`, "Encodings"): $6 + k$ header words with hiding, then the packed fields.
-fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise) -> usize {
+fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     let (c, d) = (&pcs.ctx().choices, pcs.ctx().d());
     let bits_of = |x: u64| (u64::BITS - x.leading_zeros()) as usize;
     let residue = bits_of(pcs.ctx().q - 1);
     let digit = bits_of(c.b - 1);
     let mut residues = K * proof.partials.len() + d;
     residues += 2 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
+    residues += K * usize::from(proof.mask_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
         residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
@@ -111,140 +104,222 @@ fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise) -> usize {
     } else {
         digit
     };
-    let (lo, hi) = support(noise, c.b);
-    let bits = residues * residue
-        + proof.final_message.len() * d * entry
-        + proof.final_randomness.len() * d * bits_of((hi - lo) as u64);
+    let bits = residues * residue + proof.final_message.len() * d * entry;
     6 + proof.iterations.len() + bits.div_ceil(64)
 }
 
-/// The checks of an honest proof's final randomness: its length and its support.
-fn check_randomness(pcs: &HachiPcs<K>, proof: &Proof<K>, noise: Noise, chunks: usize) {
-    let ctx = pcs.ctx();
-    let nu = ctx.choices.hiding.unwrap().nu;
-    assert_eq!(
-        proof.final_randomness.len(),
-        chunks * (nu + ctx.choices.n_a)
-    );
-    let (lo, hi) = support(noise, ctx.choices.b);
-    let zq = ctx.ring.zq();
-    for x in proof.final_randomness.iter().flat_map(|p| &p.0) {
-        assert!((lo..=hi).contains(&zq.to_centered(*x)), "randomness {x}");
+/// An honest opening in `vars` variables.
+struct Opening {
+    pcs: HachiPcs<K>,
+    com: hachi::Commitment,
+    vars: usize,
+    point: Vec<Ext<K>>,
+    value: Ext<K>,
+    proof: Proof<K>,
+}
+
+impl Opening {
+    fn new(q: u64, choices: HachiChoices, vars: usize, index: usize) -> Self {
+        let pcs = HachiPcs::<K>::new(q, choices).unwrap();
+        let field = pcs.ctx().field().clone();
+        let coeffs = exts_mod(q, "f", index as u64, 1 << vars);
+        let point = exts_mod(q, "x", index as u64, vars);
+        let (com, state) = pcs
+            .commit_multilinear_ext(&coeffs, &seed(1, index))
+            .unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &CONTEXT, &seed(2, index))
+            .unwrap();
+        assert_eq!(value, evaluate(&field, &coeffs, &point), "the value");
+        Self {
+            pcs,
+            com,
+            vars,
+            point,
+            value,
+            proof,
+        }
+    }
+
+    fn verify(&self, proof: &Proof<K>) -> Result<(), VerifyError> {
+        self.pcs.verify_multilinear_ext(
+            &self.com,
+            self.vars,
+            &self.point,
+            &self.value,
+            proof,
+            &CONTEXT,
+        )
     }
 }
 
 #[test]
-fn multilinear_openings_verify_with_randomized_commitments() {
-    let cases = [
-        (Q, 1, GAUSS8, Some(0), 8usize),
-        (Q, 1, GAUSS8, Some(1), 8),
-        (Q, 1, GAUSS8, Some(2), 10),
-        (Q, 1, GAUSS8, Some(3), 12),
-        (Q, 1, GAUSS8, None, 12),
-        (Q, 2, Noise::Digits, Some(1), 8),
-        (Q, 2, Noise::Digits, Some(2), 10),
-        (Q, 1, GAUSS1, Some(2), 10),
-        (Q, 1, GAUSS16, Some(2), 10),
-        (Q34, 2, GAUSS8, Some(2), 10),
-        (Q63, 1, GAUSS16, Some(1), 8),
-        (Q63, 1, Noise::Digits, None, 10),
+fn masked_openings_verify() {
+    let cases: [(u64, usize, usize, Option<usize>, usize); 10] = [
+        (Q, 1, 1, Some(1), 6),
+        (Q, 1, 1, Some(1), 8),
+        (Q, 1, 1, Some(2), 8),
+        (Q, 2, 1, Some(1), 8),
+        (Q, 1, 2, Some(1), 8),
+        (Q, 1, 1, None, 8),
+        (Q30, 1, 1, None, 10),
+        (Q30, 2, 2, Some(2), 10),
+        (Q34, 1, 1, None, 12),
+        (Q63, 1, 1, Some(1), 10),
     ];
-    for (i, (q, nu, noise, iterations, vars)) in cases.into_iter().enumerate() {
-        let what = format!("q {q}, nu {nu}, {noise:?}, {iterations:?} iterations, {vars} vars");
-        let field = Fqk::<K>::new(q).unwrap();
-        let pcs = HachiPcs::<K>::new(q, hiding(nu, noise, iterations)).unwrap();
-        let coeffs = residues_mod(q, "hide/f", i as u64, 1 << vars);
-        let point = exts_mod(q, "hide/x", i as u64, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs, &seed(1, i)).unwrap();
-        let context = [i as u8; 32];
-        let (value, proof) = pcs
-            .prove_multilinear(&state, &point, &context, &seed(2, i))
-            .unwrap();
-        assert_eq!(value, evaluate(&field, &coeffs, &point), "{what}");
-        let schedule = pcs.multilinear_schedule(vars).unwrap();
-        assert_eq!(proof.iterations.len(), schedule.iterations.len(), "{what}");
-        if let Some(n) = iterations {
-            assert_eq!(proof.iterations.len(), n, "{what}");
-        }
-        check_randomness(&pcs, &proof, noise, schedule.final_layout.chunks());
-        pcs.verify_multilinear(&com, vars, &point, &value, &proof, &context)
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        let wrong = field.add(&value, &field.one());
-        assert!(
-            pcs.verify_multilinear(&com, vars, &point, &wrong, &proof, &context)
-                .is_err(),
-            "{what}: a false value"
-        );
-        let words = pcs.proof_to_words(&proof);
-        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof, "{what}");
+    for (index, (q, nu, n_a, iterations, vars)) in cases.into_iter().enumerate() {
+        let o = Opening::new(q, masked(nu, n_a, iterations), vars, index);
+        let what = format!("q {q}, nu {nu}, n_A {n_a}, {iterations:?}, {vars} variables");
+        o.verify(&o.proof).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(o.proof.mask_eval.is_some(), "{what}");
+        let schedule = o.pcs.multilinear_ext_schedule(vars).unwrap();
         assert_eq!(
-            words.len(),
-            pcs.multilinear_proof_words(vars).unwrap(),
+            o.proof.iterations.len(),
+            schedule.iterations.len(),
             "{what}"
         );
-        assert_eq!(words.len(), expected_words(&pcs, &proof, noise), "{what}");
-        let com_words = pcs.commitment_to_words(&com);
-        assert_eq!(com_words.len(), pcs.commitment_words());
-        assert_eq!(pcs.commitment_from_words(&com_words).unwrap(), com);
-        eprintln!(
-            "{what}: {} iterations, proof {} words",
-            proof.iterations.len(),
-            words.len()
+        let words = o.pcs.proof_to_words(&o.proof);
+        assert_eq!(words.len(), expected_words(&o.pcs, &o.proof), "{what}");
+        assert_eq!(
+            words.len(),
+            o.pcs.multilinear_ext_proof_words(vars).unwrap(),
+            "{what}"
         );
-    }
-}
-
-#[test]
-fn inner_products_verify_with_randomized_commitments() {
-    let cases = [
-        (Q, 1, GAUSS8, Some(0), 46usize),
-        (Q, 1, GAUSS8, Some(1), 211),
-        (Q, 1, GAUSS8, Some(2), 4000),
-        (Q, 1, GAUSS8, None, 4000),
-        (Q34, 2, Noise::Digits, None, 211),
-        (Q63, 2, GAUSS1, Some(1), 46),
-    ];
-    for (i, (q, nu, noise, iterations, len)) in cases.into_iter().enumerate() {
-        let what = format!("q {q}, nu {nu}, {noise:?}, {iterations:?} iterations, len {len}");
-        let field = Fqk::<K>::new(q).unwrap();
-        let pcs = HachiPcs::<K>::new(q, hiding(nu, noise, iterations)).unwrap();
-        let values = exts_mod(q, "hide/s", i as u64, len);
-        let weights = exts_mod(q, "hide/e", i as u64, len);
-        let (com, state) = pcs.commit_vector(&values, &seed(3, i)).unwrap();
-        let context = [100 + i as u8; 32];
-        let (value, proof) = pcs
-            .prove_inner_product(&state, &weights, &context, &seed(4, i))
-            .unwrap();
-        let direct = values
-            .iter()
-            .zip(&weights)
-            .fold(field.zero(), |acc, (v, e)| {
-                field.add(&acc, &field.mul(v, e))
-            });
-        assert_eq!(value, direct, "{what}");
-        let schedule = pcs.vector_schedule(len).unwrap();
-        assert_eq!(proof.iterations.len(), schedule.iterations.len(), "{what}");
-        check_randomness(&pcs, &proof, noise, schedule.final_layout.chunks());
-        pcs.verify_inner_product(&com, len, &weights, &value, &proof, &context)
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        let wrong = field.add(&value, &field.one());
+        assert_eq!(o.pcs.proof_from_words(&words).unwrap(), o.proof, "{what}");
+        // A false value, another point and another context.
+        let field = o.pcs.ctx().field();
+        let wrong = field.add(&o.value, &field.one());
         assert!(
-            pcs.verify_inner_product(&com, len, &weights, &wrong, &proof, &context)
-                .is_err()
+            o.pcs
+                .verify_multilinear_ext(&o.com, vars, &o.point, &wrong, &o.proof, &CONTEXT)
+                .is_err(),
+            "{what}"
         );
-        let words = pcs.proof_to_words(&proof);
-        assert_eq!(pcs.proof_from_words(&words).unwrap(), proof, "{what}");
-        assert_eq!(words.len(), pcs.vector_proof_words(len).unwrap(), "{what}");
-        assert_eq!(words.len(), expected_words(&pcs, &proof, noise), "{what}");
+        let mut other = o.point.clone();
+        other[0] = field.add(&other[0], &field.one());
+        assert!(
+            o.pcs
+                .verify_multilinear_ext(&o.com, vars, &other, &o.value, &o.proof, &CONTEXT)
+                .is_err(),
+            "{what}"
+        );
+        assert!(
+            o.pcs
+                .verify_multilinear_ext(&o.com, vars, &o.point, &o.value, &o.proof, &[9u8; 32])
+                .is_err(),
+            "{what}"
+        );
     }
 }
 
 #[test]
-fn the_seeds_randomize_hiding_commitments_and_openings_only() {
-    let vars = 8;
-    let coeffs = residues_mod(Q, "seeds/f", 0, 1 << vars);
-    let point = exts_mod(Q, "seeds/x", 0, vars);
-    let context = [7u8; 32];
+fn the_parameters_are_those_of_setup() {
+    // W, N, s, beta, tau-independent mu and the width of D from the formulas of Appendix A.2,
+    // recomputed here in floating point.
+    for (nu, n_a, vars, q) in [
+        (1usize, 1usize, 8usize, Q),
+        (2, 1, 10, Q30),
+        (3, 2, 12, Q34),
+    ] {
+        let pcs = HachiPcs::<K>::new(q, masked(nu, n_a, Some(1))).unwrap();
+        let schedule = pcs.multilinear_ext_schedule(vars).unwrap();
+        let it = &schedule.iterations[0];
+        let (c, d) = (&pcs.ctx().choices, pcs.ctx().d());
+        let l = it.layout;
+        let (delta, chunks) = (it.delta, l.chunks());
+        assert!(l.masked && l.decomposed);
+        assert_eq!(l.r + l.m + pcs.ctx().alpha(), vars + pcs.ctx().kappa());
+        assert_eq!(it.n_a, n_a);
+        let width = delta * ((1 << l.m) + 1);
+        assert_eq!(l.width(delta), width, "W");
+        let n = (width + nu + n_a) * d;
+        let target = 13.0 * (n as f64).sqrt() * chunks as f64 * (c.omega * c.b) as f64;
+        assert!(it.sigma as f64 >= target, "s {} {target}", it.sigma);
+        assert!(
+            (it.sigma as f64) < target * 1.05 + 32.0,
+            "s {} {target}",
+            it.sigma
+        );
+        assert_eq!(it.sigma % 16, 0);
+        let tail = 2.0 * (2.0 * n as f64).ln() + 2.0 * 128.0 * core::f64::consts::LN_2;
+        assert!(it.beta as f64 >= it.sigma as f64 * tail.sqrt(), "beta");
+        assert_eq!(
+            it.mu,
+            chunks * delta
+                + delta
+                + n_a * delta
+                + chunks * n_a * delta
+                + width * it.tau
+                + (nu + n_a) * it.tau,
+            "mu"
+        );
+        assert_eq!(it.d_cols(), delta * (chunks + 1 + n_a), "D");
+        assert_eq!(it.rows, c.n_d + c.n_b + 2 + n_a, "rows");
+    }
+    // At lambda = 128: t = 14, and M = exp(365 / 338) for phi = 13.
+    let h = masked(1, 1, None).hiding.unwrap();
+    assert_eq!(h.t(), 14);
+    assert_eq!(h.log_rejection(), (365, 338));
+    // ceil(128 M) + 1 for M = 2.944..., so 378.
+    assert_eq!(h.attempts(), 378);
+    let high = Hiding { lambda: 256, ..h };
+    assert_eq!(high.t(), 19);
+}
+
+#[test]
+fn the_seeds_randomize_commitments_and_openings() {
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
+    let coeffs = exts_mod(Q, "f", 7, 1 << 8);
+    let point = exts_mod(Q, "x", 7, 8);
+    let (a, state) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
+    let (same, _) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 0)).unwrap();
+    let (other, _) = pcs.commit_multilinear_ext(&coeffs, &seed(1, 1)).unwrap();
+    assert_eq!(a, same, "determined by the seed");
+    assert_ne!(a, other, "randomized by the seed");
+    let open = |s: &[u8; 32]| {
+        pcs.prove_multilinear_ext(&state, &point, &CONTEXT, s)
+            .unwrap()
+            .1
+    };
+    assert_eq!(
+        open(&seed(2, 0)),
+        open(&seed(2, 0)),
+        "determined by the seed"
+    );
+    let (p, q) = (open(&seed(2, 0)), open(&seed(2, 1)));
+    assert_ne!(p.iterations[0].v, q.iterations[0].v, "fresh masks");
+    for proof in [&p, &q] {
+        let value = evaluate(pcs.ctx().field(), &coeffs, &point);
+        pcs.verify_multilinear_ext(&a, 8, &point, &value, proof, &CONTEXT)
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_masked_witness_needs_an_iteration() {
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(0))).unwrap();
+    let err = pcs.multilinear_ext_schedule(8).unwrap_err().to_string();
+    assert!(err.contains("at least one iteration"), "{err}");
+    // The automatic schedule at a size that the schedule without iterations would win.
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, None)).unwrap();
+    assert!(
+        !pcs.multilinear_ext_schedule(4)
+            .unwrap()
+            .iterations
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_z_q_shortcut_is_refused() {
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, Some(1))).unwrap();
+    let coeffs = residues_mod(Q, "z_q", 0, 1 << 8);
+    let err = pcs
+        .commit_multilinear(&coeffs, &seed(1, 0))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("over the field"), "{err}");
+    // And a verifier with hiding refuses such a proof, whatever it holds.
     let plain = HachiPcs::<K>::new(
         Q,
         HachiChoices {
@@ -253,415 +328,223 @@ fn the_seeds_randomize_hiding_commitments_and_openings_only() {
         },
     )
     .unwrap();
-    let hide = HachiPcs::<K>::new(Q, hiding(1, GAUSS8, Some(1))).unwrap();
-    let (a, b) = (seed(9, 0), seed(9, 1));
-    // Without hiding the seeds change nothing.
-    let (com_a, st_a) = plain.commit_multilinear(&coeffs, &a).unwrap();
-    let (com_b, st_b) = plain.commit_multilinear(&coeffs, &b).unwrap();
-    assert_eq!((&com_a, &st_a), (&com_b, &st_b));
-    let (_, pa) = plain
-        .prove_multilinear(&st_a, &point, &context, &a)
+    let (com, state) = plain.commit_multilinear(&coeffs, &seed(1, 0)).unwrap();
+    let point = exts_mod(Q, "x", 0, 8);
+    let (value, proof) = plain
+        .prove_multilinear(&state, &point, &CONTEXT, &seed(2, 0))
         .unwrap();
-    let (_, pb) = plain
-        .prove_multilinear(&st_a, &point, &context, &b)
+    assert!(matches!(
+        pcs.verify_multilinear(&com, 8, &point, &value, &proof, &CONTEXT),
+        Err(VerifyError::Malformed(_))
+    ));
+}
+
+#[test]
+fn vectors_are_not_masked_yet() {
+    // Hachi-Co's blinders wait for a design decision, and until then a vector is opened as without
+    // hiding. This pins that state: masked vectors must change this test.
+    let pcs = HachiPcs::<K>::new(Q, masked(1, 1, None)).unwrap();
+    let plain = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
+    let values = exts_mod(Q, "s", 0, 60);
+    let weights = exts_mod(Q, "e", 0, 60);
+    let (com, state) = pcs.commit_vector(&values, &seed(1, 0)).unwrap();
+    assert_eq!(com, plain.commit_vector(&values, &seed(1, 1)).unwrap().0);
+    assert!(!pcs.vector_layout(60).unwrap().masked);
+    let (value, proof) = pcs
+        .prove_inner_product(&state, &weights, &CONTEXT, &seed(2, 0))
         .unwrap();
-    assert_eq!(pa, pb);
-    assert!(pa.final_randomness.is_empty());
-    // With hiding the commitment depends on the seed, and only on it.
-    let (hcom_a, hst_a) = hide.commit_multilinear(&coeffs, &a).unwrap();
-    let (hcom_a2, hst_a2) = hide.commit_multilinear(&coeffs, &a).unwrap();
-    let (hcom_b, _) = hide.commit_multilinear(&coeffs, &b).unwrap();
-    assert_eq!((&hcom_a, &hst_a), (&hcom_a2, &hst_a2));
-    assert_ne!(hcom_a, hcom_b);
-    assert_ne!(hcom_a, com_a);
-    // So does an opening: v and the next commitment change with the seed; both verify.
-    let (va, ha) = hide
-        .prove_multilinear(&hst_a, &point, &context, &a)
+    assert!(proof.mask_eval.is_none());
+    pcs.verify_inner_product(&com, 60, &weights, &value, &proof, &CONTEXT)
         .unwrap();
-    let (vb, hb) = hide
-        .prove_multilinear(&hst_a, &point, &context, &b)
-        .unwrap();
-    let (_, ha2) = hide
-        .prove_multilinear(&hst_a, &point, &context, &a)
-        .unwrap();
-    assert_eq!(ha, ha2);
-    assert_eq!(va, vb);
-    assert_ne!(ha.iterations[0].v, hb.iterations[0].v);
-    assert_ne!(
-        ha.iterations[0].next_commitment,
-        hb.iterations[0].next_commitment
+    assert_eq!(
+        pcs.proof_from_words(&pcs.proof_to_words(&proof)).unwrap(),
+        proof
     );
-    for p in [&ha, &hb] {
-        hide.verify_multilinear(&hcom_a, vars, &point, &va, p, &context)
-            .unwrap();
-    }
 }
 
 #[test]
 fn proofs_do_not_verify_across_hiding_choices() {
-    let vars = 8;
-    let coeffs = residues_mod(Q, "across/f", 0, 1 << vars);
-    let point = exts_mod(Q, "across/x", 0, vars);
-    let context = [8u8; 32];
-    let variants = [
+    let o = Opening::new(Q, masked(1, 1, Some(1)), 8, 11);
+    o.verify(&o.proof).unwrap();
+    for choices in [
+        masked(2, 1, Some(1)),
+        masked(1, 2, Some(1)),
+        HachiChoices {
+            hiding: Some(Hiding {
+                nu: 1,
+                n_a: 1,
+                lambda: 128,
+                phi: 14,
+            }),
+            ..masked(1, 1, Some(1))
+        },
+        HachiChoices {
+            hiding: Some(Hiding {
+                nu: 1,
+                n_a: 1,
+                lambda: 100,
+                phi: 13,
+            }),
+            ..masked(1, 1, Some(1))
+        },
         HachiChoices {
             fixed_iterations: Some(1),
             ..HachiChoices::toy(16)
         },
-        hiding(1, GAUSS8, Some(1)),
-        hiding(2, GAUSS8, Some(1)),
-        hiding(1, GAUSS16, Some(1)),
-        hiding(1, Noise::Digits, Some(1)),
-    ];
-    let schemes: Vec<HachiPcs<K>> = variants
-        .iter()
-        .map(|c| HachiPcs::<K>::new(Q, c.clone()).unwrap())
-        .collect();
-    for (i, prover) in schemes.iter().enumerate() {
-        let (com, state) = prover.commit_multilinear(&coeffs, &seed(5, i)).unwrap();
-        let (value, proof) = prover
-            .prove_multilinear(&state, &point, &context, &seed(6, i))
-            .unwrap();
-        let words = prover.proof_to_words(&proof);
-        for (j, verifier) in schemes.iter().enumerate() {
-            let accepted = verifier.proof_from_words(&words).is_ok_and(|p| {
-                verifier
-                    .verify_multilinear(&com, vars, &point, &value, &p, &context)
-                    .is_ok()
-            });
-            assert_eq!(accepted, i == j, "proof of {i} checked by {j}");
-        }
-    }
-}
-
-#[test]
-fn every_altered_word_is_rejected_with_hiding() {
-    // As the non-hiding test: changing any single word of an encoding, by one bit or by adding
-    // one, makes decoding or verification fail (up to 150 words per proof).
-    for (iterations, noise) in [(0usize, GAUSS8), (2, GAUSS8), (2, Noise::Digits)] {
-        let pcs = HachiPcs::<K>::new(Q, hiding(1, noise, Some(iterations))).unwrap();
-        let vars = 8;
-        let coeffs = residues_mod(Q, "alter/f", 0, 1 << vars);
-        let point = exts_mod(Q, "alter/x", 0, vars);
-        let (com, state) = pcs.commit_multilinear(&coeffs, &seed(7, 0)).unwrap();
-        let context = [9u8; 32];
-        let (value, proof) = pcs
-            .prove_multilinear(&state, &point, &context, &seed(8, 0))
-            .unwrap();
-        let words = pcs.proof_to_words(&proof);
-        let step = (words.len() / 150).max(1);
-        let mut tried = 0;
-        for i in (0..words.len()).step_by(step) {
-            for altered_word in [words[i] ^ (1 << (i % 64)), words[i].wrapping_add(1)] {
-                let mut altered = words.clone();
-                altered[i] = altered_word;
-                let ok = pcs.proof_from_words(&altered).is_ok_and(|p| {
-                    pcs.verify_multilinear(&com, vars, &point, &value, &p, &context)
-                        .is_ok()
-                });
-                assert!(
-                    !ok,
-                    "{iterations} iterations, {noise:?}: word {i} of {} altered and accepted",
-                    words.len()
-                );
-                tried += 1;
-            }
-        }
-        // The last words hold the final randomness: alter each of them too.
-        for i in words.len().saturating_sub(4)..words.len() {
-            let mut altered = words.clone();
-            altered[i] ^= 1;
-            let ok = pcs.proof_from_words(&altered).is_ok_and(|p| {
-                pcs.verify_multilinear(&com, vars, &point, &value, &p, &context)
-                    .is_ok()
-            });
-            assert!(
-                !ok,
-                "{iterations} iterations: last word {i} altered and accepted"
-            );
-        }
-        eprintln!("{iterations} iterations, {noise:?}: {tried} altered proofs rejected");
-    }
-}
-
-#[test]
-fn malformed_randomness_is_rejected() {
-    let vars = 8;
-    let coeffs = residues_mod(Q, "bad/f", 0, 1 << vars);
-    let point = exts_mod(Q, "bad/x", 0, vars);
-    let context = [10u8; 32];
-    for (noise, outside) in [(GAUSS8, 150i64), (Noise::Digits, 2)] {
-        let pcs = HachiPcs::<K>::new(Q, hiding(1, noise, Some(1))).unwrap();
-        let zq = pcs.ctx().ring.zq();
-        let (com, state) = pcs.commit_multilinear(&coeffs, &seed(11, 0)).unwrap();
-        let (value, proof) = pcs
-            .prove_multilinear(&state, &point, &context, &seed(12, 0))
-            .unwrap();
-        let verify = |p: &Proof<K>| pcs.verify_multilinear(&com, vars, &point, &value, p, &context);
-        verify(&proof).unwrap();
-        // A coefficient outside the support: the verifier rejects it; for the Gaussian, whose
-        // field has room for it (8 bits for 211 values), the decoder rejects it too.
-        let mut bad = proof.clone();
-        bad.final_randomness[0].0[0] = zq.from_i64(outside);
+    ] {
+        let pcs = HachiPcs::<K>::new(Q, choices.clone()).unwrap();
         assert!(
-            matches!(verify(&bad), Err(VerifyError::Check(_))),
-            "{noise:?}: {:?}",
-            verify(&bad)
+            pcs.verify_multilinear_ext(&o.com, 8, &o.point, &o.value, &o.proof, &CONTEXT)
+                .is_err(),
+            "{:?}",
+            choices.hiding
         );
-        if noise == GAUSS8 {
-            assert!(pcs.proof_from_words(&pcs.proof_to_words(&bad)).is_err());
-        }
-        // One ring element too few or too many.
-        let mut short = proof.clone();
-        short.final_randomness.pop();
-        assert!(matches!(verify(&short), Err(VerifyError::Malformed(_))));
-        let mut long = proof.clone();
-        long.final_randomness.push(long.final_randomness[0].clone());
-        assert!(matches!(verify(&long), Err(VerifyError::Malformed(_))));
-        // A header count R off by one is rejected: by the decoder if the length changes or a
-        // ring element is left in the padding, else by the verifier. The digits' ring elements
-        // take 32 bits, so one more of zero fields can fit in the last word's padding.
-        let words = pcs.proof_to_words(&proof);
-        let header_r = 6 + proof.iterations.len() - 1;
-        assert_eq!(words[header_r], proof.final_randomness.len() as u64);
-        for delta in [1u64, u64::MAX] {
-            let mut w = words.clone();
-            w[header_r] = w[header_r].wrapping_add(delta);
-            assert!(
-                !pcs.proof_from_words(&w).is_ok_and(|p| verify(&p).is_ok()),
-                "{noise:?}: R off by one"
-            );
-        }
-        // Other randomness inside the support does not open the commitment.
-        let mut other = proof.clone();
-        let x = &mut other.final_randomness[0].0[0];
-        *x = if zq.to_centered(*x) == 0 {
-            zq.from_i64(-1)
-        } else {
-            0
-        };
-        assert!(matches!(verify(&other), Err(VerifyError::Check(_))));
     }
 }
 
 #[test]
-fn whatever_decodes_reencodes_to_the_same_words_with_hiding() {
-    // As the non-hiding test, with the final randomness at the end of the stream.
-    for (noise, nu, iterations) in [(GAUSS8, 1, 0usize), (GAUSS8, 1, 2), (Noise::Digits, 2, 1)] {
-        let pcs = HachiPcs::<K>::new(Q34, hiding(nu, noise, Some(iterations))).unwrap();
-        let vars = 8;
-        let (_, state) = pcs
-            .commit_multilinear(
-                &residues_mod(Q34, "canon/f", iterations as u64, 1 << vars),
-                &seed(13, 0),
-            )
-            .unwrap();
-        let point = exts_mod(Q34, "canon/x", iterations as u64, vars);
-        let (_, proof) = pcs
-            .prove_multilinear(&state, &point, &[8u8; 32], &seed(14, 0))
-            .unwrap();
-        let words = pcs.proof_to_words(&proof);
-        let mut state = 0x9e37_79b9_7f4a_7c15u64 ^ iterations as u64;
-        let mut next = || {
-            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^ (z >> 31)
-        };
-        let (mut decoded, mut rejected) = (0, 0);
-        for _ in 0..3000 {
-            let mut w = words.clone();
-            let i = (next() % w.len() as u64) as usize;
-            match next() % 4 {
-                0 => w[i] ^= 1 << (next() % 64),
-                1 => w[i] ^= (1 << (next() % 64)) | (1 << (next() % 64)),
-                2 => w[i] = next(),
-                _ => {
-                    let j = (next() % 7) as usize;
-                    w[j] = if next().is_multiple_of(2) {
-                        w[j].wrapping_add(1)
-                    } else {
-                        w[j].wrapping_sub(1)
-                    };
-                }
-            }
-            match pcs.proof_from_words(&w) {
-                Ok(p) => {
-                    assert_eq!(pcs.proof_to_words(&p), w, "{noise:?}, {iterations} it.");
-                    decoded += 1;
-                }
-                Err(_) => rejected += 1,
-            }
-        }
-        eprintln!("{noise:?}, {iterations} iterations: {decoded} decoded, {rejected} rejected");
-        assert!(decoded > 0 && rejected > 0);
-    }
+fn each_masked_value_is_checked() {
+    let o = Opening::new(Q, masked(1, 1, Some(1)), 8, 12);
+    let (field, ring) = (o.pcs.ctx().field(), &o.pcs.ctx().ring);
+    let check = |proof: &Proof<K>, message: &str, what: &str| {
+        let verdict = o.verify(proof);
+        assert!(
+            matches!(&verdict, Err(VerifyError::Check(m)) if m == message),
+            "{what}: {verdict:?}"
+        );
+    };
+    let mut p = o.proof.clone();
+    let y = p.mask_eval.unwrap();
+    p.mask_eval = Some(field.add(&y, &field.one()));
+    check(&p, "the trace of the masked claim", "y_m");
+    let mut p = o.proof.clone();
+    p.ring_value = ring.add(&p.ring_value, &ring.monomial(0)).unwrap();
+    check(&p, "the trace of the masked claim", "Y*");
+    let mut p = o.proof.clone();
+    p.mask_eval = None;
+    assert!(matches!(o.verify(&p), Err(VerifyError::Malformed(_))));
+    // A y_m and a Y* that pass the trace check for another mask value still fail in the iterations:
+    // Y* moved along the kernel of the trace is a false claim for the first fold.
+    let mut p = o.proof.clone();
+    let shift = ring.monomial(1);
+    let traced = o.pcs.ctx().sub.e_map(&shift, &ring.monomial(0)).unwrap();
+    assert_eq!(traced, ring.zero(), "X lies in the kernel of the trace");
+    p.ring_value = ring.add(&p.ring_value, &shift).unwrap();
+    assert!(o.verify(&p).is_err(), "Y* in the kernel of the trace");
 }
 
 #[test]
-fn the_automatic_schedule_minimises_the_proof_size_with_hiding() {
-    let mut cases = 0;
-    for q in [Q, Q30, Q34] {
-        for (nu, noise) in [(1, GAUSS8), (2, Noise::Digits)] {
-            let auto = HachiPcs::<K>::new(q, hiding(nu, noise, None)).unwrap();
-            let max = auto.ctx().choices.max_iterations;
-            let fixed: Vec<HachiPcs<K>> = (0..=max)
-                .map(|k| HachiPcs::<K>::new(q, hiding(nu, noise, Some(k))).unwrap())
-                .collect();
-            let check = |words: &[Option<usize>], got_words: usize, got_iterations: usize| {
-                let least = words.iter().flatten().min().copied().unwrap();
-                let first = words.iter().position(|w| *w == Some(least)).unwrap();
-                assert_eq!(got_words, least, "q {q}, nu {nu}");
-                assert_eq!(got_iterations, first, "q {q}, nu {nu}");
+fn every_altered_word_is_rejected() {
+    let o = Opening::new(Q, masked(1, 1, Some(1)), 6, 13);
+    let words = o.pcs.proof_to_words(&o.proof);
+    let mut checked = 0;
+    for i in (0..words.len()).step_by(words.len() / 200 + 1) {
+        let mut bad = words.clone();
+        bad[i] ^= 1;
+        if let Ok(proof) = o.pcs.proof_from_words(&bad) {
+            assert!(o.verify(&proof).is_err(), "word {i}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "only {checked} words decoded");
+}
+
+#[test]
+fn whatever_decodes_reencodes_to_the_same_words() {
+    let o = Opening::new(Q, masked(1, 1, Some(1)), 6, 14);
+    let words = o.pcs.proof_to_words(&o.proof);
+    for i in 0..words.len() {
+        for bit in [0, 1, 17, 63] {
+            let mut bad = words.clone();
+            bad[i] ^= 1 << bit;
+            if let Ok(proof) = o.pcs.proof_from_words(&bad) {
+                assert_eq!(o.pcs.proof_to_words(&proof), bad, "word {i}, bit {bit}");
+            }
+        }
+    }
+    // The masked word of the header is a bit, and a masked proof needs hiding choices.
+    let plain = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
+    assert!(plain.proof_from_words(&words).is_err());
+}
+
+#[test]
+fn the_automatic_schedule_is_the_smallest() {
+    for vars in [6usize, 8, 10] {
+        let automatic = HachiPcs::<K>::new(Q30, masked(1, 1, None)).unwrap();
+        let words = automatic.multilinear_ext_proof_words(vars).unwrap();
+        for n in 1..=4 {
+            let Ok(fixed) = HachiPcs::<K>::new(Q30, masked(1, 1, Some(n))) else {
+                continue;
             };
-            for vars in [6usize, 10, 15, 17] {
-                let words: Vec<_> = fixed
-                    .iter()
-                    .map(|p| p.multilinear_proof_words(vars).ok())
-                    .collect();
-                check(
-                    &words,
-                    auto.multilinear_proof_words(vars).unwrap(),
-                    auto.multilinear_schedule(vars).unwrap().iterations.len(),
-                );
-                cases += 1;
-            }
-            for len in [1usize, 211, 4000] {
-                let words: Vec<_> = fixed
-                    .iter()
-                    .map(|p| p.vector_proof_words(len).ok())
-                    .collect();
-                check(
-                    &words,
-                    auto.vector_proof_words(len).unwrap(),
-                    auto.vector_schedule(len).unwrap().iterations.len(),
-                );
-                cases += 1;
+            if let Ok(w) = fixed.multilinear_ext_proof_words(vars) {
+                assert!(words <= w, "{vars} variables, {n} iterations");
             }
         }
     }
-    eprintln!("{cases} cases");
 }
 
 #[test]
-fn unusable_hiding_choices_are_refused() {
-    let toy = HachiChoices::toy_hiding(16);
-    assert_eq!(
-        toy.hiding,
-        Some(Hiding {
-            nu: 1,
-            noise: Noise::Gaussian { log_sigma: 3 }
-        })
-    );
-    assert!(HachiPcs::<K>::new(Q, toy).is_ok());
-    for bad in [
-        Hiding {
-            nu: 0,
-            noise: GAUSS8,
-        },
-        Hiding {
-            nu: 1,
-            noise: Noise::Gaussian {
-                log_sigma: gauss::MAX_LOG_SIGMA + 1,
-            },
-        },
+fn unusable_choices_are_refused() {
+    let base = Hiding {
+        nu: 1,
+        n_a: 1,
+        lambda: 128,
+        phi: 13,
+    };
+    for hiding in [
+        Hiding { nu: 0, ..base },
+        Hiding { n_a: 0, ..base },
+        Hiding { lambda: 0, ..base },
+        Hiding { phi: 0, ..base },
         Hiding {
             nu: hachi::params::MAX_NU + 1,
-            noise: GAUSS8,
+            ..base
         },
     ] {
         let choices = HachiChoices {
-            hiding: Some(bad),
+            hiding: Some(hiding),
             ..HachiChoices::toy(16)
         };
+        assert!(HachiPcs::<K>::new(Q, choices).is_err(), "{hiding:?}");
+    }
+    // b <= sqrt(q / 2) and omega < sqrt(q) / (2 sqrt(2)), Setup item 1(b).
+    for (b, omega) in [(2049u64, 2u64), (4, 1025)] {
+        let choices = HachiChoices {
+            b,
+            omega,
+            ..masked(1, 1, None)
+        };
         assert!(
-            matches!(
-                HachiPcs::<K>::new(Q, choices),
-                Err(hachi::Error::Parameter(_))
-            ),
-            "{bad:?}"
+            HachiPcs::<K>::new(Q, choices).is_err(),
+            "b {b}, omega {omega}"
         );
     }
-    // The support must fit the centred residues: q = 101 (5 mod 8) has residues -50..50, so
-    // sigma = 8 (support +-105) and sigma = 4 (+-52) are refused, while sigma = 2 (+-26) and the
-    // digits are accepted; q = 229 takes sigma = 8 (2 * 105 + 1 = 211 <= 229).
-    let at = |q: u64, nu: usize, noise: Noise| {
-        HachiPcs::<K>::new(
-            q,
-            HachiChoices {
-                hiding: Some(Hiding { nu, noise }),
-                ..HachiChoices::toy(16)
-            },
-        )
-    };
-    for noise in [GAUSS8, Noise::Gaussian { log_sigma: 2 }] {
-        assert!(
-            matches!(at(101, 1, noise), Err(hachi::Error::Parameter(m)) if m.contains("support")),
-            "{noise:?} at q = 101"
-        );
-    }
-    for noise in [Noise::Gaussian { log_sigma: 1 }, Noise::Digits] {
-        assert!(at(101, 1, noise).is_ok(), "{noise:?} at q = 101");
-    }
-    assert!(at(229, 1, GAUSS8).is_ok());
-    assert!(at(Q, hachi::params::MAX_NU, GAUSS8).is_ok());
 }
 
-/// The SHA-256 of words as little-endian bytes, in hex.
 fn sha256_hex(words: &[u64]) -> String {
-    let mut h = Sha256::new();
+    let mut hasher = Sha256::new();
     for w in words {
-        h.update(w.to_le_bytes());
+        hasher.update(w.to_le_bytes());
     }
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[test]
-fn hiding_outputs_are_pinned() {
-    // Regression values computed by this implementation (not independent known answers): the
-    // SHA-256 of the commitment's and the proof's words at fixed inputs and seeds, for a
-    // multilinear opening (Gaussian, one iteration) and an inner product (digits, nu = 2, one
-    // iteration). Pinned on 2026-10-21 with the randomized commitments; updated on 2026-10-23
-    // for version 3, the input and per-iteration batching sumchecks (the commitments differ
-    // only in their version word; both opened proofs carry one iteration), and on 2026-10-31
-    // for version 4 (ring-switching with 2 field elements per round, K - 1 partial evaluations).
-    let ml = HachiPcs::<K>::new(Q, hiding(1, GAUSS8, Some(1))).unwrap();
-    let vars = 8;
-    let (com, state) = ml
-        .commit_multilinear(&residues_mod(Q, "pin/f", 0, 1 << vars), &[21u8; 32])
-        .unwrap();
-    let (_, proof) = ml
-        .prove_multilinear(
-            &state,
-            &exts_mod(Q, "pin/x", 0, vars),
-            &[22u8; 32],
-            &[23u8; 32],
-        )
-        .unwrap();
-    let ip = HachiPcs::<K>::new(Q, hiding(2, Noise::Digits, Some(1))).unwrap();
-    let (vcom, vstate) = ip
-        .commit_vector(&exts_mod(Q, "pin/s", 0, 211), &[24u8; 32])
-        .unwrap();
-    let (_, vproof) = ip
-        .prove_inner_product(
-            &vstate,
-            &exts_mod(Q, "pin/e", 0, 211),
-            &[25u8; 32],
-            &[26u8; 32],
-        )
-        .unwrap();
-    let got = [
-        sha256_hex(&ml.commitment_to_words(&com)),
-        sha256_hex(&ml.proof_to_words(&proof)),
-        sha256_hex(&ip.commitment_to_words(&vcom)),
-        sha256_hex(&ip.proof_to_words(&vproof)),
-    ];
-    let pinned = [
-        "eff7ac5d7377768159bc2ef2b77a6119c596043f3d9eaeef37e2f2d466370cee",
-        "7f95d8a48b3fde0ec5b788f5cda6bd96dcc63a9e48f260770a6476c5e0976fa6",
-        "9df4d18ceae2b0c2fd9cd878f295379aa414dc4684ae07ab77f6a25c3edd0ec3",
-        "4e7df5386f6e81d44fb1c64db9739cd4fa93a4f7ad9673e75a4647da4d7de54e",
-    ];
-    assert_eq!(got, pinned, "the outputs changed");
+fn outputs_are_pinned() {
+    let o = Opening::new(Q, masked(1, 1, Some(2)), 8, 20);
+    let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
+    let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
+    println!("{commitment} {proof}");
+    assert_eq!(
+        commitment,
+        "f729f60e311b57b4f9039fe96f03fb08fbb41691658f0a4d79f62fc732cf2cbc"
+    );
+    assert_eq!(
+        proof,
+        "b598a27f5987657240c6f08493aede03fd194c9ecb88787c4980696f4d220d92"
+    );
 }

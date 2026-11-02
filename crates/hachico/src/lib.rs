@@ -52,9 +52,8 @@
 //!   component and of the known forgery; they do not prove soundness.
 //! - **The base PCS.** The guarantee is only as good as the base PCS passed to [`verify`]:
 //!   `ClearPcs` is binding (SHA-256 collision resistance) and sound, but neither succinct nor
-//!   hiding. [`HachiBase`] is not hiding either: its default choices randomize the commitments,
-//!   but each opening still sends its last witness in the clear. [`HachiBase::setup`] uses
-//!   insecure test parameters.
+//!   hiding. [`HachiBase`] is not hiding either: its default choices mask the share polynomial,
+//!   but the blinders are not masked yet. [`HachiBase::setup`] uses insecure test parameters.
 //! - **Fiat-Shamir** is in the random-oracle model (a SHAKE128 transcript,
 //!   `hachi-co-transcript`), as accepted for the project (user, 2026-10-17). The digest of the
 //!   base PCS's parameters ([`BasePcs::params_digest`]) is part of the statement
@@ -63,8 +62,8 @@
 //! - **Not hiding yet.** $\mathbf u$ and the final values are masked as the draft prescribes
 //!   ($\boldsymbol\rho^u$ and the pad $\rho^w$), and its theorem covers several adaptive
 //!   evaluations for a base PCS with evaluation hiding (`t-hiding.tex`:19, 297). No base PCS here
-//!   has it: `ClearPcs` reveals the polynomials themselves, and every opening of [`HachiBase`]
-//!   sends its last witness in the clear.
+//!   has it yet: `ClearPcs` reveals the polynomials themselves, and [`HachiBase`] masks the share
+//!   polynomial but not the blinders.
 //!
 //! # Fiat-Shamir
 //!
@@ -165,7 +164,7 @@ pub use statement::{
 };
 pub use verifier::{verify, verify_claims_with, verify_with};
 
-pub use hachi::{HachiChoices, Hiding, Noise};
+pub use hachi::{HachiChoices, Hiding};
 pub use hachi_co_core::{BasePcs, Context, PartyState};
 pub use hachi_co_params::BasePcsWords;
 pub use hachi_co_sumcheck::{Claim, ClaimedPoly, FinalClaims, PcsWords, SumcheckTranscript};

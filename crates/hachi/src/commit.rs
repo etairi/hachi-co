@@ -1,16 +1,16 @@
 //! The arithmetic context ([`Ctx`]) and the inner-outer commitment (paper, Section 4.1):
 //! $\mathbf t_i = \mathbf A \mathbf s_i$, $\hat{\mathbf t}_i = \mathbf G^{-1}(\mathbf t_i)$ and
 //! $\mathbf u = \mathbf B \hat{\mathbf t}$, with $\mathbf s_i = \mathbf G^{-1}(\mathbf f_i)$ or
-//! $\mathbf s_i = \mathbf f_i$ according to the [`Layout`]. With [`Hiding`],
-//! $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \mathbf r_i$ ([`Ctx::rand_matrix`],
-//! [`Ctx::rand_term`]).
+//! $\mathbf s_i = \mathbf f_i$ according to the [`Layout`]. In a masked layout ([`Hiding`]), each
+//! chunk ends with a masking row and $\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A'
+//! \boldsymbol\varrho_i$ ([`Ctx::rand_matrix`], [`Ctx::rand_term`]).
 
-use crate::params::{HachiChoices, Hiding, Layout, Noise, check};
+use crate::params::{HachiChoices, Hiding, Layout, check, height};
 use crate::{Error, Result};
 use hachi_co_math::decompose::{digit_bound, g_inv, num_digits};
 use hachi_co_math::{Fqk, Poly, Ring, Subfield};
 use hachi_co_sampling::matrix::expand;
-use hachi_co_sampling::{ShakePrg, gauss, uniform};
+use hachi_co_sampling::{ShakePrg, uniform};
 use rand::Rng;
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -81,87 +81,87 @@ impl<const K: usize> Ctx<K> {
         self.choices.d / K
     }
 
-    /// The randomized commitments' choices, if any.
+    /// The masking choices, if any.
     pub fn hiding(&self) -> Option<Hiding> {
         self.choices.hiding
     }
 
-    /// The length $\nu + n$ of the randomness of a commitment with $n$ rows ($n_A$ for the inner
-    /// commitments, $n_D$ for $\mathbf v$), or 0 without [`Hiding`].
-    pub fn rand_len(&self, rows: usize) -> usize {
-        self.hiding().map_or(0, |h| h.nu + rows)
-    }
-
-    /// `count` ring elements whose coefficients follow $\chi$ ([`Noise`]), read from `prg`
-    /// element after element, coefficient after coefficient: [`gauss::gaussian`] for a Gaussian,
-    /// [`uniform::short`]$(b)$ for digits.
+    /// The height $n_A$ of the commitment of a witness in `layout`.
     ///
     /// # Errors
-    /// [`Error::Parameter`] without [`Hiding`]; sampling errors.
-    pub fn noise(&self, prg: &mut ShakePrg, count: usize) -> Result<Vec<Poly>> {
-        let hiding = self
-            .hiding()
-            .ok_or_else(|| Error::Parameter("randomness without hiding choices".into()))?;
-        let coeffs = match hiding.noise {
-            Noise::Digits => uniform::short(prg, self.choices.b, count * self.d())?,
-            Noise::Gaussian { log_sigma } => gauss::gaussian(prg, log_sigma, count * self.d())?,
-        };
+    /// [`Error::Parameter`] for a masked layout without [`Hiding`].
+    pub fn height(&self, layout: &Layout) -> Result<usize> {
+        height(&self.choices, layout)
+    }
+
+    /// The choices, or an error for a masked layout without them.
+    fn masks(&self) -> Result<Hiding> {
+        self.hiding()
+            .ok_or_else(|| Error::Parameter("randomness without hiding choices".into()))
+    }
+
+    /// The length $\nu + n_A$ of the randomness of a chunk of a masked layout.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] without [`Hiding`].
+    pub fn rand_len(&self) -> Result<usize> {
+        let h = self.masks()?;
+        Ok(h.nu + h.n_a)
+    }
+
+    /// `count` ring elements with uniform digits, the set $S_b$ of Definition 2, read from `prg`
+    /// element after element, coefficient after coefficient.
+    ///
+    /// # Errors
+    /// Sampling errors.
+    pub fn short(&self, prg: &mut ShakePrg, count: usize) -> Result<Vec<Poly>> {
+        let coeffs = uniform::short(prg, self.choices.b, count * self.d())?;
         Ok(coeffs
             .chunks_exact(self.d())
             .map(|c| self.ring.from_i64(c))
             .collect::<hachi_co_math::Result<_>>()?)
     }
 
-    /// The matrix $\mathbf M_1'$ of $[\mathbf M_1' \mid \mathbf I_{rows}]$: the matrix `kind`
-    /// (`b"A'"` or `b"D'"`) of iteration `iteration`, $rows \times \nu$ ([`Hiding`]).
+    /// $\mathbf A_1'$ of $\mathbf A' = [\mathbf A_1' \mid \mathbf I_{n_A}]$, $n_A \times \nu$, at
+    /// level 0.
     ///
     /// # Errors
     /// [`Error::Parameter`] without [`Hiding`]; sampling errors.
-    pub fn rand_matrix(
-        &self,
-        kind: &[u8],
-        iteration: usize,
-        rows: usize,
-    ) -> Result<Vec<Vec<Poly>>> {
-        let hiding = self
-            .hiding()
-            .ok_or_else(|| Error::Parameter("randomness without hiding choices".into()))?;
-        self.matrix(kind, iteration, rows, hiding.nu)
+    pub fn rand_matrix(&self) -> Result<Vec<Vec<Poly>>> {
+        let h = self.masks()?;
+        self.matrix(b"A'", 0, h.n_a, h.nu)
     }
 
-    /// $[\mathbf M_1' \mid \mathbf I_{rows}]\,\mathbf r$ for $\mathbf M_1'$ = `m1`
-    /// ([`Ctx::rand_matrix`], $rows \times \nu$) and the randomness $\mathbf r$ of length
-    /// $\nu + rows$.
+    /// $[\mathbf A_1' \mid \mathbf I_{n_A}]\,\boldsymbol\varrho$ for $\mathbf A_1'$ = `m1`
+    /// ([`Ctx::rand_matrix`]) and $\boldsymbol\varrho$ = `r` of length $\nu + n_A$.
     ///
     /// # Errors
     /// [`Error::Shape`] for a matrix or randomness of the wrong shape; [`Error::Parameter`]
     /// without [`Hiding`]; arithmetic errors.
     pub fn rand_term(&self, m1: &[Vec<Poly>], r: &[Poly]) -> Result<Vec<Poly>> {
-        let hiding = self
-            .hiding()
-            .ok_or_else(|| Error::Parameter("randomness without hiding choices".into()))?;
+        let h = self.masks()?;
         let rows = m1.len();
-        if m1.iter().any(|row| row.len() != hiding.nu)
-            || r.len() != hiding.nu + rows
+        if m1.iter().any(|row| row.len() != h.nu)
+            || r.len() != h.nu + rows
             || r.iter().any(|p| p.0.len() != self.d())
         {
             return Err(Error::Shape(format!(
                 "a matrix of {rows} rows of {} and randomness of {} ring elements of degree {} \
                  are expected",
-                hiding.nu,
-                hiding.nu + rows,
+                h.nu,
+                h.nu + rows,
                 self.d()
             )));
         }
-        let mut out = self.ring.mat_vec(m1, &r[..hiding.nu])?;
-        for (o, e) in out.iter_mut().zip(&r[hiding.nu..]) {
+        let mut out = self.ring.mat_vec(m1, &r[..h.nu])?;
+        for (o, e) in out.iter_mut().zip(&r[h.nu..]) {
             *o = self.ring.add(o, e)?;
         }
         Ok(out)
     }
 
-    /// The public matrix `kind` (`b"A"`, `b"B"`, `b"D"`, or with [`Hiding`] `b"A'"`, `b"D'"`) of
-    /// iteration `iteration`, of shape
+    /// The public matrix `kind` (`b"A"`, `b"B"`, `b"D"`, or with [`Hiding`] `b"A'"`) of iteration
+    /// `iteration`, of shape
     /// `rows` $\times$ `cols`: its seed is squeezed from the choices' seed, and its entries are
     /// expanded by `hachi_co_sampling::matrix::expand`.
     ///
@@ -190,18 +190,19 @@ impl<const K: usize> Ctx<K> {
 pub struct Committed {
     /// The layout.
     pub layout: Layout,
-    /// The message chunks $\mathbf f_i$ ($2^r$ chunks of $2^m$ ring elements). The committed
-    /// vectors $\mathbf s_i$ are not kept: [`Committed::digits`] recomputes them, as they take
-    /// $\delta$ times the memory of a decomposed message.
+    /// The message chunks $\mathbf f_i$ ($2^r$ chunks of [`Layout::chunk_len`] ring elements, the
+    /// masking row last in a masked layout). The committed vectors $\mathbf s_i$ are not kept:
+    /// [`Committed::digits`] recomputes them, as they take $\delta$ times the memory of a
+    /// decomposed message.
     pub message: Vec<Vec<Poly>>,
-    /// The randomness $\mathbf r_i$ of each chunk ($\nu + n_A$ ring elements each), or no
-    /// chunk at all without [`Hiding`].
+    /// The randomness $\boldsymbol\varrho_i$ of each chunk of a masked layout ($\nu + n_A$ ring
+    /// elements each), and no chunk at all otherwise.
     pub r: Vec<Vec<Poly>>,
     /// The inner commitments $\mathbf t_i = \mathbf A \mathbf s_i$, plus
-    /// $\mathbf A' \mathbf r_i$ with [`Hiding`] ($n_A$ each).
+    /// $\mathbf A' \boldsymbol\varrho_i$ in a masked layout ($n_A$ each).
     pub t: Vec<Vec<Poly>>,
     /// $\hat{\mathbf t} = (\mathbf G^{-1}(\mathbf t_1), \dots)$, chunk-major: chunk $i$ occupies
-    /// entries $[i n_A \delta, (i + 1) n_A \delta)$.
+    /// entries $[i n_A \delta, (i + 1) n_A \delta)$, with the height of the layout.
     pub t_hat: Vec<Poly>,
     /// The commitment $\mathbf u = \mathbf B \hat{\mathbf t}$ ($n_B$ ring elements).
     pub u: Vec<Poly>,
@@ -248,8 +249,8 @@ fn check_message<const K: usize>(
 }
 
 /// Commits to `message` in `layout` with the matrices of iteration `iteration` and the
-/// randomness `r`: one vector of $\nu + n_A$ ring elements per chunk with [`Hiding`], none
-/// without.
+/// randomness `r`: one vector of $\nu + n_A$ ring elements per chunk of a masked layout, none
+/// otherwise.
 ///
 /// # Errors
 /// [`Error::Shape`] for a message or randomness of the wrong shape; arithmetic errors.
@@ -261,27 +262,21 @@ pub fn commit<const K: usize>(
     r: Vec<Vec<Poly>>,
 ) -> Result<Committed> {
     check_message(ctx, &layout, &message)?;
-    let chunks_of_r = if ctx.hiding().is_some() {
-        layout.chunks()
-    } else {
-        0
-    };
+    let chunks_of_r = if layout.masked { layout.chunks() } else { 0 };
     if r.len() != chunks_of_r {
         return Err(Error::Shape(format!(
             "randomness for {chunks_of_r} chunks is expected"
         )));
     }
     let (ring, b, delta) = (&ctx.ring, ctx.choices.b, ctx.delta);
+    let n_a = ctx.height(&layout)?;
     let width = layout.width(delta);
-    let a = ring.prepare_short(
-        &ctx.matrix(b"A", iteration, ctx.choices.n_a, width)?,
-        layout.beta_s,
-    )?;
+    let a = ring.prepare_short(&ctx.matrix(b"A", iteration, n_a, width)?, layout.beta_s)?;
     let bmat = ctx.matrix(
         b"B",
         iteration,
         ctx.choices.n_b,
-        layout.chunks() * ctx.choices.n_a * delta,
+        layout.chunks() * n_a * delta,
     )?;
     let mut t: Vec<Vec<Poly>> = message
         .par_iter()
@@ -291,7 +286,7 @@ pub fn commit<const K: usize>(
         })
         .collect::<Result<_>>()?;
     if !r.is_empty() {
-        let a_rand = ctx.rand_matrix(b"A'", iteration, ctx.choices.n_a)?;
+        let a_rand = ctx.rand_matrix()?;
         for (ti, ri) in t.iter_mut().zip(&r) {
             let term = ctx.rand_term(&a_rand, ri)?;
             for (x, y) in ti.iter_mut().zip(&term) {
@@ -299,7 +294,7 @@ pub fn commit<const K: usize>(
             }
         }
     }
-    let mut t_hat = Vec::with_capacity(layout.chunks() * ctx.choices.n_a * delta);
+    let mut t_hat = Vec::with_capacity(layout.chunks() * n_a * delta);
     for ti in &t {
         t_hat.extend(g_inv(ring, b, delta, ti)?);
     }

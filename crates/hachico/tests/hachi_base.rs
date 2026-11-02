@@ -13,10 +13,10 @@
 //! - tampered base-PCS items are rejected: changed, truncated or extended words of every
 //!   commitment and every opening, openings or commitments swapped between parties, and an
 //!   opening of the right polynomial made under another context;
-//! - the default choices randomize the commitments (`HachiChoices::hiding`, Gaussian randomness,
-//!   `docs/hachi-hiding.md` §6), so the tests above run with them; honest runs with
-//!   deterministic commitments at n = 1, 2, 3 (automatic schedule) and with digit randomness at
-//!   n = 2 (one iteration) pass the same checks, and the proof is bound to the hiding choices;
+//! - the default choices mask the share polynomial (`HachiChoices::hiding`), so the tests above run
+//!   with them. Honest runs without masks at n = 1, 2, 3 (automatic schedule) and with a larger
+//!   MLWE rank at n = 2 (one iteration) pass the same checks, and the proof is bound to the hiding
+//!   choices.
 //! - an ignored test prints timings and sizes.
 //!
 //! Seeds: setup `seed("setup/<preset>", [index])` (also the source of Hachi's matrices,
@@ -34,8 +34,7 @@ use common::{
 
 use hachi_co::{
     BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalOutput, EvalProof, HachiBase, HachiChoices,
-    Hiding, Noise, PcsWords, VerifyError, commit, encoded_len, eval_with, verify,
-    verify_claims_with,
+    Hiding, PcsWords, VerifyError, commit, encoded_len, eval_with, verify, verify_claims_with,
 };
 use hachi_co_core::base_pcs::mobius_ext;
 use hachi_co_core::{Ext, FsChallenger, PartyRandomness, Poly, PrgRandomness};
@@ -262,8 +261,8 @@ fn the_proof_is_bound_to_the_base_pcs() {
     assert!(rejected(r.verify_with(&other, proof)));
 }
 
-/// Hachi for the context of (`name`, `index`): the default choices with `hiding` (`None`:
-/// deterministic commitments) and the given number of iterations.
+/// Hachi for the context of (`name`, `index`): the default choices with `hiding` (`None`: the
+/// published scheme) and the given number of iterations.
 fn hiding_base(
     ctx: &Context<K>,
     name: &str,
@@ -280,14 +279,13 @@ fn hiding_base(
 }
 
 /// The hiding choices of the default ([`HachiChoices::toy_hiding`]).
-const GAUSS8: Hiding = Hiding {
+const MASKS: Hiding = Hiding {
     nu: 1,
-    noise: Noise::Gaussian { log_sigma: 3 },
+    n_a: 1,
+    lambda: 40,
+    phi: 13,
 };
-const DIGITS2: Hiding = Hiding {
-    nu: 2,
-    noise: Noise::Digits,
-};
+const RANK2: Hiding = Hiding { nu: 2, ..MASKS };
 
 #[test]
 fn honest_runs_with_other_commitment_choices_are_accepted() {
@@ -295,8 +293,8 @@ fn honest_runs_with_other_commitment_choices_are_accepted() {
     let default = HachiBase::default_choices(&ctx, &setup_seed("toy-n1", 5));
     assert_eq!(
         default.hiding,
-        Some(GAUSS8),
-        "the default randomizes the commitments"
+        Some(MASKS),
+        "the default masks the share polynomial"
     );
     // Deterministic commitments.
     for n in [1, 2, 3] {
@@ -311,7 +309,7 @@ fn honest_runs_with_other_commitment_choices_are_accepted() {
         "toy-n2",
         2,
         5,
-        |c| hiding_base(c, "toy-n2", 5, Some(DIGITS2), Some(1)),
+        |c| hiding_base(c, "toy-n2", 5, Some(RANK2), Some(1)),
         ctx,
     );
     assert_eq!(check_honest(&r), [1; 3]);
@@ -324,7 +322,7 @@ fn the_proof_is_bound_to_the_hiding_choices() {
         "toy-n2",
         2,
         6,
-        |c| hiding_base(c, "toy-n2", 6, Some(GAUSS8), Some(1)),
+        |c| hiding_base(c, "toy-n2", 6, Some(MASKS), Some(1)),
         ctx,
     );
     let proof = r.proof();
@@ -335,15 +333,9 @@ fn the_proof_is_bound_to_the_hiding_choices() {
     let plain = hiding_base(&r.ctx, "toy-n2", 6, None, Some(1));
     assert!(rejected(r.verify_with(&plain, proof)));
     for other in [
-        Hiding { nu: 2, ..GAUSS8 },
-        Hiding {
-            noise: Noise::Gaussian { log_sigma: 4 },
-            ..GAUSS8
-        },
-        Hiding {
-            nu: 1,
-            noise: Noise::Digits,
-        },
+        Hiding { nu: 2, ..MASKS },
+        Hiding { n_a: 2, ..MASKS },
+        Hiding { phi: 14, ..MASKS },
     ] {
         let pcs = hiding_base(&r.ctx, "toy-n2", 6, Some(other), Some(1));
         assert_ne!(pcs.params_digest(), r.pcs.params_digest());

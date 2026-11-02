@@ -12,25 +12,22 @@
 //! its own (the authors' answer 3 of 2026-10-21): only $q$ and $k$ are Hachi-Co's.
 //!
 //! **Parameters.** [`HachiBase::setup`] uses [`HachiChoices::toy_hiding`] at Hachi-Co's ring
-//! degree: the toy choices with randomized commitments ($\nu = 1$, Gaussian randomness of standard
-//! deviation 8). They are **insecure** (test parameters, like the toy presets of Hachi-Co). Each
-//! opening runs the number of iterations whose proof is smallest (`hachi::pcs`, "Schedule"): at
-//! the toy presets, two or three for the share polynomial and none for the blinders, whose proofs
-//! are smallest in the clear. [`HachiBase::new`] takes any choices, for example
-//! [`HachiChoices::fixed_iterations`] to fix the number of iterations.
+//! degree when the share polynomial is over the field ([`PadRule::Field`], the draft's pad): the
+//! toy choices with masks. With [`PadRule::Residues`] it uses [`HachiChoices::toy`], since that
+//! pad opens through the $\mathbb Z_q$ shortcut, which is not hiding. They are **insecure** (test
+//! parameters, like the toy presets of Hachi-Co). Each opening runs the number of iterations whose
+//! proof is smallest (`hachi::pcs`, "Schedule"): at the toy presets, two or three for the share
+//! polynomial and none for the blinders, whose proofs are smallest in the clear.
+//! [`HachiBase::new`] takes any choices, for example [`HachiChoices::fixed_iterations`] to fix the
+//! number of iterations.
 //!
-//! **Not hiding yet.** The default choices randomize every commitment
-//! ([`HachiChoices::hiding`], `docs/hachi-hiding.md` §6), which hiding needs, but the openings
-//! still reveal: the last witness of every opening is sent in the clear, and with no iteration
-//! that is the committed polynomial itself.
-//! - At an MLWE rank of real security, a commitment hides the committed polynomial under MLWE
-//!   until it is opened.
-//! - Hachi-Co opens every commitment, so its proofs are not hiding yet (with no iteration, as
-//!   for the blinders at the toy presets, the opening sends the blinder and its randomness).
+//! **Not hiding yet.** The share polynomial is masked as Appendix A.2 of the draft specifies
+//! (`hachi::pcs`, "Hiding"). The blinders are not: they are opened as without hiding, so with no
+//! iteration an opening sends the blinder itself. So Hachi-Co's proofs are not hiding yet, and
+//! masking the blinders waits for the authors' choice between separate and merged commitments.
 //!
-//! [`HachiBase::new`] with `hiding: None` gives deterministic commitments. The provers draw the
-//! seeds of the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness)
-//! (`base_pcs`).
+//! [`HachiBase::new`] with `hiding: None` gives the published scheme. The provers draw the seeds of
+//! the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).
 //!
 //! **Encodings.** Commitments and proofs travel as the words of
 //! [`HachiPcs::commitment_to_words`] and [`HachiPcs::proof_to_words`]: packed, with
@@ -41,7 +38,7 @@
 //! verifier checks the counts of the header (iterations, rounds) against the schedule.
 
 use crate::error::Error;
-use hachi::{Commitment, HachiChoices, HachiPcs, Proof, State};
+use hachi::{Commitment, HachiChoices, HachiPcs, Hiding, Proof, State};
 use hachi_co_core::{BasePcs, Context, Layout};
 use hachi_co_math::Ext;
 use hachi_co_params::{BasePcsWords, PadRule};
@@ -96,19 +93,25 @@ impl<const K: usize> HachiBase<K> {
         Self::new(ctx.q(), Self::default_choices(ctx, seed))
     }
 
-    /// The choices of [`HachiBase::setup`]: [`HachiChoices::toy_hiding`] (randomized commitments)
-    /// at Hachi-Co's ring degree $d$, with the seed of the public matrices derived from the setup
-    /// seed ([`base_pcs_seed`]). **Insecure** (see the module documentation).
+    /// The choices of [`HachiBase::setup`] at Hachi-Co's ring degree $d$: [`HachiChoices::toy_hiding`]
+    /// for [`PadRule::Field`], and [`HachiChoices::toy`] for [`PadRule::Residues`], whose shortcut
+    /// cannot hide. The seed of the public matrices comes from the setup seed ([`base_pcs_seed`]).
+    /// **Insecure** (see the module documentation).
     pub fn default_choices(ctx: &Context<K>, seed: &[u8; 32]) -> HachiChoices {
+        let base = match ctx.layout.pad_rule {
+            PadRule::Field => HachiChoices::toy_hiding(ctx.layout.d),
+            PadRule::Residues => HachiChoices::toy(ctx.layout.d),
+        };
         HachiChoices {
             seed: base_pcs_seed(seed),
-            ..HachiChoices::toy_hiding(ctx.layout.d)
+            ..base
         }
     }
 
     /// The choices of the preset `name` from [`hachi_preset`](hachi_co_params::presets::hachi_preset),
-    /// without hiding, or [`HachiBase::default_choices`] for a preset without an entry; the seed
-    /// of the public matrices is derived from the setup seed ([`base_pcs_seed`]).
+    /// with the masks of its entry if it has them and the pad is [`PadRule::Field`], or
+    /// [`HachiBase::default_choices`] for a preset without an entry. The seed of the public matrices
+    /// is derived from the setup seed ([`base_pcs_seed`]).
     ///
     /// # Errors
     /// As [`hachi_preset`](hachi_co_params::presets::hachi_preset).
@@ -120,6 +123,15 @@ impl<const K: usize> HachiBase<K> {
         let Some(entry) = hachi_co_params::presets::hachi_preset(name)? else {
             return Ok(Self::default_choices(ctx, seed));
         };
+        let hiding = match ctx.layout.pad_rule {
+            PadRule::Field => entry.hiding.map(|h| Hiding {
+                nu: h.nu,
+                n_a: h.n_a,
+                lambda: h.lambda,
+                phi: h.phi,
+            }),
+            PadRule::Residues => None,
+        };
         Ok(HachiChoices {
             b: entry.b,
             omega: entry.omega,
@@ -127,6 +139,7 @@ impl<const K: usize> HachiBase<K> {
             n_b: entry.n_b,
             n_d: entry.n_d,
             seed: base_pcs_seed(seed),
+            hiding,
             ..HachiChoices::toy(ctx.layout.d)
         })
     }
@@ -150,9 +163,16 @@ impl<const K: usize> HachiBase<K> {
     ///
     /// # Errors
     /// [`Error::Hachi`] if Hachi cannot open polynomials of these sizes (fewer than $\log\_2 d$
-    /// variables).
+    /// variables), or for [`PadRule::Residues`] with hiding, whose $\mathbb Z_q$ shortcut Hachi
+    /// refuses.
     pub fn words(&self, layout: &Layout) -> Result<BasePcsWords, Error> {
         let pcs = &self.pcs;
+        if layout.pad_rule == PadRule::Residues && pcs.ctx().hiding().is_some() {
+            return Err(hachi::Error::Parameter(
+                "the residue pad opens through the Z_q shortcut, which is not hiding".into(),
+            )
+            .into());
+        }
         let commitment = pcs.commitment_words() as u128;
         let vector = |degree: usize| -> Result<u128, Error> {
             let len = layout
@@ -180,9 +200,9 @@ impl<const K: usize> HachiBase<K> {
 
 /// The parameter digest: the challenge seed of a transcript with the domain
 /// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice, Hachi's version
-/// ([`hachi::VERSION`]) and the seed of the matrices, then, only for randomized commitments
-/// ([`HachiChoices::hiding`]), $\nu$ and the distribution's two words
-/// ([`hachi::Noise::words`]): the digest of non-hiding choices is unchanged.
+/// ([`hachi::VERSION`]) and the seed of the matrices, then, only with masks
+/// ([`HachiChoices::hiding`]), the masks' four words ([`Hiding::words`]): the digest of non-hiding
+/// choices is unchanged.
 fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
     let mut t = Transcript::new(HACHI_BASE_DIGEST_DOMAIN);
     let words: [(&[u8], u64); 11] = [
@@ -206,10 +226,11 @@ fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
     }
     t.append_message(b"seed", &c.seed);
     if let Some(h) = c.hiding {
-        let [kind, param] = h.noise.words();
-        t.append_u64(b"nu", h.nu as u64);
-        t.append_u64(b"noise", kind);
-        t.append_u64(b"noise-param", param);
+        let [nu, n_a, lambda, phi] = h.words();
+        t.append_u64(b"nu", nu);
+        t.append_u64(b"n_A-0", n_a);
+        t.append_u64(b"lambda", lambda);
+        t.append_u64(b"phi", phi);
     }
     t.challenge_seed(b"digest")
 }
