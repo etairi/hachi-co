@@ -1,6 +1,6 @@
 //! The partial evaluations of a multilinear opening, and the sumcheck that binds them to the
-//! committed polynomial. This deviates from the paper's Section 3.2, whose check does not bind
-//! them. The same gadget ([`prove_table`], [`verify`]) also binds the partial evaluations of
+//! committed polynomial. This deviates from the paper's Section 3.2.
+//! The same gadget ([`prove_table`], [`verify`]) also binds the partial evaluations of
 //! every iteration's next-claim reduction (`iteration`), where the committed polynomial is the
 //! packed next witness in hypercube form; the two runs use different transcript labels
 //! ([`Labels`]). Below, $f'$ stands for whichever polynomial the caller binds.
@@ -15,14 +15,6 @@
 //! \sum_i \mathrm{mono}\_i(x_1, \dots, x_\kappa) y_i$, and the rest of the opening proves
 //! $f'(\mathbf x') = \sum_i y_i Z_i$.
 //!
-//! **Why that is not enough.** The $y_i$ lie in $\mathbb F_{q^K}$, so $\sum_i y_i Z_i$ does not
-//! determine them: $(y_i)\_i \mapsto \sum_i y_i Z_i$ is $\mathbb F_{q^K}$-linear with a kernel
-//! of dimension $K - 1$. Unless $(\mathrm{mono}\_i)\_i$ is a multiple of $(Z_i)\_i$, that kernel
-//! contains a $\boldsymbol\delta$ with $\sum_i \mathrm{mono}\_i \delta_i = 1$. Adding a multiple
-//! of it to the partial evaluations keeps $f'(\mathbf x')$ and moves the value anywhere. Version
-//! 2 of the scheme accepted such forgeries with 0, 1 and 2 iterations; the test
-//! `partials_moved_along_the_trace_kernel_are_rejected` of `pcs` builds one.
-//!
 //! **What is proved instead: ring-switching.** This is Construction 3.1 of Diamond and Posen
 //! (ePrint 2024/504), which holds for any extension of degree $2^\kappa$ in any characteristic;
 //! Akita (ePrint 2026/1983, Section 3.7) calls it the tensor reduction. Write
@@ -35,11 +27,10 @@
 //! \sum_{\mathbf b} f_i(\mathbf b) A_u(\mathbf b)$, so for every $u$
 //! $$\hat y_u = \sum_{\mathbf b} A_u(\mathbf b) T(\mathbf b), \qquad T = \sum_i f_i Z_i,$$
 //! with $T$ the values of $f'$ on $\lbrace 0, 1 \rbrace^n$, $n = \ell - \kappa$
-//! ([`hypercube_values`]). Unlike the paper's check, these $K$ claims hold only for the true
+//! ([`hypercube_values`]). These $K$ claims hold only for the true
 //! partial evaluations: the $A_u(\mathbf b)$ lie in $\mathbb F_q$, so coordinate $i$ of the
 //! right-hand side is $\sum_{\mathbf b} A_u(\mathbf b) f_i(\mathbf b)$, and coordinate $i$ of
-//! claim $u$ fixes $y_{u,i}$. (The test `the_rows_determine_the_partials` checks the forgery's
-//! $\boldsymbol\delta$ against this.)
+//! claim $u$ fixes $y_{u,i}$. (The test `the_rows_determine_the_partials` checks this.)
 //!
 //! **Batching.** After the partial evaluations, the verifier draws $\boldsymbol\eta \in \mathbb
 //! F_{q^K}^\kappa$, and $\eta_u = \widetilde{eq}(\boldsymbol\eta, \mathrm{bit}(u))$. The $K$
@@ -654,7 +645,7 @@ mod tests {
 
     #[test]
     fn the_rows_determine_the_partials() {
-        // A delta in the kernel of the paper's check, sum_i delta_i Z_i = 0, moves the rows; for
+        // A delta with sum_i delta_i Z_i = 0 moves the rows; for
         // random deltas the rows vanish only for delta = 0, as they are its coordinates.
         let sub = subfield();
         let field = sub.field();

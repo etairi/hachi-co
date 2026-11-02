@@ -13,9 +13,7 @@
 //!      (Section 3.2 and footnote 5);
 //!   2. a sumcheck binds the $y_i$ to $f'$ ([`crate::partials`]) and leaves the claim
 //!      $f'(\mathbf r) = v_{\mathbf r}$ at the point $\mathbf r$ of its challenges. This
-//!      deviates from Section 3.2, which proves $f'(\mathbf x') = \sum_i y_i Z_i$ only: that
-//!      sum does not determine the $y_i \in \mathbb F_{q^K}$, and a prover could move them,
-//!      and $y$ with them, along its kernel;
+//!      deviates from Section 3.2, which proves $f'(\mathbf x') = \sum_i y_i Z_i$ only;
 //!   3. the prover sends $Y = F(\mathbf r_{\mathrm{high}})$, checked by $E(Y) =
 //!      (K/d)\,\mathrm{Tr}\_H(Y \sigma_{-1}(v)) = v_{\mathbf r}$ with $v = \psi$ of the
 //!      monomials of $\mathbf r_{\mathrm{low}}$ (Section 3.1, Theorem 2).
@@ -134,7 +132,7 @@ use hachi_co_sampling::uniform::uniform_mod_q;
 /// and its sumcheck that binds the partial evaluations was already ring-switching, with 2 field
 /// elements per round and $K - 1$ partial evaluations ([`crate::partials`]). Version 3 batched the
 /// same claims on the orbit of the point, with 3 field elements per round and $K$ partial
-/// evaluations. Version 2 had no such sumcheck, and accepted false values. It packed the values and
+/// evaluations. Version 2 had no such sumcheck. It packed the values and
 /// chose the schedule that minimises the proof's size (version 1 had a 64-bit word per value and
 /// stopped at the first iteration that did not shrink the witness).
 pub const VERSION: u64 = 6;
@@ -2533,7 +2531,7 @@ mod tests {
 
         /// The partial evaluations moved by $\boldsymbol\delta$ with $\sum_i \delta_i Z_i = 0$
         /// and $\sum_i \mathrm{mono}\_i \delta_i = 1$ ($\delta_2 = \delta_3 = 0$), and the
-        /// value they give, $f(\mathbf x) + 1$. They pass the paper's check: $\sum_i y_i Z_i$
+        /// value they give, $f(\mathbf x) + 1$. $\sum_i y_i Z_i$
         /// is unchanged. All $K$ of them; a proof sends the last $K - 1$.
         fn kernel_forgery(&self) -> (Vec<Ext<K>>, Ext<K>) {
             let field = self.pcs.ctx().field();
@@ -2571,8 +2569,8 @@ mod tests {
 
     #[test]
     fn partials_moved_along_the_trace_kernel_are_rejected() {
-        // The forgery that version 2 accepted with 0, 1 and 2 iterations: partial evaluations
-        // moved along the kernel of the paper's check sum_i y_i Z_i = f'(x'), the value moved
+        // With 0, 1 and 2 iterations: partial evaluations moved along the kernel of
+        // sum_i y_i Z_i = f'(x'), the value moved
         // with them, and the rest of the proof made honestly. The batching sumcheck, run
         // honestly from there, sums to the batched rows of the true partial evaluations, not
         // of the moved ones, so the verifier ends on a false claim.

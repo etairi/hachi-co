@@ -37,9 +37,7 @@
 //!    `reduce_prove`) binds the $y_i$ to the committed next witness by ring-switching, and
 //!    leaves $\hat w(\mathbf r) =$ `packed_eval` at its point $\mathbf r$.
 //!    **This deviates from Section 4.5**, which proves only $(K/d)\,\mathrm{Tr}\_H(p') = \sum_i
-//!    y_i Z_i$ (step 4 below at $\mathbf a_0$). That single $\mathbb F_{q^K}$ equation does not
-//!    determine the $y_i$: a prover could shift them along its kernel and, with the l-trick on
-//!    the last sumcheck round, move $y'$ with them (`crate::partials` and the reduction tests).
+//!    y_i Z_i$ (step 4 below at $\mathbf a_0$).
 //!    The batching binds every $y_i$ instead: it proves a claim on each row of their coordinates.
 //! 3. Split $\mathbf r = (\mathbf a_r, \mathbf a_m, \mathbf a_e)$ along (chunk, element,
 //!    position in $\psi$). Then $b'_i = \widetilde{eq}(i, \mathbf a_r)$ and $a'_j =
@@ -1095,11 +1093,9 @@ mod tests {
 
     #[test]
     fn partials_shifted_along_the_reduction_kernel_are_rejected() {
-        // The Section 4.5 forgery that the pre-fix reduction accepted: shift the K partial
-        // evaluations by a delta in the joint kernel of the two old checks -- sum_i delta_i Z_i
-        // = 0 (the packed value f''(a0) at the sumcheck point) and sum_i eq(i, a1) delta_i = 0
-        // (the value, Eq. (24)) -- keeping the honest batching rounds, packed value and next
-        // target. The old verifier checked only those two combinations and accepted. The fixed
+        // Shift the K partial evaluations by a delta with sum_i delta_i Z_i = 0 (the packed
+        // value f''(a0) at the sumcheck point) and sum_i eq(i, a1) delta_i = 0 (the value,
+        // Eq. (24)), keeping the honest batching rounds, packed value and next target. The
         // verifier runs the batching sumcheck on the shifted partials, whose rows (hence the
         // running claim) differ, and rejects.
         let (ctx, params, witness, claim) = honest_instance();
@@ -1160,8 +1156,7 @@ mod tests {
         for i in 0..K {
             assert_eq!(forged_ys[i], field.add(&honest_ys[i], &delta[i]), "{i}");
         }
-        // The old reduction's two checks are blind to the shift: the value Eq. (24) and the
-        // packed value f''(a0) are both unchanged.
+        // The shift keeps the value Eq. (24) and the packed value f''(a0).
         assert_eq!(
             combined_value(&ctx, &forged_ys, a1),
             proof.final_eval,
@@ -1172,7 +1167,7 @@ mod tests {
             packed(&honest_ys),
             "the packed value is preserved"
         );
-        // The fixed verifier rejects: the batching sumcheck binds every partial evaluation.
+        // The verifier rejects: the batching sumcheck binds every partial evaluation.
         let verdict = verify(
             &ctx,
             0,
