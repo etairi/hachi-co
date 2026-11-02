@@ -8,7 +8,10 @@
 //! - the encodings round-trip and have the sizes of the formulas, recomputed here;
 //! - a commitment and an opening are randomized by their seeds and determined by them.
 //! - a masked witness needs an iteration, and the $\mathbb Z_q$ shortcut is refused.
-//! - vectors are not masked yet, which the tests state so that a change is noticed.
+//! - vectors are masked as the vector chains of Appendix A.2 (one chunk, $\mathbf b = (1)$,
+//!   $v = 1$): their openings verify at several lengths, ranks and heights, are randomized by the
+//!   seeds, carry the masks' value, which the verifier checks, and reject a false value, other
+//!   weights or another context.
 //! - proofs do not verify across hiding choices;
 //! - every altered word is rejected, and each masked value is checked by the verifier, and whatever
 //!   decodes re-encodes to the same words.
@@ -339,27 +342,193 @@ fn the_z_q_shortcut_is_refused() {
     ));
 }
 
+/// An honest inner-product opening of a vector of `len` elements.
+struct VectorOpening {
+    pcs: HachiPcs<K>,
+    com: hachi::Commitment,
+    len: usize,
+    weights: Vec<Ext<K>>,
+    value: Ext<K>,
+    proof: Proof<K>,
+}
+
+impl VectorOpening {
+    fn new(q: u64, choices: HachiChoices, len: usize, index: usize) -> Self {
+        let pcs = HachiPcs::<K>::new(q, choices).unwrap();
+        let field = pcs.ctx().field().clone();
+        let values = exts_mod(q, "s", index as u64, len);
+        let weights = exts_mod(q, "e", index as u64, len);
+        let (com, state) = pcs.commit_vector(&values, &seed(3, index)).unwrap();
+        let (value, proof) = pcs
+            .prove_inner_product(&state, &weights, &CONTEXT, &seed(4, index))
+            .unwrap();
+        let direct = values
+            .iter()
+            .zip(&weights)
+            .fold(field.zero(), |acc, (v, e)| {
+                field.add(&acc, &field.mul(v, e))
+            });
+        assert_eq!(value, direct, "the value");
+        Self {
+            pcs,
+            com,
+            len,
+            weights,
+            value,
+            proof,
+        }
+    }
+
+    fn verify(&self, proof: &Proof<K>) -> Result<(), VerifyError> {
+        self.pcs.verify_inner_product(
+            &self.com,
+            self.len,
+            &self.weights,
+            &self.value,
+            proof,
+            &CONTEXT,
+        )
+    }
+}
+
 #[test]
-fn vectors_are_not_masked_yet() {
-    // Hachi-Co's blinders wait for a design decision, and until then a vector is opened as without
-    // hiding. This pins that state: masked vectors must change this test.
+fn masked_vector_openings_verify() {
+    // Lengths: under one block of d/K = 4, exactly one block, 15 blocks padded to 16, exactly 16,
+    // and the lengths 1 + 12 d_b of Hachi-Co's blinders at l'' = 12 and d_b = 3 and 1.
+    let cases: [(u64, usize, usize, Option<usize>, usize); 9] = [
+        (Q, 1, 1, None, 1),
+        (Q, 1, 1, None, 4),
+        (Q, 1, 1, None, 60),
+        (Q, 1, 1, Some(2), 64),
+        (Q, 2, 1, None, 37),
+        (Q, 1, 2, None, 13),
+        (Q30, 1, 1, None, 37),
+        (Q30, 2, 2, Some(1), 60),
+        (Q63, 1, 1, Some(1), 13),
+    ];
+    for (index, (q, nu, n_a, iterations, len)) in cases.into_iter().enumerate() {
+        let o = VectorOpening::new(q, masked(nu, n_a, iterations), len, index);
+        let what = format!("q {q}, nu {nu}, n_A {n_a}, {iterations:?}, length {len}");
+        o.verify(&o.proof).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let layout = o.pcs.vector_layout(len).unwrap();
+        assert!(layout.masked && layout.r == 0, "{what}");
+        assert!(o.proof.mask_eval.is_some(), "{what}");
+        assert!(!o.proof.iterations.is_empty(), "{what}: sent in the clear");
+        let schedule = o.pcs.vector_schedule(len).unwrap();
+        assert_eq!(
+            o.proof.iterations.len(),
+            schedule.iterations.len(),
+            "{what}"
+        );
+        let words = o.pcs.proof_to_words(&o.proof);
+        assert_eq!(words.len(), expected_words(&o.pcs, &o.proof), "{what}");
+        assert_eq!(
+            words.len(),
+            o.pcs.vector_proof_words(len).unwrap(),
+            "{what}"
+        );
+        assert_eq!(o.pcs.proof_from_words(&words).unwrap(), o.proof, "{what}");
+        // A false value, other weights and another context.
+        let field = o.pcs.ctx().field();
+        let wrong = field.add(&o.value, &field.one());
+        assert!(
+            o.pcs
+                .verify_inner_product(&o.com, len, &o.weights, &wrong, &o.proof, &CONTEXT)
+                .is_err(),
+            "{what}"
+        );
+        let mut other = o.weights.clone();
+        other[0] = field.add(&other[0], &field.one());
+        assert!(
+            o.pcs
+                .verify_inner_product(&o.com, len, &other, &o.value, &o.proof, &CONTEXT)
+                .is_err(),
+            "{what}"
+        );
+        assert!(
+            o.pcs
+                .verify_inner_product(&o.com, len, &o.weights, &o.value, &o.proof, &[9u8; 32])
+                .is_err(),
+            "{what}"
+        );
+    }
+}
+
+#[test]
+fn vector_commitments_and_openings_are_randomized() {
     let pcs = HachiPcs::<K>::new(Q, masked(1, 1, None)).unwrap();
     let plain = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
-    let values = exts_mod(Q, "s", 0, 60);
-    let weights = exts_mod(Q, "e", 0, 60);
-    let (com, state) = pcs.commit_vector(&values, &seed(1, 0)).unwrap();
-    assert_eq!(com, plain.commit_vector(&values, &seed(1, 1)).unwrap().0);
-    assert!(!pcs.vector_layout(60).unwrap().masked);
-    let (value, proof) = pcs
-        .prove_inner_product(&state, &weights, &CONTEXT, &seed(2, 0))
-        .unwrap();
-    assert!(proof.mask_eval.is_none());
-    pcs.verify_inner_product(&com, 60, &weights, &value, &proof, &CONTEXT)
-        .unwrap();
+    let values = exts_mod(Q, "s", 30, 37);
+    let weights = exts_mod(Q, "e", 30, 37);
+    let (a, state) = pcs.commit_vector(&values, &seed(3, 0)).unwrap();
     assert_eq!(
-        pcs.proof_from_words(&pcs.proof_to_words(&proof)).unwrap(),
-        proof
+        a,
+        pcs.commit_vector(&values, &seed(3, 0)).unwrap().0,
+        "determined"
     );
+    assert_ne!(
+        a,
+        pcs.commit_vector(&values, &seed(3, 1)).unwrap().0,
+        "randomized"
+    );
+    assert_ne!(
+        a,
+        plain.commit_vector(&values, &seed(3, 0)).unwrap().0,
+        "masked"
+    );
+    let open = |s: &[u8; 32]| {
+        pcs.prove_inner_product(&state, &weights, &CONTEXT, s)
+            .unwrap()
+    };
+    assert_eq!(
+        open(&seed(4, 0)),
+        open(&seed(4, 0)),
+        "determined by the seed"
+    );
+    let ((value, p), (_, q)) = (open(&seed(4, 0)), open(&seed(4, 1)));
+    assert_ne!(p.iterations[0].v, q.iterations[0].v, "fresh masks");
+    for proof in [&p, &q] {
+        pcs.verify_inner_product(&a, 37, &weights, &value, proof, &CONTEXT)
+            .unwrap();
+    }
+}
+
+#[test]
+fn each_masked_value_of_a_vector_opening_is_checked() {
+    let o = VectorOpening::new(Q, masked(1, 1, Some(1)), 37, 40);
+    let (field, ring) = (o.pcs.ctx().field(), &o.pcs.ctx().ring);
+    let check = |proof: &Proof<K>, what: &str| {
+        let verdict = o.verify(proof);
+        assert!(
+            matches!(&verdict, Err(VerifyError::Check(m)) if m == "the trace of the masked claim"),
+            "{what}: {verdict:?}"
+        );
+    };
+    let mut p = o.proof.clone();
+    p.mask_eval = Some(field.add(&p.mask_eval.unwrap(), &field.one()));
+    check(&p, "y_m");
+    let mut p = o.proof.clone();
+    p.ring_value = ring.add(&p.ring_value, &ring.monomial(0)).unwrap();
+    check(&p, "Y*");
+    let mut p = o.proof.clone();
+    p.mask_eval = None;
+    assert!(matches!(o.verify(&p), Err(VerifyError::Malformed(_))));
+    // Y* moved along the kernel of the trace passes step 1 and fails in the iterations.
+    let mut p = o.proof.clone();
+    p.ring_value = ring.add(&p.ring_value, &ring.monomial(1)).unwrap();
+    assert!(o.verify(&p).is_err(), "Y* in the kernel of the trace");
+    // A vector proof without masks is refused by a verifier with hiding, and the other way round.
+    let plain = VectorOpening::new(
+        Q,
+        HachiChoices {
+            fixed_iterations: Some(1),
+            ..HachiChoices::toy(16)
+        },
+        37,
+        40,
+    );
+    assert!(o.verify(&plain.proof).is_err());
+    assert!(plain.verify(&o.proof).is_err());
 }
 
 #[test]
@@ -535,16 +704,29 @@ fn sha256_hex(words: &[u64]) -> String {
 
 #[test]
 fn outputs_are_pinned() {
+    // Regression values of this implementation. Version 6 left the opening of a polynomial over
+    // the field as it was: its pins of version 5 held before the version word moved.
     let o = Opening::new(Q, masked(1, 1, Some(2)), 8, 20);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
-    println!("{commitment} {proof}");
+    let v = VectorOpening::new(Q, masked(1, 1, Some(1)), 37, 21);
+    let vector_commitment = sha256_hex(&v.pcs.commitment_to_words(&v.com));
+    let vector_proof = sha256_hex(&v.pcs.proof_to_words(&v.proof));
+    println!("{commitment} {proof} {vector_commitment} {vector_proof}");
     assert_eq!(
         commitment,
-        "f729f60e311b57b4f9039fe96f03fb08fbb41691658f0a4d79f62fc732cf2cbc"
+        "206ee272e3358fe7bbc8c0c6def6f0442c2fc08e542594021688d52aebf15c26"
     );
     assert_eq!(
         proof,
-        "b598a27f5987657240c6f08493aede03fd194c9ecb88787c4980696f4d220d92"
+        "235a2d72468d87d13c95ca77e4345d6402f6255e3a0adcdc3fa57a8143f8c2df"
+    );
+    assert_eq!(
+        vector_commitment,
+        "afb30fd6f54cfeb87a8be627c6c70f291f5d5d5e62152246d422c9dbc3be3142"
+    );
+    assert_eq!(
+        vector_proof,
+        "adf7e6513b4f3adb073689bbf58ee9cfff147c34a8aa67076384bff09db97b2a"
     );
 }

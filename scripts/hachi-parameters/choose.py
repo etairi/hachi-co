@@ -3,16 +3,16 @@
 
 Inputs:
 - layouts.jsonl, from the ignored test `hachi_layouts` of crates/hachico/tests/hachi_parameters.rs: per secure preset,
-  object (the share polynomial <w~>_p over F_{q^k}, the blinders g0, g1, and the masked share polynomial) and
-  candidate choices (b, omega, n_A; n_B = n_D = 1; for the masked object also the height n_A0 of level 0 and the MLWE
-  rank nu of mlwe_ranks.txt), the automatic schedule and the proof's words;
+  object (the share polynomial <w~>_p over F_{q^k} and the blinders g0, g1, each without masks and with them, as the
+  objects masked, masked-g0 and masked-g1) and candidate choices (b, omega, n_A; n_B = n_D = 1; with masks also the
+  height n_A0 of level 0 and the MLWE rank nu of mlwe_ranks.txt), the automatic schedule and the proof's words;
 - thresholds.txt, from msis_thresholds.sage: the largest integer log2(beta) with infinity-norm Module-SIS at least
   115 / 128 bits hard, per modulus q and rank n d (lattice estimator 53da598, SIS.lattice).
 
 Output: crates/params/presets/hachi.json. Hachi-Co's base PCS is one Hachi instance, so one choice serves all three
-objects: per preset, among the choices where all three pass, the one with the smallest sum of proof words. With a
-masked share polynomial among them, that choice has the entry `hiding`. Without one, the preset keeps the choice
-without masks and has no such entry. The blinders are not masked yet, so their objects are the same either way.
+objects: per preset, among the choices where all three pass, the one with the smallest sum of proof words. A choice
+with masks masks all three objects, and any such choice beats one without masks: it has the entry `hiding`. Without
+one, the preset keeps the choice without masks and has no such entry.
 
 Binding instances per iteration j (Hachi, Lemma 7 and Lemma 8, with the ranges the range check enforces):
 - A: rank n_A d, norm 8 omega B_tau, B_tau = max|.| of the values tau balanced base-b digits represent
@@ -37,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 LAMBDA = 128
 PHI = 13
 OBJECTS = ("share", "g0", "g1")
+MASKED = {"masked": "share", "masked-g0": "g0", "masked-g1": "g1"}
 
 
 def representable(b, tau):
@@ -94,50 +95,42 @@ def main():
     thr = thresholds()
     rows = [json.loads(line) for line in layouts.read_text().splitlines() if line.startswith("{")]
     groups = defaultdict(dict)
-    masked = defaultdict(list)
+    masked = defaultdict(dict)
     for row in rows:
         key = (row["preset"], row["b"], row["omega"], row["n_a"])
-        if row["object"] == "masked":
-            masked[key].append(row)
+        if row["object"] in MASKED:
+            masked[key + (row["n_a0"],)][MASKED[row["object"]]] = row
         else:
             groups[key][row["object"]] = row
+    candidates = defaultdict(list)
+    for (preset, b, omega, n_a), objects in groups.items():
+        if len(objects) == len(OBJECTS) and not any(failure(objects[o], thr) for o in OBJECTS):
+            candidates[preset].append((1, b, omega, n_a, objects))
+    for (preset, b, omega, n_a, n_a0), objects in masked.items():
+        if len(objects) == len(OBJECTS) and not any(failure(objects[o], thr) for o in OBJECTS):
+            candidates[preset].append((0, b, omega, n_a, objects))
     presets = {}
-    best = {}
-    for (preset, b, omega, n_a), objects in sorted(groups.items()):
-        if len(objects) != len(OBJECTS) or any(failure(objects[o], thr) for o in ("g0", "g1")):
-            continue
-        # Fewer words win among the masked candidates, and any masked candidate beats an unmasked one.
-        shares = [(0, row) for row in masked[(preset, b, omega, n_a)] if not failure(row, thr)]
-        if not failure(objects["share"], thr):
-            shares.append((1, objects["share"]))
-        for unmasked, share in shares:
-            # With hiding on, every proof's header has one more word, the blinders' too.
-            header = 1 - unmasked
-            words = dict(
-                w=share["proof_words"],
-                g0=objects["g0"]["proof_words"] + header,
-                g1=objects["g1"]["proof_words"] + header,
-            )
-            key = (unmasked, sum(words.values()), n_a, b, omega, share.get("n_a0", 0))
-            if preset in best and key >= best[preset]:
-                continue
-            best[preset] = key
-            entry = dict(
-                b=b,
-                omega=omega,
-                n_a=n_a,
-                n_b=1,
-                n_d=1,
-                proof_words=words,
-                iterations=dict(
-                    w=len(share["schedule"]["iterations"]),
-                    g0=len(objects["g0"]["schedule"]["iterations"]),
-                    g1=len(objects["g1"]["schedule"]["iterations"]),
-                ),
-            )
-            if not unmasked:
-                entry["hiding"] = dict(nu=share["nu"], n_a=share["n_a0"], **{"lambda": LAMBDA, "phi": PHI})
-            presets[preset] = entry
+    for preset, found in sorted(candidates.items()):
+        # Any candidate with masks beats one without, then fewer words win.
+        def rank(c):
+            unmasked, b, omega, n_a, objects = c
+            words = sum(objects[o]["proof_words"] for o in OBJECTS)
+            return (unmasked, words, n_a, b, omega, objects["share"].get("n_a0", 0))
+        unmasked, b, omega, n_a, objects = min(found, key=rank)
+        entry = dict(
+            b=b,
+            omega=omega,
+            n_a=n_a,
+            n_b=1,
+            n_d=1,
+            proof_words=dict(w=objects["share"]["proof_words"], g0=objects["g0"]["proof_words"],
+                             g1=objects["g1"]["proof_words"]),
+            iterations={("w" if o == "share" else o): len(objects[o]["schedule"]["iterations"]) for o in OBJECTS},
+        )
+        if not unmasked:
+            share = objects["share"]
+            entry["hiding"] = dict(nu=share["nu"], n_a=share["n_a0"], **{"lambda": LAMBDA, "phi": PHI})
+        presets[preset] = entry
     names = sorted({row["preset"] for row in rows})
     missing = [name for name in names if name not in presets]
     print(json.dumps(dict(target_bits=LAMBDA, estimator_revision="53da5982597709ba0fdf94ea37a84d822310fd84",

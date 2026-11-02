@@ -22,11 +22,12 @@
 //!    sumcheck still passes, but the committed $g\_{1,1}$ opens to $0$, not to the solved value
 //!    (equal only if the claimed sum $a$ is $0$, probability about $q^{-k}$), and the verifier
 //!    rejects that opening;
-//! 2. open another vector that takes the solved value: that opening does not open the
-//!    commitment (with `ClearPcs`, its hash is not the commitment, which would be a SHA-256
-//!    collision; with Hachi, its final witness does not recompute the commitment, or, with an
-//!    iteration, its first sumcheck round fails under the verifier's coins), and the verifier
-//!    rejects the same opening;
+//! 2. open another vector that takes the solved value. That opening does not open the commitment,
+//!    and the verifier rejects the same opening. With `ClearPcs`, its hash is not the commitment,
+//!    which would be a SHA-256 collision. With published Hachi, its final witness does not
+//!    recompute the commitment, or, with an iteration, its first sumcheck round fails under the
+//!    verifier's coins. With masks, its $Y^*$ was formed with another challenge $x^*$ and fails the
+//!    masked trace check.
 //! 3. commit to that vector instead: the commitment is absorbed before the coins, so every coin
 //!    changes. Kept as they were, the round messages fail the first round check of $H\_1$ (its
 //!    claimed sum $a$ depends on $\alpha$ and $\tau\_1$); forged again for the new coins, they
@@ -35,8 +36,8 @@
 //!    in the random-oracle model rules out (except with negligible probability per query).
 //!
 //! The tests run each variant at toy-n1 with Fiat-Shamir, against `ClearPcs` and against Hachi
-//! (`HachiBase` with its default, automatic schedule, and with one iteration), and check the
-//! verifier's reason. That the strategy fails follows from the binding of the base PCS and the
+//! (`HachiBase` with its default choices, with and without masks, with the automatic schedule and
+//! with one iteration), and check the verifier's reason. That the strategy fails follows from the binding of the base PCS and the
 //! order of the transcript; it is evidence, not a proof of soundness (see the crate
 //! documentation, "What an accepted proof means"). Hachi at the toy parameters is not binding
 //! in any cryptographic sense (its matrices are far too small for Module-SIS): what the tests
@@ -46,8 +47,8 @@ mod common;
 
 use common::{K, clear_pcs, fresh_context, hachi_base, random_instance, seed, without_pcs};
 use hachi_co::{
-    BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalProof, PcsWords, ProofError, VerifyError,
-    absorb_statement, commit, verify,
+    BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalProof, HachiBase, HachiChoices, PcsWords,
+    ProofError, VerifyError, absorb_statement, commit, verify,
 };
 use hachi_co_core::{Challenger, Ext, FsChallenger, Poly, PrgRandomness};
 use hachi_co_mpc::Loopback;
@@ -57,7 +58,9 @@ use hachi_co_sumcheck::{
     blinder_weights, claimed_sum, eq_table, opening_label,
 };
 
-/// The base PCS's seed for the forger's calls: `ClearPcs` and the default `HachiBase` ignore it.
+/// The base PCS's seed for the forger's calls. `ClearPcs` and Hachi without masks ignore it.
+/// Hachi with masks uses it, and the forger may reuse it: these tests are about soundness, not
+/// hiding.
 const SEED: [u8; 32] = [0; 32];
 
 /// The forged proof for given commitments, without openings, and what the forger learns while
@@ -198,14 +201,18 @@ fn open_all<P: BasePcs<K>>(
 /// The verifier's verdict is a rejected opening of `poly` of party 1 whose reason contains
 /// `reason`.
 fn rejected_opening(result: Result<(), VerifyError>, poly: ClaimedPoly, reason: &str) -> bool {
-    matches!(
-        result,
+    let ok = matches!(
+        &result,
         Err(VerifyError::Sumcheck(hachi_co_sumcheck::VerifyError::Opening {
             party: 1,
             poly: got,
             reason: why,
-        })) if got == poly && why.contains(reason)
-    )
+        })) if *got == poly && why.contains(reason)
+    );
+    if !ok {
+        eprintln!("expected an opening of {poly:?} rejected for {reason:?}, got {result:?}");
+    }
+    ok
 }
 
 /// The verifier's reasons for the two kinds of rejected openings, which depend on the base PCS:
@@ -316,29 +323,65 @@ fn the_forgery_is_rejected_with_clear_pcs() {
     forgery_is_rejected(&ctx, &clear_pcs(&ctx), &reasons);
 }
 
+/// Hachi with the default choices of toy-n1, which mask (`masks`) or not (the published scheme),
+/// and the given number of iterations.
+fn hachi(ctx: &Context<K>, iterations: Option<usize>, masks: bool) -> HachiBase<K> {
+    let base = hachi_base(ctx, "toy-n1", 9, iterations);
+    if masks {
+        return base;
+    }
+    let choices = HachiChoices {
+        hiding: None,
+        ..base.choices().clone()
+    };
+    HachiBase::new(ctx.q(), choices).unwrap()
+}
+
 #[test]
 fn the_forgery_is_rejected_with_hachi() {
     let ctx = fresh_context("toy-n1", 9);
-    let pcs = hachi_base(&ctx, "toy-n1", 9, None);
-    // The forged openings are the blinder g1's, whose automatic schedule runs no iteration here
-    // (its proof is smallest in the clear): the final witness is the whole vector.
+    // The default choices mask, so every opening runs at least one iteration. The honest opening
+    // of the committed g1 does not take the solved value, so its masked trace check fails. The
+    // other vector's proof was made on the transcript of another commitment, so its Y* was formed
+    // with another challenge x*, and the same check fails under the verifier's x*.
     let reasons = Reasons {
-        wrong_value: "the trace of the inner product",
-        other_polynomial: "the final witness does not open the commitment",
+        wrong_value: "the trace of the masked claim",
+        other_polynomial: "the trace of the masked claim",
     };
-    forgery_is_rejected(&ctx, &pcs, &reasons);
+    forgery_is_rejected(&ctx, &hachi(&ctx, None, true), &reasons);
 }
 
 #[test]
 fn the_forgery_is_rejected_with_hachi_after_an_iteration() {
     let ctx = fresh_context("toy-n1", 9);
-    let pcs = hachi_base(&ctx, "toy-n1", 9, Some(1));
+    let reasons = Reasons {
+        wrong_value: "the trace of the masked claim",
+        other_polynomial: "the trace of the masked claim",
+    };
+    forgery_is_rejected(&ctx, &hachi(&ctx, Some(1), true), &reasons);
+}
+
+#[test]
+fn the_forgery_is_rejected_with_published_hachi() {
+    let ctx = fresh_context("toy-n1", 9);
+    // Without masks the forged openings, the blinder g1's, run no iteration in the automatic
+    // schedule (the proof is smallest in the clear): the final witness is the whole vector.
+    let reasons = Reasons {
+        wrong_value: "the trace of the inner product",
+        other_polynomial: "the final witness does not open the commitment",
+    };
+    forgery_is_rejected(&ctx, &hachi(&ctx, None, false), &reasons);
+}
+
+#[test]
+fn the_forgery_is_rejected_with_published_hachi_after_an_iteration() {
+    let ctx = fresh_context("toy-n1", 9);
     // With an iteration, the other vector's proof was made on the transcript of another
     // commitment: under the verifier's coins, the first round of the iteration's linear sumcheck
-    // fails (its claimed sum depends on the coins; the range sumcheck's is 0 for any coins).
+    // fails (its claimed sum depends on the coins, the range sumcheck's is 0 for any coins).
     let reasons = Reasons {
         wrong_value: "the trace of the inner product",
         other_polynomial: "linear sumcheck, round 1",
     };
-    forgery_is_rejected(&ctx, &pcs, &reasons);
+    forgery_is_rejected(&ctx, &hachi(&ctx, Some(1), false), &reasons);
 }

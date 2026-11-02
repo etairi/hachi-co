@@ -2,8 +2,9 @@
 
 `crates/params/presets/hachi.json` gives, for each secure preset of Hachi-Co, one choice of Hachi's decomposition
 base b, challenge radius ω and matrix height n_A (n_B = n_D = 1), and where one exists the masks of the share
-polynomial: the MLWE rank ν and the height of level 0. It is an estimate of the Module-SIS instances that Hachi's
-iterations use and of the MLWE instance of its commitments, not a proof. The blinders are not masked yet.
+polynomial and the blinders: the MLWE rank ν and the height of level 0, shared by the three objects. It is an
+estimate of the Module-SIS instances that Hachi's iterations use and of the MLWE instance of its commitments, not a
+proof.
 
 Steps, from the repository root:
 

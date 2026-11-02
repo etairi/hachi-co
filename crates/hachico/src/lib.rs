@@ -52,18 +52,21 @@
 //!   component and of the known forgery; they do not prove soundness.
 //! - **The base PCS.** The guarantee is only as good as the base PCS passed to [`verify`]:
 //!   `ClearPcs` is binding (SHA-256 collision resistance) and sound, but neither succinct nor
-//!   hiding. [`HachiBase`] is not hiding either: its default choices mask the share polynomial,
-//!   but the blinders are not masked yet. [`HachiBase::setup`] uses insecure test parameters.
+//!   hiding. [`HachiBase`] masks the share polynomial and the blinders with its default choices
+//!   (Appendix A.2 of the draft), but [`HachiBase::setup`] uses insecure test parameters.
 //! - **Fiat-Shamir** is in the random-oracle model (a SHAKE128 transcript,
 //!   `hachi-co-transcript`), as accepted for the project (user, 2026-10-17). The digest of the
 //!   base PCS's parameters ([`BasePcs::params_digest`]) is part of the statement
 //!   ([`absorb_statement`]), and the base PCS's commitments are absorbed before the sumcheck's
 //!   coins.
-//! - **Not hiding yet.** $\mathbf u$ and the final values are masked as the draft prescribes
+//! - **Hiding.** $\mathbf u$ and the final values are masked as the draft prescribes
 //!   ($\boldsymbol\rho^u$ and the pad $\rho^w$), and its theorem covers several adaptive
-//!   evaluations for a base PCS with evaluation hiding (`t-hiding.tex`:19, 297). No base PCS here
-//!   has it yet: `ClearPcs` reveals the polynomials themselves, and [`HachiBase`] masks the share
-//!   polynomial but not the blinders.
+//!   evaluations for a base PCS with evaluation hiding (`t-hiding.tex`:19, 297). `ClearPcs`
+//!   reveals the polynomials themselves. [`HachiBase`] with masks commits and opens all three
+//!   polynomials of each prover as Appendix A.2 of the draft specifies. That appendix proves
+//!   hiding and evaluation hiding for this scheme, and its Corollary 17 supplies the hypothesis
+//!   of the theorem. The code is tested, not proven, to follow it, and the parameters are
+//!   estimates.
 //!
 //! # Fiat-Shamir
 //!

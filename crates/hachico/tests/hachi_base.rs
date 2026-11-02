@@ -13,7 +13,7 @@
 //! - tampered base-PCS items are rejected: changed, truncated or extended words of every
 //!   commitment and every opening, openings or commitments swapped between parties, and an
 //!   opening of the right polynomial made under another context;
-//! - the default choices mask the share polynomial (`HachiChoices::hiding`), so the tests above run
+//! - the default choices mask every polynomial (`HachiChoices::hiding`), so the tests above run
 //!   with them. Honest runs without masks at n = 1, 2, 3 (automatic schedule) and with a larger
 //!   MLWE rank at n = 2 (one iteration) pass the same checks, and the proof is bound to the hiding
 //!   choices.

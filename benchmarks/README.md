@@ -20,12 +20,16 @@ quiet, so read the times as indicative. Runs across real machines come later.
   2026-10-30, with one core per party and proof format version 3, stays in `local-2026-10-30.jsonl`.
 - **Masks.** These grids predate the masks of hiding Hachi, so the commands below no longer reproduce them: from proof
   format version 5 on, `hachi.json` sets masks at 24 of the 26 presets, and the `bench-*` presets over the field take
-  the toy masks. Commit `b7a9477` repeats the grids. `local-2026-11-01.jsonl` has one run with masks, of
-  `secure-l16-n2-a8` with n = 2, against the line of the same preset here: Eval 79.7 s against 33.6 s, Verify 1.71 s
-  against 1.04 s, the proof 992,088 bytes against 989,976, and the larger party's peak 8.5 GiB against 3.0 GiB. An
-  earlier run of the same preset took 64.9 s for Eval, so read that time as a rough one. The parameters differ too
-  (ω = 24 against 32, height 11 at the first level), and vector commitments are not masked yet, so this is not yet the
-  cost of a hiding proof.
+  the toy masks. Commit `b7a9477` repeats the grids. Runs of `secure-l16-n2-a8` with n = 2 with masks, against the
+  line of the same preset here (Eval 33.6 s, Verify 1.04 s, the proof 989,976 bytes, the larger party's peak 3.0 GiB):
+  - `local-2026-11-01.jsonl`: the share polynomial masked and the blinders not (proof format 5). Eval 79.7 s, Verify
+    1.71 s, the proof 992,088 bytes, peak 8.5 GiB. An earlier run took 64.9 s for Eval.
+  - `local-2026-11-02.jsonl`: every polynomial masked, as in the draft's protocol (proof format 6, with
+    the presets chosen again for masked blinders). Eval 59.4 s, Verify 1.23 s, the proof 2,044,520 bytes, peak 5.2 GiB.
+    This is the size of a hiding proof at this preset, 2.07 times the unmasked one.
+
+  The parameters of the first run differ from the second (b = 8 and height 11 at the first level, against b = 16 and
+  height 8). One run each, on a laptop that was not quiet.
 
 Commands, from the repository root. The seeds are SHA-256 of the tag `hachi-co/bench` and an index, so each line
 reproduces its instance:

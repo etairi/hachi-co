@@ -36,13 +36,12 @@
 //!   \rceil$ bits per digit of the final witness, with exact word counts (`pcs`,
 //!   "Encodings").
 //! - **Masks**, optional ([`HachiChoices::hiding`], `hachi-pcs.tex`, Appendix A.2, after Jindo
-//!   Section 2.4) for multilinear polynomials over the field: randomized commitments with a
-//!   masking row per chunk, a first claim mixed with the masks by a challenge, and a first
-//!   iteration masked by discrete Gaussians with rejection sampling (`pcs`, "Hiding").
+//!   Section 2.4) for multilinear polynomials over the field and for vectors (the vector chains of
+//!   that appendix): randomized commitments with a masking row per chunk, a first claim mixed
+//!   with the masks by a challenge, and a first iteration masked by discrete Gaussians with
+//!   rejection sampling (`pcs`, "Hiding").
 //!
 //! **Not implemented:**
-//! - **Hiding for vectors.** The vectors of an inner-product opening are not masked yet, so
-//!   Hachi-Co's blinders, and with them its proofs, are not hiding (`pcs`, "Hiding").
 //! - **Secure parameters.** [`HachiChoices::toy`] and [`HachiChoices::toy_hiding`] are test
 //!   parameters.
 //!

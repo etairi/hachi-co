@@ -16,15 +16,15 @@
 //! toy choices with masks. With [`PadRule::Residues`] it uses [`HachiChoices::toy`], since that
 //! pad opens through the $\mathbb Z_q$ shortcut, which is not hiding. They are **insecure** (test
 //! parameters, like the toy presets of Hachi-Co). Each opening runs the number of iterations whose
-//! proof is smallest (`hachi::pcs`, "Schedule"): at the toy presets, two or three for the share
-//! polynomial and none for the blinders, whose proofs are smallest in the clear.
+//! proof is smallest (`hachi::pcs`, "Schedule"), and with masks at least one: at the toy presets,
+//! two or three for the share polynomial, and for the blinders one with masks and none without,
+//! as their unmasked proofs are smallest in the clear.
 //! [`HachiBase::new`] takes any choices, for example [`HachiChoices::fixed_iterations`] to fix the
 //! number of iterations.
 //!
-//! **Not hiding yet.** The share polynomial is masked as Appendix A.2 of the draft specifies
-//! (`hachi::pcs`, "Hiding"). The blinders are not: they are opened as without hiding, so with no
-//! iteration an opening sends the blinder itself. So Hachi-Co's proofs are not hiding yet, and
-//! masking the blinders waits for the authors' choice between separate and merged commitments.
+//! **Hiding.** With masks, the share polynomial and the blinders are each committed and opened as
+//! Appendix A.2 of the draft specifies (`hachi::pcs`, "Hiding"): three commitments and three
+//! openings per prover, as the draft's protocol has them.
 //!
 //! [`HachiBase::new`] with `hiding: None` gives the published scheme. The provers draw the seeds of
 //! the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).

@@ -71,8 +71,9 @@ fn schedule_json(s: &Schedule, delta: usize) -> String {
 }
 
 /// One line per secure preset, object (the share polynomial over the field, the two blinder
-/// vectors) and candidate: the input of `scripts/hachi-parameters/choose.py`. The share polynomial
-/// has one line without masks and one per height of the masked level, as the object `"masked"`.
+/// vectors) and candidate: the input of `scripts/hachi-parameters/choose.py`. Each object has one
+/// line without masks and one per height of the masked level, as the objects `"masked"` (the
+/// share polynomial), `"masked-g0"` and `"masked-g1"`.
 #[test]
 #[ignore = "a probe: run with --ignored --nocapture"]
 fn hachi_layouts() {
@@ -158,6 +159,21 @@ fn hachi_layouts() {
                             preset.name,
                             schedule_json(&schedule, delta)
                         );
+                        // The blinders, masked by the same choices.
+                        for (object, len) in &lengths[1..] {
+                            let Ok(schedule) = pcs.vector_schedule(*len) else {
+                                continue;
+                            };
+                            let words = pcs.vector_proof_words(*len).unwrap();
+                            println!(
+                                "{{\"preset\":\"{}\",\"q\":{q},\"d\":{d},\"b\":{b},\
+                                 \"omega\":{omega},\"n_a\":{n_a},\"object\":\"masked-{object}\",\
+                                 \"nu\":{nu},\"n_a0\":{n_a0},\"proof_words\":{words},\
+                                 \"schedule\":{}}}",
+                                preset.name,
+                                schedule_json(&schedule, delta)
+                            );
+                        }
                     }
                 }
             }
@@ -214,6 +230,15 @@ fn every_secure_preset_has_hachi_parameters_of_the_recorded_sizes() {
             entry.iterations.w,
             "{name}"
         );
+        for (len, iterations) in [(len0, entry.iterations.g0), (len1, entry.iterations.g1)] {
+            let schedule = pcs.vector_schedule(len).unwrap();
+            assert_eq!(schedule.iterations.len(), iterations, "{name}");
+            // With masks, no object is sent in the clear.
+            if entry.hiding.is_some() {
+                assert!(iterations >= 1, "{name}");
+                assert!(entry.iterations.w >= 1, "{name}");
+            }
+        }
     }
 }
 
