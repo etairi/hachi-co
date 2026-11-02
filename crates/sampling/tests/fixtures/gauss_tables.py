@@ -10,11 +10,11 @@ Pr[K = i] proportional to rho(i) = exp(-(num/den) i^2), that is of standard devi
 1/(2 sigma^2) = num/den (not the width s = sigma sqrt(2 pi) of GPV and of Hwang-Seo-Song):
 
     name             num/den   sigma   bits   use
-    GAUSS_SIGMA_1    1/2       1       128    commitment randomness of hiding Hachi
-    GAUSS_SIGMA_2    1/8       2       128    (HachiChoices::hiding, docs/hachi-hiding.md 6.4)
+    GAUSS_SIGMA_1    1/2       1       128
+    GAUSS_SIGMA_2    1/8       2       128
     GAUSS_SIGMA_4    1/32      4       128
     GAUSS_SIGMA_8    1/128     8       128
-    GAUSS_SIGMA_16   1/512     16      128
+    GAUSS_SIGMA_16   1/512     16      128    the base of gauss::WideGaussian, the masks of hiding Hachi
 
 Entry j of a table is round(2^128 Pr[K > j]); a table keeps the entries that do not round to 0.
 A sampler draws V uniform in [0, 2^128) and sets K = #{j : V < entry j}. The entries are

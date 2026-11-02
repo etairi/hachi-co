@@ -7,6 +7,10 @@
 //!   within the bound;
 //! - a try reads three words and follows the documented rule, including the repetition;
 //! - the repetition cap and an unsupported width are errors.
+//! - wide samples follow $D_{\mathbb Z,\sigma}$ itself (chi-square against the exact probabilities
+//!   for small $k$), and have the moments of a Gaussian at the sizes of Hachi's masks.
+//! - [`gauss::bernoulli_exp`] has the right probability, for $\gamma$ below and above 1 and for
+//!   large denominators.
 //!
 //! The tables themselves are checked against $D_{\mathbb Z,\sigma}$ and against Sage's sampler in
 //! `tests/fixtures/gauss_check.sage`.
@@ -181,4 +185,135 @@ fn the_repetition_cap_is_an_error() {
         Err(Error::RejectionLimit(MAX_TRIES))
     );
     assert_eq!(rng.1, 3 * MAX_TRIES as usize);
+}
+
+/// $\sum_x \rho_\sigma(x)$ and the moments of $D_{\mathbb Z,\sigma}$ over $\lvert x \rvert \le 14
+/// \sigma$: `(pmf, second moment, fourth moment)`, the pmf from $-B$ to $B$.
+fn exact(sigma: f64) -> (Vec<f64>, f64, f64) {
+    let bound = (14.0 * sigma) as i64;
+    let rho = |x: i64| (-(x as f64 * x as f64) / (2.0 * sigma * sigma)).exp();
+    let total: f64 = (-bound..=bound).map(rho).sum();
+    let pmf: Vec<f64> = (-bound..=bound).map(|x| rho(x) / total).collect();
+    let moment = |e: i32| -> f64 {
+        (-bound..=bound)
+            .zip(&pmf)
+            .map(|(x, p)| (x as f64).powi(e) * p)
+            .sum()
+    };
+    (pmf.clone(), moment(2), moment(4))
+}
+
+#[test]
+fn wide_samples_follow_the_exact_distribution() {
+    // Against D_{Z,sigma} itself, computed here, and not against the construction: the first
+    // k is the table's width, and the others exercise steps 1 and 2 of the construction.
+    let n = 400_000;
+    for k in [1u64, 2, 3, 5, 8] {
+        let sigma = 16 * k;
+        let wide = gauss::WideGaussian::new(sigma).unwrap();
+        assert_eq!(wide.sigma(), sigma);
+        let mut prg = ShakePrg::new(&[k as u8; 32], b"wide-test", k);
+        let mut xs = vec![0i64; n];
+        wide.fill(&mut prg, &mut xs).unwrap();
+        assert!(xs.iter().all(|x| x.unsigned_abs() < wide.bound()), "{k}");
+        let (pmf, second, fourth) = exact(sigma as f64);
+        let bound = (pmf.len() / 2) as i64;
+        // Bins of width sigma / 2 up to 3.5 sigma, and the two tails: 16 bins.
+        let width = (sigma / 2) as i64;
+        let c = 7i64;
+        let bin = |x: i64| (x.div_euclid(width).clamp(-c - 1, c) + c + 1) as usize;
+        let mut expected = vec![0.0; (2 * c + 2) as usize];
+        for (x, p) in (-bound..=bound).zip(&pmf) {
+            expected[bin(x)] += n as f64 * p;
+        }
+        let mut observed = vec![0u64; expected.len()];
+        for x in &xs {
+            observed[bin(*x)] += 1;
+        }
+        assert!(expected.iter().all(|e| *e >= 5.0), "{k}: bins");
+        assert_chi_square(&format!("sigma {sigma}"), &observed, &expected);
+        let mean_sq = xs.iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64;
+        let se = ((fourth - second * second) / n as f64).sqrt();
+        assert!((mean_sq - second).abs() < 5.0 * se, "{k}: E[x^2] {mean_sq}");
+    }
+}
+
+#[test]
+fn wide_samples_at_mask_sizes_have_the_moments_of_a_gaussian() {
+    // At the sizes of Hachi's masks the pmf cannot be listed, but sigma is far above the smoothing
+    // parameter of Z, so the moments are those of the continuous normal: mean 0, E[x^2] = sigma^2,
+    // E[x^4] = 3 sigma^4, E[|x|] = sigma sqrt(2 / pi). Tested on x / sigma, within 5 standard errors.
+    let n = 400_000;
+    for sigma in [1u64 << 20, 1 << 36, (1 << 40) + 16, gauss::MAX_WIDE_SIGMA] {
+        let wide = gauss::WideGaussian::new(sigma).unwrap();
+        let mut prg = ShakePrg::new(&[9u8; 32], b"wide-moments", sigma);
+        let mut xs = vec![0i64; n];
+        wide.fill(&mut prg, &mut xs).unwrap();
+        let unit: Vec<f64> = xs.iter().map(|x| *x as f64 / sigma as f64).collect();
+        assert!(xs.iter().all(|x| x.unsigned_abs() < wide.bound()));
+        let mean = |f: &dyn Fn(f64) -> f64| unit.iter().map(|x| f(*x)).sum::<f64>() / n as f64;
+        let check = |name: &str, got: f64, want: f64, variance: f64| {
+            let se = (variance / n as f64).sqrt();
+            assert!(
+                (got - want).abs() < 5.0 * se,
+                "{sigma}: {name} {got}, {want}"
+            );
+        };
+        check("E[x]", mean(&|x| x), 0.0, 1.0);
+        check("E[x^2]", mean(&|x| x * x), 1.0, 2.0);
+        check("E[x^4]", mean(&|x| x.powi(4)), 3.0, 96.0);
+        let abs_mean = (2.0 / core::f64::consts::PI).sqrt();
+        check(
+            "E[|x|]",
+            mean(&|x| x.abs()),
+            abs_mean,
+            1.0 - abs_mean * abs_mean,
+        );
+    }
+}
+
+#[test]
+fn bernoulli_exp_has_the_right_probability() {
+    let n: u32 = 400_000;
+    for (num, den) in [
+        (1u128, 1000u128),
+        (1, 3),
+        (3, 4),
+        (1, 1),
+        (5, 2),
+        (9, 2),
+        (1 << 100, 3 << 99),
+        ((1 << 118) + 1, 1 << 118),
+    ] {
+        let mut prg = ShakePrg::new(&[3u8; 32], b"bernoulli-exp", num as u64 ^ den as u64);
+        let hits = (0..n)
+            .filter(|_| gauss::bernoulli_exp(&mut prg, num, den).unwrap())
+            .count();
+        let p = (-(num as f64 / den as f64)).exp();
+        let se = (p * (1.0 - p) / f64::from(n)).sqrt();
+        let got = hits as f64 / f64::from(n);
+        assert!((got - p).abs() < 5.0 * se, "{num}/{den}: {got}, exp {p}");
+    }
+    let mut prg = ShakePrg::new(&[3u8; 32], b"bernoulli-exp", 0);
+    for _ in 0..1000 {
+        assert!(gauss::bernoulli_exp(&mut prg, 0, 7).unwrap(), "exp(0) = 1");
+    }
+    assert!(matches!(
+        gauss::bernoulli_exp(&mut prg, 1, 0),
+        Err(Error::InvalidParameter(_))
+    ));
+}
+
+#[test]
+fn unusable_widths_are_refused() {
+    for sigma in [0, 1, 15, 17, 24 + 1, gauss::MAX_WIDE_SIGMA + 16] {
+        assert!(
+            matches!(
+                gauss::WideGaussian::new(sigma),
+                Err(Error::InvalidParameter(_))
+            ),
+            "{sigma}"
+        );
+    }
+    assert_eq!(gauss::WideGaussian::new(16).unwrap().sigma(), 16);
 }

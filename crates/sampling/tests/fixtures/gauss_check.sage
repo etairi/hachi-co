@@ -10,6 +10,12 @@
 # 2. Convention. Draws from Sage's DiscreteGaussianDistributionIntegerSampler(sigma) (sigma is the
 #    standard deviation there too) and a chi-square test of those draws against the table's
 #    probabilities, bins of expected count >= 5, tail bins merged.
+# 3. Wide. The distance of `gauss::WideGaussian` from D_{Z,16k}. A try returns x with probability
+#    proportional to Pr[K] exp(-y (y + 2 k K) / (512 k^2)), with K = floor(|x| / k) and
+#    y = |x| mod k, so Pr[x] / D(x) = r(K) / E[r], with r(K) the ratio of the table's Pr[K] to the
+#    exact one. The sum runs over the blocks K <= 400, that is 25 sigma (the rest is below 2^-400),
+#    at several k and as k -> infinity. At k <= 4 the distance is also computed point by point from
+#    the algorithm, which must agree.
 import re
 from pathlib import Path
 
@@ -74,3 +80,51 @@ for sigma, t in sorted(tables.items()):
     p = chi2dist.sf(float(chi2), dof)
     print(f"          Sage's sampler, {n} draws: {outside} outside the support; chi-square {float(chi2):.1f} "
           f"on {dof} degrees of freedom, p = {p:.3f}")
+
+# 3. The wide sampler, from the table of sigma = 16.
+t = tables[16]
+full = [Integer(2) ** 128] + t + [0]
+pk = [R(full[i] - full[i + 1]) / R(2) ** 128 for i in range(len(t) + 1)]
+CUT = 400
+rho0 = lambda i: exp(-R(i) ** 2 / 512)
+half = sum(rho0(i) for i in range(1200))
+ratio = [pk[K] * half / rho0(K) if K < len(pk) else R(0) for K in range(CUT + 1)]
+
+
+def distance(blocks):
+    mean = sum(r * d for r, d in zip(ratio, blocks))
+    return sum(d * abs(r / mean - 1) for r, d in zip(ratio, blocks)) / 2
+
+
+def blocks_at(k):
+    s2 = 512 * R(k) ** 2
+    masses = [sum((1 if z == 0 else 2) * exp(-R(z) ** 2 / s2) for z in range(K * k, (K + 1) * k))
+              for K in range(CUT + 1)]
+    total = sum(masses)
+    return [m / total for m in masses]
+
+
+def blocks_in_the_limit():
+    c = 16 * sqrt(R(2))
+    e = [(R(K) / c).erf() for K in range(CUT + 2)]
+    return [e[K + 1] - e[K] for K in range(CUT + 1)]
+
+
+def point_by_point(k):
+    s2 = 512 * R(k) ** 2
+    span = (CUT + 1) * k
+    weight = [(pk[z // k] if z // k < len(pk) else R(0))
+              * exp(-R((z % k) * (z % k + 2 * k * (z // k))) / (512 * k ** 2)) for z in range(span)]
+    exact = [exp(-R(z) ** 2 / s2) for z in range(span)]
+    wnorm = 2 * sum(weight) - weight[0]
+    enorm = 2 * sum(exact) - exact[0]
+    return sum((1 if z == 0 else 2) * abs(weight[z] / wnorm - exact[z] / enorm) for z in range(span)) / 2
+
+
+print("wide, statistical distance per sample:")
+for k in [1, 2, 3, 4, 8, 16, 64, 256, 1024]:
+    line = f"  k = {k}: 2^{float(log(distance(blocks_at(k)), 2)):.2f}"
+    if k <= 4:
+        line += f", point by point 2^{float(log(point_by_point(k), 2)):.2f}"
+    print(line)
+print(f"  k -> infinity: 2^{float(log(distance(blocks_in_the_limit()), 2)):.2f}")
