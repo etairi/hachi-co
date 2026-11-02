@@ -28,13 +28,22 @@
 //!   3.1 directly: no partial evaluations and no batching sumcheck, only $Y$. Such a polynomial
 //!   has $K$ times the residues of one over $\mathbb Z_q$ in as many variables.
 //!
+//! **Bit order, a deviation from `hachi-pcs.tex`.** An index here has the first variable as its
+//! most significant bit, and the appendix's `nat` and `bits` put it in the least significant one.
+//! So the message of a commitment is the appendix's with the bits of the chunk, element and $\psi$
+//! indices reversed, and the weights $\mathbf b$, $\mathbf a$ and $v$ of an opening follow the
+//! same order. Prover and verifier agree, and the scheme is the appendix's up to that relabelling
+//! (`tests/fixtures/check_masked_spec.py` checks both on its shared instance).
+//!
 //! Then the iterations of the [`Schedule`] ([`crate::iteration`]) and the final step, which
 //! sends the last witness in the clear (paper, Section 4.4): the verifier recomputes its
 //! commitment and checks the claim directly.
 //!
 //! **Hiding.** With [`HachiChoices::hiding`], multilinear polynomials over the field and vectors
 //! are committed and opened as the blue parts of `hachi-pcs.tex`, Appendix A.2, specify (after
-//! Jindo Section 2.4):
+//! Jindo Section 2.4). One opening of each kind, with its secrets and challenges, is checked
+//! against the appendix's equations in Sage (`tests/fixtures/check_masked_spec.py`, on the
+//! instance that the test `spec_fixture` writes):
 //! - **Commit.** Every chunk gets a uniform masking row $\mathfrak m_i$, and $\mathbf t_i =
 //!   \mathbf A \mathbf s_i + \mathbf A' \boldsymbol\varrho_i$ with $\boldsymbol\varrho_i$ of
 //!   uniform digits. Under MLWE the $\mathbf t_i$ are pseudorandom, at an MLWE rank $\nu$ of real
@@ -2395,6 +2404,9 @@ impl<const K: usize> HachiPcs<K> {
         })
     }
 }
+
+#[cfg(test)]
+mod spec_fixture;
 
 #[cfg(test)]
 mod tests {

@@ -957,6 +957,82 @@ fn reduce_verify<const K: usize>(
     })
 }
 
+/// What steps 1 and 2 of [`prove`] compute at a masked level, with the level's matrices: the
+/// shared instance of the cross-check against the Sage spec (`tests/fixtures/check_masked_spec.sage`),
+/// which a test of `pcs` writes.
+#[cfg(test)]
+pub(crate) struct MaskedLevel {
+    /// $w_i = \mathbf a^\top \mathbf f_i$ and their digits $\hat{\mathbf w}$.
+    pub(crate) w: Vec<Poly>,
+    pub(crate) w_hat: Vec<Poly>,
+    /// $\mathbf D$, $\mathbf A$, $\mathbf A_1'$ and $\mathbf B$ of the level.
+    pub(crate) d_mat: Matrix,
+    pub(crate) a_mat: Matrix,
+    pub(crate) a_rand: Matrix,
+    pub(crate) b_mat: Matrix,
+    /// The accepted attempt: $\mathbf v$, $\mathbf c$, $\mathbf z$ and the masked parts.
+    pub(crate) v: Vec<Poly>,
+    pub(crate) c: Vec<Poly>,
+    pub(crate) z: Vec<Poly>,
+    pub(crate) w0: Poly,
+    pub(crate) w0_hat: Vec<Poly>,
+    pub(crate) t0: Vec<Poly>,
+    pub(crate) t0_hat: Vec<Poly>,
+    pub(crate) z_r: Vec<Poly>,
+}
+
+/// Steps 1 and 2 of [`prove`] at a masked level, computed as [`prove`] computes them.
+#[cfg(test)]
+pub(crate) fn masked_level<const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    witness: &Committed,
+    claim: &Claim,
+    fs: &mut Fs,
+    seed: &[u8; 32],
+) -> Result<MaskedLevel> {
+    let (ring, b, delta, n_a) = (&ctx.ring, ctx.choices.b, params.delta, params.n_a);
+    let layout = &params.layout;
+    let a_row = ring.prepare(core::slice::from_ref(&claim.a))?;
+    let w = witness
+        .message
+        .iter()
+        .map(|fi| {
+            ring.mat_vec_prepared(&a_row, fi)?
+                .pop()
+                .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let w_hat = g_inv(ring, b, delta, &w)?;
+    let d_mat = ctx.matrix(b"D", index, ctx.choices.n_d, params.d_cols())?;
+    let a_mat = ctx.matrix(b"A", index, n_a, layout.width(delta))?;
+    let a_rand = rand_matrix(ctx, params)?;
+    let fold = masked_fold(
+        ctx, index, params, witness, claim, &w_hat, &d_mat, &a_mat, &a_rand, fs, seed,
+    )?;
+    let b_mat = ctx.matrix(b"B", index, ctx.choices.n_b, layout.chunks() * n_a * delta)?;
+    let masks = fold
+        .masks
+        .ok_or_else(|| Error::Shape("not a masked level".into()))?;
+    Ok(MaskedLevel {
+        w,
+        w_hat,
+        d_mat,
+        a_mat,
+        a_rand,
+        b_mat,
+        v: fold.v,
+        c: fold.c,
+        z: fold.z,
+        w0: masks.w0,
+        w0_hat: masks.w0_hat,
+        t0: masks.t0,
+        t0_hat: masks.t0_hat,
+        z_r: masks.z_r,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
