@@ -17,12 +17,18 @@
 //!   with them. Honest runs without masks at n = 1, 2, 3 (automatic schedule) and with a larger
 //!   MLWE rank at n = 2 (one iteration) pass the same checks, and the proof is bound to the hiding
 //!   choices.
+//! - merged commitments (`HachiBase::merged`, not the draft's protocol): honest runs at n = 1, 2,
+//!   3 are accepted, with one commitment and one opening per party and empty blinder items, the
+//!   sizes of the formula and a proof smaller than with three commitments. The proof is bound to
+//!   the choice, a false blinder value, tampered items and blinder items where none belong are
+//!   rejected, and merging without masks is refused.
 //! - an ignored test prints timings and sizes.
 //!
 //! Seeds: setup `seed("setup/<preset>", [index])` (also the source of Hachi's matrices,
 //! `hachi_co::base_pcs_seed`), instance `ChaCha8Rng::seed_from_u64(8000 + 10 n + index)`, shares
 //! `seed_from_u64(8500 + 10 n + index)`, party `seed("party/hachi-base", [n, index, p])`, with
-//! `index` 0 to 4 for the first five tests in their order, and 5, 6 for the hiding ones.
+//! `index` 0 to 4 for the first five tests in their order, 5, 6 for the hiding ones and 7, 8 for
+//! the merged ones.
 
 mod common;
 
@@ -475,6 +481,134 @@ fn tampered_hachi_items_are_rejected() {
         cases += 1;
     }
     eprintln!("{cases} tampered proofs rejected");
+}
+
+/// Hachi with the default choices of the context of (`name`, `index`), merging.
+fn merged_base(ctx: &Context<K>, name: &str, index: u64) -> HachiBase<K> {
+    hachi_base(ctx, name, index, None).merged().unwrap()
+}
+
+/// The checks of an honest run with merged commitments. Returns the proof's bytes.
+fn check_merged(r: &Run) -> usize {
+    let (name, ctx, pcs) = (&r.name, &r.ctx, &r.pcs);
+    assert!(pcs.merges(), "{name}");
+    let proof = r.proof();
+    assert!(
+        r.outs.iter().all(|o| o.proof == *proof),
+        "{name}: one proof"
+    );
+    let claims = verify_claims_with(
+        ctx,
+        pcs,
+        &mut FsChallenger::new(EVAL_DOMAIN),
+        &r.u,
+        &r.x,
+        &r.y,
+        proof,
+    )
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let privates: Vec<_> = r.outs.iter().map(|o| &o.sumcheck).collect();
+    assert_claims_match(ctx.field(), &claims, &privates, name);
+    let y_false = ctx.field().add(&r.y, &ctx.field().one());
+    assert!(
+        verify(ctx, pcs, &r.u, &r.x, &y_false, proof).is_err(),
+        "{name}"
+    );
+    // One commitment and one opening per party, in the share polynomial's items.
+    let (l, t) = (&ctx.layout, &proof.sumcheck);
+    let words = pcs.words(l).unwrap();
+    let lens = [1 + l.ell_pp * l.d0, 1 + l.ell_pp * l.d1];
+    let schedule = pcs.pcs().merged_schedule(l.ell_pp, lens).unwrap();
+    for p0 in 0..l.n {
+        assert_eq!(
+            t.commitments.w[p0].len() as u128,
+            words.commitment_w,
+            "{name}"
+        );
+        assert_eq!(t.openings.w[p0].len() as u128, words.proof_w, "{name}");
+        let decoded = pcs.proof_from_words(&t.openings.w[p0]).unwrap();
+        assert_eq!(
+            decoded.iterations.len(),
+            schedule.iterations.len(),
+            "{name}"
+        );
+        assert_eq!(decoded.blinder_ring_values.len(), 2, "{name}");
+        for poly in [ClaimedPoly::G0, ClaimedPoly::G1] {
+            assert!(t.commitments.of(poly)[p0].is_empty(), "{name}, {poly:?}");
+            assert!(t.openings.of(poly)[p0].is_empty(), "{name}, {poly:?}");
+        }
+    }
+    let bytes = proof.to_bytes();
+    assert_eq!(bytes.len(), encoded_len(l, &words).unwrap(), "{name}");
+    assert_eq!(
+        bytes.len() as u128,
+        sizes_with_base(&ctx.params, &words).unwrap().total,
+        "{name}"
+    );
+    assert_eq!(
+        EvalProof::from_bytes(ctx, &bytes).unwrap(),
+        *proof,
+        "{name}"
+    );
+    bytes.len()
+}
+
+#[test]
+fn honest_runs_with_merged_commitments_are_accepted() {
+    for n in [1, 2, 3] {
+        let name = format!("toy-n{n}");
+        let ctx = fresh_context(&name, 7);
+        let r = run_with(&name, n, 7, |c| merged_base(c, &name, 7), ctx);
+        let merged = check_merged(&r);
+        let ctx = fresh_context(&name, 7);
+        let apart = run_with(&name, n, 7, |c| hachi_base(c, &name, 7, None), ctx);
+        let separate = apart.proof().to_bytes().len();
+        eprintln!("{name}: merged {merged} bytes, three commitments {separate} bytes");
+        assert!(merged < separate, "{name}: {merged} >= {separate}");
+    }
+}
+
+#[test]
+fn merged_proofs_are_bound_to_the_choice_and_checked() {
+    let ctx = fresh_context("toy-n2", 8);
+    let r = run_with("toy-n2", 2, 8, |c| merged_base(c, "toy-n2", 8), ctx);
+    let proof = r.proof();
+    r.check(proof).unwrap();
+    // Under the same Hachi without merging (another digest), and the other way round.
+    let separate = hachi_base(&r.ctx, "toy-n2", 8, None);
+    assert_ne!(separate.params_digest(), r.pcs.params_digest());
+    assert!(matches!(
+        r.verify_with(&separate, proof),
+        Err(VerifyError::Sumcheck(_))
+    ));
+    let ctx = fresh_context("toy-n2", 8);
+    let plain_run = run_with("toy-n2", 2, 8, |c| hachi_base(c, "toy-n2", 8, None), ctx);
+    assert!(matches!(
+        r.verify_with(&r.pcs, plain_run.proof()),
+        Err(VerifyError::Sumcheck(_))
+    ));
+    // A false final value of party 1's blinder g0: its opening is party 1's merged proof, which
+    // fails, and the first claim of the party in the verifier's order is g0's.
+    let mut p = proof.clone();
+    let f = r.ctx.field();
+    p.sumcheck.finals.g0[0] = f.add(&p.sumcheck.finals.g0[0], &f.one());
+    assert!(r.check(&p).is_err());
+    // A changed word of a merged opening, and blinder items where none belong.
+    let len = proof.sumcheck.openings.w[1].len();
+    for i in [0, len / 3, len - 1] {
+        let mut p = proof.clone();
+        p.sumcheck.openings.w[1] = changed(&p.sumcheck.openings.w[1], i);
+        assert!(
+            rejected_opening(r.check(&p), 2, ClaimedPoly::G0),
+            "word {i}"
+        );
+    }
+    let mut p = proof.clone();
+    p.sumcheck.openings.g1[0] = vec![0];
+    assert!(rejected_opening(r.check(&p), 1, ClaimedPoly::G0));
+    // Merging needs masks.
+    let plain = hiding_base(&r.ctx, "toy-n2", 8, None, None);
+    assert!(plain.merged().is_err());
 }
 
 #[test]

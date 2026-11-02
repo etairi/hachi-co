@@ -24,11 +24,13 @@ quiet, so read the times as indicative. Runs across real machines come later.
   line of the same preset here (Eval 33.6 s, Verify 1.04 s, the proof 989,976 bytes, the larger party's peak 3.0 GiB):
   - `local-2026-11-01.jsonl`: the share polynomial masked and the blinders not (proof format 5). Eval 79.7 s, Verify
     1.71 s, the proof 992,088 bytes, peak 8.5 GiB. An earlier run took 64.9 s for Eval.
-  - `local-2026-11-02.jsonl`: every polynomial masked, as in the draft's protocol (proof format 6, with
+  - `local-2026-11-02.jsonl`, first line: every polynomial masked, as in the draft's protocol (proof format 6, with
     the presets chosen again for masked blinders). Eval 59.4 s, Verify 1.23 s, the proof 2,044,520 bytes, peak 5.2 GiB.
     This is the size of a hiding proof at this preset, 2.07 times the unmasked one.
+  - its second line: the same with merged commitments (the preset `secure-l16-n2-a8-merged`), an option that is not
+    in the draft. Eval 59.0 s, Verify 1.20 s, the proof 1,196,392 bytes, peak 5.3 GiB.
 
-  The parameters of the first run differ from the second (b = 8 and height 11 at the first level, against b = 16 and
+  The parameters of the first run differ from the others (b = 8 and height 11 at the first level, against b = 16 and
   height 8). One run each, on a laptop that was not quiet.
 
 Commands, from the repository root. The seeds are SHA-256 of the tag `hachi-co/bench` and an index, so each line
@@ -45,6 +47,7 @@ python3 scripts/run_parties.py --preset bench-l24-n1 --n 1 --out <dir> --spill <
 python3 scripts/run_parties.py --preset bench-l26-n1 --n 1 --out <dir> --spill <dir>
 python3 scripts/run_parties.py --preset secure-l16-n2-a8 --n 2 --out <dir> --spill <dir>
 python3 scripts/run_parties.py --preset secure-l16-n2-a10 --n 2 --out <dir> --spill <dir>
+python3 scripts/run_parties.py --preset secure-l16-n2-a8-merged --n 2 --out <dir> --spill <dir>
 python3 scripts/bench_table.py benchmarks/local-2026-10-31.jsonl
 ```
 

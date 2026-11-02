@@ -72,6 +72,7 @@ fn check_weights(choices: &HachiChoices) {
                 decomposed,
                 beta_s: if decomposed { 2 } else { 4 },
                 masked: is_masked,
+                extra: 0,
             };
             let schedule = Schedule::fixed(choices, Q, layout, 1).unwrap();
             let p = &schedule.iterations[0];
@@ -163,6 +164,7 @@ fn check_constrained(choices: &HachiChoices) {
         decomposed: true,
         beta_s: 2,
         masked: true,
+        extra: 0,
     };
     let schedule = Schedule::fixed(choices, Q, layout, 1).unwrap();
     let p = &schedule.iterations[0];

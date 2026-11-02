@@ -17,6 +17,11 @@
 //!
 //! The trait is implemented by `ClearPcs` (feature `fixtures`), a reference stand-in that
 //! reveals the committed vector, and by an adapter around Hachi.
+//!
+//! **Merged commitments**, optional ([`BasePcs::merges`]): a scheme may instead commit to the
+//! three polynomials of a prover in one commitment and open them with one proof, which still gives
+//! the three values. This is not the draft's protocol, which commits and opens them separately,
+//! and the methods default to "not supported".
 
 use crate::data::check_len;
 use crate::{Error, Result};
@@ -212,6 +217,76 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         proof: &Self::Proof,
         context: &[u8; 32],
     ) -> core::result::Result<(), String>;
+
+    /// Whether each prover commits to its three polynomials in one commitment
+    /// ([`commit_merged`](Self::commit_merged)) and opens them with one proof, in place of the
+    /// draft's three commitments and three openings. `false` unless the scheme supports and
+    /// selects it. The choice must enter [`params_digest`](Self::params_digest), so that a proof
+    /// is bound to it.
+    fn merges(&self) -> bool {
+        false
+    }
+
+    /// Commits, in one commitment, to the multilinear polynomial over $\mathbb F\_{q^K}$ with the
+    /// monomial coefficients `coeffs` and to the two blinder vectors `g0` and `g1`, with the secret
+    /// `seed`.
+    ///
+    /// # Errors
+    /// [`Error::BasePcs`] for a scheme that does not merge, and implementation-specific errors
+    /// otherwise.
+    fn commit_merged(
+        &self,
+        _coeffs: &[Ext<K>],
+        _g0: &[Ext<K>],
+        _g1: &[Ext<K>],
+        _seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)> {
+        Err(Error::BasePcs(
+            "this base PCS does not merge commitments".into(),
+        ))
+    }
+
+    /// Opens a commitment of [`commit_merged`](Self::commit_merged): the polynomial at `point` and
+    /// the vectors against `weights0` and `weights1`, under `context`, with the secret `seed`.
+    /// Returns the three values, in the order polynomial, `g0`, `g1`, and one proof of them.
+    ///
+    /// # Errors
+    /// [`Error::BasePcs`] for a scheme that does not merge, and implementation-specific errors
+    /// otherwise.
+    fn prove_merged(
+        &self,
+        _st: &Self::State,
+        _point: &[Ext<K>],
+        _weights0: &[Ext<K>],
+        _weights1: &[Ext<K>],
+        _context: &[u8; 32],
+        _seed: &[u8; 32],
+    ) -> Result<([Ext<K>; 3], Self::Proof)> {
+        Err(Error::BasePcs(
+            "this base PCS does not merge commitments".into(),
+        ))
+    }
+
+    /// Checks that `proof` opens `com`, a merged commitment to a polynomial in `num_vars`
+    /// variables and two vectors of the lengths of the weights, to `values`: the polynomial's
+    /// value at `point` and the vectors' inner products with `weights0` and `weights1`.
+    ///
+    /// # Errors
+    /// The reason of the rejection, also for a scheme that does not merge.
+    #[allow(clippy::too_many_arguments)] // one opening's instance
+    fn verify_merged(
+        &self,
+        _com: &Self::Commitment,
+        _num_vars: usize,
+        _point: &[Ext<K>],
+        _weights0: &[Ext<K>],
+        _weights1: &[Ext<K>],
+        _values: &[Ext<K>; 3],
+        _proof: &Self::Proof,
+        _context: &[u8; 32],
+    ) -> core::result::Result<(), String> {
+        Err("this base PCS does not merge commitments".into())
+    }
 
     /// A digest of the scheme's own public parameters. Hachi-Co absorbs it into the statement
     /// of every proof (`6_Collaborative_Hachi.tex`:294-297: $\mathsf{pp}\_{\mathsf{PCS}}$ is part

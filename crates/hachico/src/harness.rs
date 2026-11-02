@@ -13,7 +13,11 @@
 //!   and the claim would be computed jointly.
 //! - The connections are plaintext TCP ([`hachi_co_mpc::TcpTransport`], "Not a secure channel").
 //! - The parameters are insecure test choices, except at the `secure-*` presets, where Hachi
-//!   takes the choices of [`HachiBase::preset_choices`]: estimates for binding, without hiding.
+//!   takes the choices of [`HachiBase::preset_choices`]: estimates for binding and for the MLWE
+//!   rank of the masks, not proofs.
+//! - The suffix `-merged` on a preset name (for example `secure-l16-n2-a8-merged`) selects
+//!   Hachi's merged commitments ([`HachiBase::merged`]), an option to compare against the draft's
+//!   three commitments, which every other name uses.
 //!
 //! # Configuration
 //!
@@ -328,12 +332,18 @@ pub struct Setup {
 impl Setup {
     /// $\mathsf{Setup}$ for the preset `preset` with `n` parties and the setup seed `seed`:
     /// [`crate::setup`] on the preset's derived parameters, and [`HachiBase`] with
-    /// [`HachiBase::preset_choices`] and the same seed.
+    /// [`HachiBase::preset_choices`] and the same seed. A name ending in `-merged` is the preset
+    /// without that suffix with [`HachiBase::merged`].
     ///
     /// # Errors
     /// [`HarnessError::Config`] for an unknown preset or an $n$ other than the preset's;
-    /// [`HarnessError::Protocol`] if the context or Hachi cannot be set up.
+    /// [`HarnessError::Protocol`] if the context or Hachi cannot be set up, for example merged
+    /// commitments without masks.
     pub fn new(preset: &str, n: usize, seed: &[u8; 32]) -> Result<Self, HarnessError> {
+        let (preset, merged) = match preset.strip_suffix("-merged") {
+            Some(name) => (name, true),
+            None => (preset, false),
+        };
         let config = |e: hachi_co_params::Error| HarnessError::Config(format!("{preset}: {e}"));
         let preset_choices = hachi_co_params::preset(preset).map_err(config)?.choices;
         if preset_choices.n != n as u64 {
@@ -345,7 +355,10 @@ impl Setup {
         let (params, _report) = hachi_co_params::derive(&preset_choices).map_err(config)?;
         let ctx = crate::setup::<K>(params, seed)?;
         let choices = HachiBase::preset_choices(&ctx, preset, seed).map_err(config)?;
-        let pcs = HachiBase::new(ctx.q(), choices)?;
+        let mut pcs = HachiBase::new(ctx.q(), choices)?;
+        if merged {
+            pcs = pcs.merged()?;
+        }
         Ok(Self { ctx, pcs })
     }
 }

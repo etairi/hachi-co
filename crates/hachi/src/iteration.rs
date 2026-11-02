@@ -999,6 +999,7 @@ mod tests {
             decomposed: true,
             beta_s: 2,
             masked: false,
+            extra: 0,
         };
         let params = Schedule::fixed(&choices, Q, layout, 1).unwrap().iterations[0];
         let chunks = layout.chunks();

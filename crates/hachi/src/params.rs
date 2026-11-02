@@ -152,9 +152,10 @@ impl Hiding {
     }
 }
 
-/// The shape of a committed witness: $2^r$ chunks of $2^m$ message ring elements each, plus a
-/// masking row if [`Layout::masked`], committed as digits ([`Layout::decomposed`]) or as they are,
-/// with coefficients of absolute value at most [`Layout::beta_s`] in the committed vectors.
+/// The shape of a committed witness: $2^r$ chunks of $2^m$ message ring elements each, then
+/// [`Layout::extra`] further rows, then a masking row if [`Layout::masked`], committed as digits
+/// ([`Layout::decomposed`]) or as they are, with coefficients of absolute value at most
+/// [`Layout::beta_s`] in the committed vectors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     /// $\log_2$ of the number of chunks.
@@ -169,6 +170,10 @@ pub struct Layout {
     pub beta_s: u64,
     /// Whether every chunk ends with a masking row, whose fold is masked ([`Hiding`]).
     pub masked: bool,
+    /// Rows after the message of every chunk, before its masking row: in a merged commitment
+    /// (`HachiPcs::commit_merged`) chunk 0 holds the blinders there, each followed by its own
+    /// masking row, and the other chunks hold zeros. 0 for every other witness.
+    pub extra: usize,
 }
 
 impl Layout {
@@ -182,10 +187,10 @@ impl Layout {
         1 << self.m
     }
 
-    /// The number of ring elements in a chunk: [`Layout::message_len`], plus the masking row of a
-    /// masked layout.
+    /// The number of ring elements in a chunk: [`Layout::message_len`], the [`Layout::extra`]
+    /// rows, and the masking row of a masked layout.
     pub fn chunk_len(&self) -> usize {
-        self.message_len() + usize::from(self.masked)
+        self.message_len() + self.extra + usize::from(self.masked)
     }
 
     /// The number of committed ring elements in a chunk: [`Layout::chunk_len`] times $\delta$ if
@@ -402,7 +407,7 @@ fn iteration(choices: &HachiChoices, q: u64, layout: Layout) -> Result<IterParam
         Error::Parameter("the next witness is smaller than a ring element".into())
     })?;
     let next_beta = 2 * max_digit(choices.b);
-    let next = best_layout(choices, q, packed, false, next_beta, false)?;
+    let next = best_layout(choices, q, packed, false, next_beta, false, 0)?;
     Ok(IterParams {
         layout,
         n_a,
@@ -418,7 +423,7 @@ fn iteration(choices: &HachiChoices, q: u64, layout: Layout) -> Result<IterParam
 }
 
 /// The split $r + m = $ `vars` that minimises the next witness of an iteration on this witness
-/// (ties: the smaller $r$).
+/// (ties: the smaller $r$), with `extra` rows per chunk after the message ([`Layout::extra`]).
 pub fn best_layout(
     choices: &HachiChoices,
     q: u64,
@@ -426,6 +431,7 @@ pub fn best_layout(
     decomposed: bool,
     beta_s: u64,
     masked: bool,
+    extra: usize,
 ) -> Result<Layout> {
     let delta = num_digits(q, choices.b)?;
     let mut best: Option<(usize, Layout)> = None;
@@ -436,6 +442,7 @@ pub fn best_layout(
             decomposed,
             beta_s,
             masked,
+            extra,
         };
         let Ok((_, tau, _, mu)) = witness_size(choices, delta, &layout) else {
             continue;

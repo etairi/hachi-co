@@ -24,7 +24,10 @@
 //!
 //! **Hiding.** With masks, the share polynomial and the blinders are each committed and opened as
 //! Appendix A.2 of the draft specifies (`hachi::pcs`, "Hiding"): three commitments and three
-//! openings per prover, as the draft's protocol has them.
+//! openings per prover, as the draft's protocol has them. [`HachiBase::merged`] selects instead
+//! Hachi's merged commitment (`hachi::pcs`, "Merged commitments"): one commitment and one opening
+//! per prover, with the same three values. That option is not in the draft, and its digest differs
+//! from the default's.
 //!
 //! [`HachiBase::new`] with `hiding: None` gives the published scheme. The provers draw the seeds of
 //! the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).
@@ -69,6 +72,7 @@ pub fn base_pcs_seed(seed: &[u8; 32]) -> [u8; 32] {
 pub struct HachiBase<const K: usize> {
     pcs: HachiPcs<K>,
     digest: [u8; 32],
+    merged: bool,
 }
 
 impl<const K: usize> HachiBase<K> {
@@ -79,8 +83,33 @@ impl<const K: usize> HachiBase<K> {
     /// that $2K$ does not divide, or $q \not\equiv 5 \pmod 8$).
     pub fn new(q: u64, choices: HachiChoices) -> Result<Self, Error> {
         let pcs = HachiPcs::new(q, choices)?;
-        let digest = digest(q, K, &pcs.ctx().choices);
-        Ok(Self { pcs, digest })
+        let digest = digest(q, K, &pcs.ctx().choices, false);
+        Ok(Self {
+            pcs,
+            digest,
+            merged: false,
+        })
+    }
+
+    /// This base PCS with merged commitments ([`BasePcs::merges`]): each prover commits to its
+    /// three polynomials in one commitment and opens them with one proof (`hachi::pcs`, "Merged
+    /// commitments"). Not the draft's protocol: an option to compare against it.
+    ///
+    /// # Errors
+    /// [`Error::Hachi`] without masks: Hachi merges only with [`HachiChoices::hiding`].
+    pub fn merged(self) -> Result<Self, Error> {
+        let c = &self.pcs.ctx().choices;
+        if c.hiding.is_none() {
+            return Err(
+                hachi::Error::Parameter("merged commitments need hiding choices".into()).into(),
+            );
+        }
+        let digest = digest(self.pcs.ctx().q, K, c, true);
+        Ok(Self {
+            digest,
+            merged: true,
+            ..self
+        })
     }
 
     /// The base PCS of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:294-297) for the context
@@ -174,15 +203,26 @@ impl<const K: usize> HachiBase<K> {
             .into());
         }
         let commitment = pcs.commitment_words() as u128;
-        let vector = |degree: usize| -> Result<u128, Error> {
-            let len = layout
+        let blinder_len = |degree: usize| -> Result<usize, Error> {
+            Ok(layout
                 .ell_pp
                 .checked_mul(degree)
                 .and_then(|n| n.checked_add(1))
                 .ok_or_else(|| {
                     hachi::Error::Parameter("the blinder length overflows usize".into())
-                })?;
-            Ok(pcs.vector_proof_words(len)? as u128)
+                })?)
+        };
+        if self.merged {
+            // One commitment and one proof per prover, and empty items for the blinders.
+            let lens = [blinder_len(layout.d0)?, blinder_len(layout.d1)?];
+            return Ok(BasePcsWords {
+                commitment_w: commitment,
+                proof_w: pcs.merged_proof_words(layout.ell_pp, lens)? as u128,
+                ..BasePcsWords::default()
+            });
+        }
+        let vector = |degree: usize| -> Result<u128, Error> {
+            Ok(pcs.vector_proof_words(blinder_len(degree)?)? as u128)
         };
         Ok(BasePcsWords {
             commitment_w: commitment,
@@ -201,9 +241,10 @@ impl<const K: usize> HachiBase<K> {
 /// The parameter digest: the challenge seed of a transcript with the domain
 /// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice, Hachi's version
 /// ([`hachi::VERSION`]) and the seed of the matrices, then, only with masks
-/// ([`HachiChoices::hiding`]), the masks' four words ([`Hiding::words`]): the digest of non-hiding
-/// choices is unchanged.
-fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
+/// ([`HachiChoices::hiding`]), the masks' four words ([`Hiding::words`]), and only for merged
+/// commitments ([`HachiBase::merged`]) the word 1 under `merged`: the digests of the other
+/// choices are unchanged.
+fn digest(q: u64, k: usize, c: &HachiChoices, merged: bool) -> [u8; 32] {
     let mut t = Transcript::new(HACHI_BASE_DIGEST_DOMAIN);
     let words: [(&[u8], u64); 11] = [
         (b"q", q),
@@ -231,6 +272,9 @@ fn digest(q: u64, k: usize, c: &HachiChoices) -> [u8; 32] {
         t.append_u64(b"n_A-0", n_a);
         t.append_u64(b"lambda", lambda);
         t.append_u64(b"phi", phi);
+    }
+    if merged {
+        t.append_u64(b"merged", 1);
     }
     t.challenge_seed(b"digest")
 }
@@ -357,6 +401,71 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
     ) -> Result<(), String> {
         self.pcs
             .verify_inner_product(com, len, weights, value, proof, context)
+            .map_err(|e| format!("Hachi: {e}"))
+    }
+
+    fn merges(&self) -> bool {
+        self.merged
+    }
+
+    /// [`HachiPcs::commit_merged`].
+    fn commit_merged(
+        &self,
+        coeffs: &[Ext<K>],
+        g0: &[Ext<K>],
+        g1: &[Ext<K>],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        if !self.merged {
+            return Err(hachi_co_core::Error::BasePcs(
+                "Hachi: this instance does not merge commitments".into(),
+            ));
+        }
+        self.pcs
+            .commit_merged(coeffs, [g0, g1], seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::prove_merged`].
+    fn prove_merged(
+        &self,
+        st: &State<K>,
+        point: &[Ext<K>],
+        weights0: &[Ext<K>],
+        weights1: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<([Ext<K>; 3], Proof<K>)> {
+        self.pcs
+            .prove_merged(st, point, [weights0, weights1], context, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::verify_merged`], with Hachi's [`hachi::VerifyError`] as the reason.
+    fn verify_merged(
+        &self,
+        com: &Commitment,
+        num_vars: usize,
+        point: &[Ext<K>],
+        weights0: &[Ext<K>],
+        weights1: &[Ext<K>],
+        values: &[Ext<K>; 3],
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), String> {
+        if !self.merged {
+            return Err("Hachi: this instance does not merge commitments".into());
+        }
+        self.pcs
+            .verify_merged(
+                com,
+                num_vars,
+                point,
+                [weights0, weights1],
+                values,
+                proof,
+                context,
+            )
             .map_err(|e| format!("Hachi: {e}"))
     }
 

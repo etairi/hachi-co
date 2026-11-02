@@ -120,6 +120,13 @@ fn slot(poly: ClaimedPoly) -> usize {
     }
 }
 
+/// A prover's base-PCS states: one per committed polynomial, or one for all three when the base
+/// PCS merges them ([`BasePcs::merges`]).
+enum States<S> {
+    Separate { w: S, g0: S, g1: S },
+    Merged(S),
+}
+
 /// Column `index` of per-party rows.
 fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
     rows.iter().map(|row| row[index]).collect()
@@ -217,37 +224,67 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         }
     };
     let mut prover = PartyProver::new(ctx, party, table, pad, g0, g1)?;
-    // Step 3.
-    let (st_w, com_w) = {
+    // Step 3: the three commitments of the draft, or one if the base PCS merges them, with the
+    // blinders' items left empty.
+    let (states, local) = if pcs.merges() {
+        if l.pad_rule != PadRule::Field {
+            return Err(Error::Parameter(
+                "merged commitments need the share polynomial over the field".into(),
+            ));
+        }
         let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
-        let (com, st) = match l.pad_rule {
-            PadRule::Field => {
-                let mut coeffs = prover.w_field_table();
-                mobius_ext(field, &mut coeffs)?;
-                pcs.commit_multilinear_ext(&coeffs, &seed)?
-            }
-            PadRule::Residues => {
-                let mut coeffs = prover.w_table().to_vec();
-                mobius(field.zq(), &mut coeffs)?;
-                pcs.commit_multilinear(&coeffs, &seed)?
-            }
+        let mut coeffs = prover.w_field_table();
+        mobius_ext(field, &mut coeffs)?;
+        let (g0, g1) = prover.blinders();
+        let (com, st) = pcs.commit_merged(
+            &coeffs,
+            &blinder_coefficients(g0),
+            &blinder_coefficients(g1),
+            &seed,
+        )?;
+        (
+            States::Merged(st),
+            [pcs.commitment_to_words(&com), Vec::new(), Vec::new()],
+        )
+    } else {
+        let (st_w, com_w) = {
+            let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
+            let (com, st) = match l.pad_rule {
+                PadRule::Field => {
+                    let mut coeffs = prover.w_field_table();
+                    mobius_ext(field, &mut coeffs)?;
+                    pcs.commit_multilinear_ext(&coeffs, &seed)?
+                }
+                PadRule::Residues => {
+                    let mut coeffs = prover.w_table().to_vec();
+                    mobius(field.zq(), &mut coeffs)?;
+                    pcs.commit_multilinear(&coeffs, &seed)?
+                }
+            };
+            (st, pcs.commitment_to_words(&com))
         };
-        (st, pcs.commitment_to_words(&com))
+        let (g0, g1) = prover.blinders();
+        let seed = rng.base_pcs(ClaimedPoly::G0.seed_index(false))?;
+        let (com_g0, st_g0) = pcs.commit_vector(&blinder_coefficients(g0), &seed)?;
+        let seed = rng.base_pcs(ClaimedPoly::G1.seed_index(false))?;
+        let (com_g1, st_g1) = pcs.commit_vector(&blinder_coefficients(g1), &seed)?;
+        (
+            States::Separate {
+                w: st_w,
+                g0: st_g0,
+                g1: st_g1,
+            },
+            [
+                com_w,
+                pcs.commitment_to_words(&com_g0),
+                pcs.commitment_to_words(&com_g1),
+            ],
+        )
     };
-    let (g0, g1) = prover.blinders();
-    let seed = rng.base_pcs(ClaimedPoly::G0.seed_index(false))?;
-    let (com_g0, st_g0) = pcs.commit_vector(&blinder_coefficients(g0), &seed)?;
-    let seed = rng.base_pcs(ClaimedPoly::G1.seed_index(false))?;
-    let (com_g1, st_g1) = pcs.commit_vector(&blinder_coefficients(g1), &seed)?;
     // Step 4.
     let (s0, s1) = prover.hypercube_sums();
     let sums = all_gather(comm, ALL_GATHER_SUMS, n, &[s0, s1])?;
     let (g0_sums, g1_sums) = (column(&sums, 0), column(&sums, 1));
-    let local = [
-        com_w,
-        pcs.commitment_to_words(&com_g0),
-        pcs.commitment_to_words(&com_g1),
-    ];
     let commitments = all_gather_words(comm, ALL_GATHER_COMMITMENTS, n, &local)?;
     ch.absorb_exts(LABEL_G0, &g0_sums);
     ch.absorb_exts(LABEL_G1, &g1_sums);
@@ -296,32 +333,78 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     let point = prover.point().to_vec();
     let expected = [mine.0, mine.1, mine.2];
     let mut proofs: [Vec<u64>; 3] = Default::default();
-    for poly in ClaimedPoly::ORDER {
-        let context = ch.context(&opening_label(party, poly));
-        let seed = rng.base_pcs(poly.seed_index(true))?;
-        let (value, words) = match poly {
-            ClaimedPoly::W => {
-                let (value, proof) = match l.pad_rule {
-                    PadRule::Field => pcs.prove_multilinear_ext(&st_w, &point, &context, &seed)?,
-                    PadRule::Residues => pcs.prove_multilinear(&st_w, &point, &context, &seed)?,
-                };
-                (value, pcs.proof_to_words(&proof))
+    // The contexts in the order of the verifier, whatever the base PCS does with them.
+    let contexts: [[u8; 32]; 3] =
+        ClaimedPoly::ORDER.map(|poly| ch.context(&opening_label(party, poly)));
+    let context_of = |poly: ClaimedPoly| {
+        let i = ClaimedPoly::ORDER
+            .iter()
+            .position(|p| *p == poly)
+            .unwrap_or(0);
+        contexts[i]
+    };
+    match &states {
+        States::Merged(st) => {
+            // One proof of the three values, under the share polynomial's context.
+            let seed = rng.base_pcs(ClaimedPoly::W.seed_index(true))?;
+            let weights0 = blinder_weights(field, &point, l.d0);
+            let weights1 = blinder_weights(field, &point, l.d1);
+            let (values, proof) = pcs.prove_merged(
+                st,
+                &point,
+                &weights0,
+                &weights1,
+                &context_of(ClaimedPoly::W),
+                &seed,
+            )?;
+            for (poly, value) in [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1]
+                .into_iter()
+                .zip(values)
+            {
+                if field.reduce(&value) != expected[slot(poly)] {
+                    return Err(Error::OpeningMismatch { party, poly });
+                }
             }
-            ClaimedPoly::G0 | ClaimedPoly::G1 => {
-                let (st, degree) = if poly == ClaimedPoly::G0 {
-                    (&st_g0, l.d0)
-                } else {
-                    (&st_g1, l.d1)
-                };
-                let weights = blinder_weights(field, &point, degree);
-                let (value, proof) = pcs.prove_inner_product(st, &weights, &context, &seed)?;
-                (value, pcs.proof_to_words(&proof))
-            }
-        };
-        if field.reduce(&value) != expected[slot(poly)] {
-            return Err(Error::OpeningMismatch { party, poly });
+            proofs[slot(ClaimedPoly::W)] = pcs.proof_to_words(&proof);
         }
-        proofs[slot(poly)] = words;
+        States::Separate {
+            w: st_w,
+            g0: st_g0,
+            g1: st_g1,
+        } => {
+            for poly in ClaimedPoly::ORDER {
+                let context = context_of(poly);
+                let seed = rng.base_pcs(poly.seed_index(true))?;
+                let (value, words) = match poly {
+                    ClaimedPoly::W => {
+                        let (value, proof) = match l.pad_rule {
+                            PadRule::Field => {
+                                pcs.prove_multilinear_ext(st_w, &point, &context, &seed)?
+                            }
+                            PadRule::Residues => {
+                                pcs.prove_multilinear(st_w, &point, &context, &seed)?
+                            }
+                        };
+                        (value, pcs.proof_to_words(&proof))
+                    }
+                    ClaimedPoly::G0 | ClaimedPoly::G1 => {
+                        let (st, degree) = if poly == ClaimedPoly::G0 {
+                            (st_g0, l.d0)
+                        } else {
+                            (st_g1, l.d1)
+                        };
+                        let weights = blinder_weights(field, &point, degree);
+                        let (value, proof) =
+                            pcs.prove_inner_product(st, &weights, &context, &seed)?;
+                        (value, pcs.proof_to_words(&proof))
+                    }
+                };
+                if field.reduce(&value) != expected[slot(poly)] {
+                    return Err(Error::OpeningMismatch { party, poly });
+                }
+                proofs[slot(poly)] = words;
+            }
+        }
     }
     let openings = all_gather_words(comm, ALL_GATHER_OPENINGS, n, &proofs)?;
     let (w_table, pad, g0, g1, point) = prover.into_parts();

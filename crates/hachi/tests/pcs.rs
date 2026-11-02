@@ -687,6 +687,7 @@ fn iterations_whose_digits_pass_half_of_q_are_refused() {
         decomposed: true,
         beta_s: max_digit(4),
         masked: false,
+        extra: 0,
     };
     assert!(Schedule::fixed(&toy, q, layout(18), 1).is_ok());
     let err = Schedule::fixed(&toy, q, layout(19), 1)

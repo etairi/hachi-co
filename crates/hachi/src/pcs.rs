@@ -56,6 +56,23 @@
 //! **refused**, since their partial evaluations reveal more than the value, so that opening cannot
 //! hide. Commit such a polynomial over the field instead.
 //!
+//! **Merged commitments** ([`HachiPcs::commit_merged`], with hiding only). An option that is not in
+//! the draft, designed and tested here: one commitment to a multilinear polynomial over the field
+//! and two vectors, Hachi-Co's share polynomial and its two blinders, and one opening for all
+//! three, at one point and two sets of weights. The vectors fill extra rows of chunk 0
+//! ([`Layout::extra`]), each followed by its own masking row, and the other chunks hold zeros
+//! there. An opening sends the three values with the statement, then three masks' values, then,
+//! after $x^*$, one ring value per object, each checked by its own trace check (the share's with
+//! its $v$, the vectors' with $v = 1$: one trace check on a combined ring value would not give
+//! the vectors' values when $v \ne 1$). Then $\lambda \ne 0$ combines the three ring values into
+//! the one claim the iterations prove ([`HachiPcs::prove_merged`]). What is not enforced:
+//! nothing makes a prover put zeros in the extra rows of the other chunks. One that fills them
+//! binds vectors whose inner products come out as $\langle \mathbf g, \mathbf e \rangle$ plus
+//! $\sum_{i \ge 2} b_i \langle \mathbf g_i, \mathbf e \rangle$, with the $b_i$ the monomials of the
+//! first $r$ coordinates of the point: for Hachi-Co's blinders, polynomials one degree higher in
+//! those coordinates, still fixed before the coins. No proof of soundness or hiding covers this
+//! option.
+//!
 //! **Randomness.** The prover's methods take a secret 32-byte seed, which only hiding uses. A
 //! commitment draws from the PRG streams `(seed, "hachi/commit/r", 0)` and `(seed,
 //! "hachi/commit/mask", 0)`, an opening from the streams of [`crate::iteration`]. Every commitment
@@ -84,9 +101,11 @@
 //!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K - 1$ partial
 //!   evaluations, the $L_i - \kappa$ batching rounds (2 field elements each), the packed value
 //!   $\hat w(\mathbf r)$ and $p'$; and the final message. The per-iteration batching-round count
-//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with a word $M$, 1 if
-//!   the proof carries $y_{\mathfrak m}$, which then comes just before $Y$, and 0 otherwise. Without
-//!   hiding the encodings are those of the non-hiding scheme, unchanged.
+//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with a word $M$: bit 0
+//!   is set if the proof carries $y_{\mathfrak m}$, which then comes just before $Y$, and bit 1 if
+//!   it is a merged opening, whose vectors' two masks' values follow $y_{\mathfrak m}$ and whose two
+//!   more ring values follow $Y$. So $M$ is 0, 1 or 3. Without hiding the encodings are those of
+//!   the non-hiding scheme, unchanged.
 //!
 //! Every value has a single encoding: the decoders reject residues not below $q$, digit indices
 //! outside the digit set, non-zero padding, and any length other than the one the header and the
@@ -130,9 +149,20 @@ pub struct Commitment {
 /// What the input of a committed object was.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Input<const K: usize> {
-    Multilinear { vars: usize, coeffs: Vec<u64> },
-    MultilinearExt { vars: usize },
-    Vector { values: Vec<Ext<K>> },
+    Multilinear {
+        vars: usize,
+        coeffs: Vec<u64>,
+    },
+    MultilinearExt {
+        vars: usize,
+    },
+    Vector {
+        values: Vec<Ext<K>>,
+    },
+    Merged {
+        vars: usize,
+        values: [Vec<Ext<K>>; 2],
+    },
 }
 
 /// The prover's state after committing.
@@ -162,6 +192,11 @@ pub struct Proof<const K: usize> {
     pub iterations: Vec<IterationProof<K>>,
     /// The final witness's message, chunk after chunk.
     pub final_message: Vec<Poly>,
+    /// With a merged opening ([`HachiPcs::prove_merged`]), $y_{\mathfrak m}$ of the two vectors, in
+    /// order, and empty otherwise.
+    pub blinder_mask_evals: Vec<Ext<K>>,
+    /// With a merged opening, $Y^*$ of the two vectors, in order, and empty otherwise.
+    pub blinder_ring_values: Vec<Poly>,
 }
 
 /// What a proof carries ahead of its iterations besides $Y$, by the kind of opening; the choice
@@ -178,6 +213,8 @@ enum Reduction {
     Direct,
     /// A masked polynomial over $\mathbb F_{q^K}$: $y_{\mathfrak m}$.
     Masked,
+    /// A merged opening: three masks' values and two more ring values.
+    Merged,
 }
 
 impl Reduction {
@@ -185,7 +222,7 @@ impl Reduction {
     fn partials(self, k: usize) -> usize {
         match self {
             Self::Multilinear { .. } => k - 1,
-            Self::Direct | Self::Masked => 0,
+            Self::Direct | Self::Masked | Self::Merged => 0,
         }
     }
 
@@ -193,12 +230,13 @@ impl Reduction {
     fn rounds(self) -> usize {
         match self {
             Self::Multilinear { rounds } => rounds,
-            Self::Direct | Self::Masked => 0,
+            Self::Direct | Self::Masked | Self::Merged => 0,
         }
     }
 
     /// The residues ahead of the iterations, $Y$ included: $K(K - 1) + 2K(\ell - \kappa) + K +
-    /// d$ for a multilinear opening, $K + d$ for a masked one, $d$ otherwise, and `None` on overflow.
+    /// d$ for a multilinear opening, $K + d$ for a masked one, $3K + 3d$ for a merged one, $d$
+    /// otherwise, and `None` on overflow.
     fn residues(self, k: usize, d: usize) -> Option<usize> {
         match self {
             Self::Multilinear { rounds } => {
@@ -206,6 +244,7 @@ impl Reduction {
             }
             Self::Direct => Some(d),
             Self::Masked => Some(k + d),
+            Self::Merged => Some(3 * k + 3 * d),
         }
     }
 }
@@ -225,6 +264,10 @@ const LABEL_PARTIALS: &[u8] = b"hachi/input/partials";
 const LABEL_RING_VALUE: &[u8] = b"hachi/input/ring-value";
 const LABEL_MASK_EVAL: &[u8] = b"hachi/input/mask-eval";
 const LABEL_MASK_COIN: &[u8] = b"hachi/input/mask-coin";
+const LABEL_MERGED_SHAPE: &[u8] = b"hachi/merged/lengths";
+const LABEL_MERGED_WEIGHTS: &[u8] = b"hachi/merged/weights";
+const LABEL_MERGED_VALUES: &[u8] = b"hachi/merged/values";
+const LABEL_MERGED_COIN: &[u8] = b"hachi/merged/lambda";
 
 /// The PRG domain of a commitment's randomness (index 0).
 pub const DOMAIN_COMMIT_R: &[u8] = b"hachi/commit/r";
@@ -266,6 +309,7 @@ impl<const K: usize> HachiPcs<K> {
             true,
             max_digit(self.ctx.choices.b),
             false,
+            0,
         )
     }
 
@@ -286,6 +330,7 @@ impl<const K: usize> HachiPcs<K> {
             decomposed: true,
             beta_s: max_digit(self.ctx.choices.b),
             masked: self.ctx.hiding().is_some(),
+            extra: 0,
         })
     }
 
@@ -335,6 +380,7 @@ impl<const K: usize> HachiPcs<K> {
             true,
             max_digit(self.ctx.choices.b),
             self.ctx.hiding().is_some(),
+            0,
         )
     }
 
@@ -762,14 +808,20 @@ impl<const K: usize> HachiPcs<K> {
     /// $x^* \in \mathbb F_{q^K} \setminus \lbrace 0 \rbrace$ from the transcript, which has absorbed
     /// $y_{\mathfrak m}$: uniform field elements until one is not zero.
     fn mask_coin(&self, fs: &mut Fs) -> Result<Ext<K>> {
+        self.nonzero_coin(fs, LABEL_MASK_COIN)
+    }
+
+    /// A nonzero field element from the transcript under `label`: uniform field elements until one
+    /// is not zero.
+    fn nonzero_coin(&self, fs: &mut Fs, label: &[u8]) -> Result<Ext<K>> {
         let field = self.ctx.field();
         for _ in 0..hachi_co_sampling::uniform::MAX_TRIES {
-            let coin = fs.field_coins::<K>(LABEL_MASK_COIN, self.ctx.q, 1)?[0];
+            let coin = fs.field_coins::<K>(label, self.ctx.q, 1)?[0];
             if !field.is_zero(&coin) {
                 return Ok(coin);
             }
         }
-        Err(Error::Protocol("no nonzero masking challenge".into()))
+        Err(Error::Protocol("no nonzero challenge".into()))
     }
 
     /// Step 1 of `Eval` with masks, for the prover: from the weights $\mathbf b, \mathbf a, v$ it
@@ -957,6 +1009,8 @@ impl<const K: usize> HachiPcs<K> {
                 ring_value,
                 iterations,
                 final_message,
+                blinder_mask_evals: Vec::new(),
+                blinder_ring_values: Vec::new(),
             },
         ))
     }
@@ -1032,6 +1086,8 @@ impl<const K: usize> HachiPcs<K> {
                 ring_value,
                 iterations,
                 final_message,
+                blinder_mask_evals: Vec::new(),
+                blinder_ring_values: Vec::new(),
             },
         ))
     }
@@ -1115,6 +1171,8 @@ impl<const K: usize> HachiPcs<K> {
                 ring_value,
                 iterations,
                 final_message,
+                blinder_mask_evals: Vec::new(),
+                blinder_ring_values: Vec::new(),
             },
         ))
     }
@@ -1213,6 +1271,11 @@ impl<const K: usize> HachiPcs<K> {
         }
         check_exts(ctx, "point", point, vars)?;
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
+        if !proof.blinder_mask_evals.is_empty() || !proof.blinder_ring_values.is_empty() {
+            return Err(VerifyError::Malformed(
+                "only a merged opening carries the values of two vectors".into(),
+            ));
+        }
         check_exts(ctx, "partial evaluations", &proof.partials, K - 1)?;
         if ctx.hiding().is_some() || proof.mask_eval.is_some() {
             return Err(VerifyError::Malformed(
@@ -1306,6 +1369,11 @@ impl<const K: usize> HachiPcs<K> {
             )));
         }
         check_exts(ctx, "point", point, vars)?;
+        if !proof.blinder_mask_evals.is_empty() || !proof.blinder_ring_values.is_empty() {
+            return Err(VerifyError::Malformed(
+                "only a merged opening carries the values of two vectors".into(),
+            ));
+        }
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
         if !proof.partials.is_empty()
             || !proof.batch_rounds.is_empty()
@@ -1372,6 +1440,11 @@ impl<const K: usize> HachiPcs<K> {
         let ctx = &self.ctx;
         self.check_commitment(commitment)?;
         check_exts(ctx, "weights", weights, len)?;
+        if !proof.blinder_mask_evals.is_empty() || !proof.blinder_ring_values.is_empty() {
+            return Err(VerifyError::Malformed(
+                "only a merged opening carries the values of two vectors".into(),
+            ));
+        }
         check_exts(ctx, "value", core::slice::from_ref(value), 1)?;
         if !proof.partials.is_empty()
             || !proof.batch_rounds.is_empty()
@@ -1412,6 +1485,459 @@ impl<const K: usize> HachiPcs<K> {
         self.verify_rest(
             layout,
             self.masks_or_direct(),
+            &commitment.u,
+            claim,
+            proof,
+            &mut fs,
+        )
+    }
+
+    // --------------------------------------------------------------- merged commitments ----
+
+    /// The layout of a merged commitment ([`HachiPcs::commit_merged`]) to a multilinear polynomial
+    /// over $\mathbb F_{q^K}$ in `vars` variables and two vectors of `lens` elements: the split of
+    /// [`HachiPcs::multilinear_ext_layout`], made again with the extra rows, and per chunk the
+    /// blocks of $d/K$ entries of each vector, each followed by its masking row
+    /// ([`Layout::extra`]), before the chunk's own masking row.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] without hiding (a merged commitment exists only with masks) or with
+    /// fewer than $\alpha - \kappa$ variables, [`Error::Shape`] for an empty vector.
+    pub fn merged_layout(&self, vars: usize, lens: [usize; 2]) -> Result<Layout> {
+        if self.ctx.hiding().is_none() {
+            return Err(Error::Parameter(
+                "a merged commitment needs hiding choices".into(),
+            ));
+        }
+        let n = (vars + self.ctx.kappa())
+            .checked_sub(self.ctx.alpha())
+            .ok_or_else(|| {
+                Error::Parameter(format!(
+                    "a polynomial over the field needs at least alpha - kappa = {} variables",
+                    self.ctx.alpha() - self.ctx.kappa()
+                ))
+            })?;
+        let mut extra = 0;
+        for len in lens {
+            if len == 0 {
+                return Err(Error::Shape("an empty vector cannot be committed".into()));
+            }
+            extra += len.div_ceil(self.ctx.d_over_k()) + 1;
+        }
+        best_layout(
+            &self.ctx.choices,
+            self.ctx.q,
+            n,
+            true,
+            max_digit(self.ctx.choices.b),
+            true,
+            extra,
+        )
+    }
+
+    /// The schedule of a merged opening (module documentation, "Schedule").
+    ///
+    /// # Errors
+    /// As [`HachiPcs::merged_layout`], and [`Error::Parameter`] if the fixed number of iterations
+    /// cannot be parametrised.
+    pub fn merged_schedule(&self, vars: usize, lens: [usize; 2]) -> Result<Schedule> {
+        self.schedule(self.merged_layout(vars, lens)?, Reduction::Merged)
+    }
+
+    /// The number of words of [`HachiPcs::proof_to_words`] for a merged opening. It depends only
+    /// on `vars`, `lens` and the parameters.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::merged_schedule`].
+    pub fn merged_proof_words(&self, vars: usize, lens: [usize; 2]) -> Result<usize> {
+        self.proof_words(&self.merged_schedule(vars, lens)?, Reduction::Merged)
+    }
+
+    /// $\psi$ of the blocks of $d/K$ entries of `values`, the last one zero-padded.
+    fn blocks(&self, values: &[Ext<K>]) -> Result<Vec<Poly>> {
+        let per = self.ctx.d_over_k();
+        let mut padded = values.to_vec();
+        padded.resize(values.len().div_ceil(per) * per, self.ctx.field().zero());
+        Ok(padded
+            .chunks_exact(per)
+            .map(|block| self.ctx.sub.psi(block))
+            .collect::<hachi_co_math::Result<Vec<_>>>()?)
+    }
+
+    /// The weights $\sigma_{-1}(\psi(\cdot))$ of the blocks of `weights` ([`HachiPcs::blocks`]).
+    fn block_weights(&self, weights: &[Ext<K>]) -> Result<Vec<Poly>> {
+        self.blocks(weights)?
+            .iter()
+            .map(|p| Ok(self.ctx.ring.automorphism(p, -1)?))
+            .collect()
+    }
+
+    /// The masking rows of the two vectors of a merged commitment, from the stream
+    /// `(seed, "hachi/commit/mask", 1)`: uniform in $\mathcal R_q$.
+    fn vector_masking_rows(&self, seed: &[u8; 32]) -> Result<Vec<Poly>> {
+        let d = self.ctx.d();
+        let mut prg = ShakePrg::new(seed, DOMAIN_COMMIT_MASK, 1);
+        let residues = uniform_mod_q(&mut prg, self.ctx.q, 2 * d)?;
+        Ok(residues.chunks_exact(d).map(|c| Poly(c.to_vec())).collect())
+    }
+
+    /// Commits, in one commitment, to the multilinear polynomial over $\mathbb F_{q^K}$ with
+    /// monomial coefficients `coeffs` (as [`HachiPcs::commit_multilinear_ext`]) and to the two
+    /// vectors `vectors` (as [`HachiPcs::commit_vector`]): Hachi-Co's share polynomial and its two
+    /// blinders. The share fills the message rows of every chunk, the vectors the extra rows of
+    /// chunk 0, each followed by its masking row, and the other chunks hold zeros there
+    /// ([`HachiPcs::merged_layout`]). Randomness and masking rows come from the secret `seed`.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::merged_layout`], [`Error::Shape`] unless the length of `coeffs` is a power of
+    /// two of at least $d/K$, and arithmetic errors.
+    pub fn commit_merged(
+        &self,
+        coeffs: &[Ext<K>],
+        vectors: [&[Ext<K>]; 2],
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
+        let ctx = &self.ctx;
+        if !coeffs.len().is_power_of_two() || coeffs.len() < ctx.d_over_k() {
+            return Err(Error::Shape(format!(
+                "2^l coefficients with l >= alpha - kappa = {} are expected",
+                ctx.alpha() - ctx.kappa()
+            )));
+        }
+        let vars = coeffs.len().trailing_zeros() as usize;
+        let layout = self.merged_layout(vars, [vectors[0].len(), vectors[1].len()])?;
+        let g = ctx.d_over_k();
+        let mut block = Vec::with_capacity(g);
+        let mut message = coeffs
+            .chunks_exact(g * layout.message_len())
+            .map(|chunk| {
+                chunk
+                    .chunks_exact(g)
+                    .map(|c| {
+                        block.clear();
+                        block.extend(c.iter().map(|x| ctx.field().reduce(x)));
+                        ctx.sub.psi(&block)
+                    })
+                    .collect::<hachi_co_math::Result<Vec<Poly>>>()
+            })
+            .collect::<hachi_co_math::Result<Vec<_>>>()?;
+        let values: [Vec<Ext<K>>; 2] =
+            vectors.map(|v| v.iter().map(|x| ctx.field().reduce(x)).collect());
+        let mut extra = Vec::with_capacity(layout.extra);
+        for (v, row) in values.iter().zip(self.vector_masking_rows(seed)?) {
+            extra.extend(self.blocks(v)?);
+            extra.push(row);
+        }
+        let zeros = vec![ctx.ring.zero(); layout.extra];
+        for (i, chunk) in message.iter_mut().enumerate() {
+            chunk.extend_from_slice(if i == 0 { &extra } else { &zeros });
+        }
+        for (chunk, row) in message.iter_mut().zip(self.masking_rows(&layout, seed)?) {
+            chunk.push(row);
+        }
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R)?;
+        let committed = commit(ctx, 0, layout, message, r)?;
+        Ok((
+            Commitment {
+                u: committed.u.clone(),
+            },
+            State {
+                input: Input::Merged { vars, values },
+                committed,
+            },
+        ))
+    }
+
+    /// The transcript of a merged opening after its statement: the statement of the share's
+    /// opening (kind 4), then the lengths and weights of the two vectors and their values.
+    fn merged_statement(
+        &self,
+        context: &[u8; 32],
+        vars: usize,
+        commitment: &[Poly],
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        values: &[Ext<K>; 3],
+    ) -> Fs {
+        let mut fs = self.statement(context, 4, vars, commitment, point, &values[0]);
+        fs.words(
+            LABEL_MERGED_SHAPE,
+            &[weights[0].len() as u64, weights[1].len() as u64],
+        );
+        fs.exts(LABEL_MERGED_WEIGHTS, weights[0]);
+        fs.exts(LABEL_MERGED_WEIGHTS, weights[1]);
+        fs.exts(LABEL_MERGED_VALUES, &values[1..]);
+        fs
+    }
+
+    /// The first claim of a merged opening: the weights $\mathbf a$ of the share, then $\lambda$
+    /// times the block weights of the first vector and $\lambda x^*$ for its masking row,
+    /// $\lambda^2$ times those of the second and $\lambda^2 x^*$, and $x^*$ for the chunk's masking
+    /// row, with the target $Y^*_w + \lambda Y^*_0 + \lambda^2 Y^*_1$. Chunk 0 has $b_1 = 1$, and the
+    /// other chunks hold zeros in the extra rows, so an honest witness meets it.
+    #[allow(clippy::too_many_arguments)]
+    fn merged_claim(
+        &self,
+        layout: &Layout,
+        b: Vec<Poly>,
+        a: Vec<Poly>,
+        vector_weights: &[Vec<Poly>; 2],
+        coin: &Ext<K>,
+        lambda: &Ext<K>,
+        targets: &[Poly; 3],
+    ) -> Result<Claim> {
+        let (field, ring, sub) = (self.ctx.field(), &self.ctx.ring, &self.ctx.sub);
+        let mut weights = a;
+        let mut target = targets[0].clone();
+        let mut power = *lambda;
+        for (w, t) in vector_weights.iter().zip(&targets[1..]) {
+            let p = sub.embed(&power);
+            for x in w {
+                weights.push(ring.mul(&p, x)?);
+            }
+            weights.push(sub.embed(&field.mul(&power, coin)));
+            target = ring.add(&target, &ring.mul(&p, t)?)?;
+            power = field.mul(&power, lambda);
+        }
+        weights.push(sub.embed(coin));
+        if weights.len() != layout.chunk_len() {
+            return Err(Error::Shape(
+                "the merged weights do not fit the layout".into(),
+            ));
+        }
+        Ok(Claim {
+            b,
+            a: weights,
+            target,
+        })
+    }
+
+    /// Proves, for a merged commitment, the share's value at `point` and the two vectors' inner
+    /// products with `weights`, and returns the three values and one proof. `seed` as for
+    /// [`HachiPcs::prove_multilinear`].
+    ///
+    /// The prover sends the three values with the statement, then the three masks' values
+    /// $y_{\mathfrak m}$ (the share's for $v$, the vectors' for $v = 1$), receives $x^*$, and sends
+    /// $Y^*_w, Y^*_0, Y^*_1$, one per committed object, which the verifier checks by three trace
+    /// checks. Only then is $\lambda \ne 0$ drawn, and the iterations prove one claim, with the
+    /// weights of the share, $\lambda$ times those of the first vector and $\lambda^2$ times those of
+    /// the second, and the target $Y^*_w + \lambda Y^*_0 + \lambda^2 Y^*_1$. A false value with a ring
+    /// value fitted to its trace check makes that claim false unless $\lambda$ is one of at most 2
+    /// roots.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for a state of another kind, a point or weights of the wrong length, and
+    /// prover errors.
+    pub fn prove_merged(
+        &self,
+        state: &State<K>,
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<([Ext<K>; 3], Proof<K>)> {
+        let ctx = &self.ctx;
+        let (field, ring) = (ctx.field(), &ctx.ring);
+        let Input::Merged { vars, values } = &state.input else {
+            return Err(Error::Shape("this state is not a merged commitment".into()));
+        };
+        if point.len() != *vars {
+            return Err(Error::Shape(format!(
+                "a point of {vars} coordinates is expected"
+            )));
+        }
+        for (v, e) in values.iter().zip(weights) {
+            if e.len() != v.len() {
+                return Err(Error::Shape(format!("{} weights are expected", v.len())));
+            }
+        }
+        let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
+        let weights: [Vec<Ext<K>>; 2] =
+            weights.map(|e| e.iter().map(|x| field.reduce(x)).collect());
+        let layout = state.committed.layout;
+        let chunks = &state.committed.message;
+        let (b, a, v) = self.ring_weights(&layout, &point)?;
+        let one = ring.monomial(0);
+        let len = layout.message_len();
+        // The share: its ring value from the message rows alone, and its masks.
+        let share: Vec<Vec<Poly>> = chunks.iter().map(|c| c[..len].to_vec()).collect();
+        let y_share = evaluate_claim(ctx, &b, &a, &share)?;
+        let mut y_mask = ring.zero();
+        for (bi, chunk) in b.iter().zip(chunks) {
+            let row = chunk
+                .last()
+                .ok_or_else(|| Error::Shape("an empty chunk".into()))?;
+            y_mask = ring.add(&y_mask, &ring.mul(bi, row)?)?;
+        }
+        // The vectors: the extra rows of chunk 0, each followed by its masking row.
+        let mut at = len;
+        let mut ys = Vec::with_capacity(2);
+        let mut rows = Vec::with_capacity(2);
+        let mut vector_weights = Vec::with_capacity(2);
+        for (vals, e) in values.iter().zip(&weights) {
+            let n = vals.len().div_ceil(ctx.d_over_k());
+            let w = self.block_weights(e)?;
+            ys.push(ring.inner(&w, &chunks[0][at..at + n])?);
+            rows.push(chunks[0][at + n].clone());
+            vector_weights.push(w);
+            at += n + 1;
+        }
+        let direct = |vals: &[Ext<K>], e: &[Ext<K>]| {
+            vals.iter().zip(e).fold(field.zero(), |acc, (x, y)| {
+                field.add(&acc, &field.mul(x, y))
+            })
+        };
+        let out = [
+            self.traced(&y_share, &v)?,
+            direct(&values[0], &weights[0]),
+            direct(&values[1], &weights[1]),
+        ];
+        for (y, value) in ys.iter().zip(&out[1..]) {
+            if self.traced(y, &one)? != *value {
+                return Err(Error::Protocol(
+                    "the trace check of a merged vector fails".into(),
+                ));
+            }
+        }
+        let mut fs = self.merged_statement(
+            context,
+            *vars,
+            &state.committed.u,
+            &point,
+            [&weights[0], &weights[1]],
+            &out,
+        );
+        let mask_evals = [
+            self.traced(&y_mask, &v)?,
+            self.traced(&rows[0], &one)?,
+            self.traced(&rows[1], &one)?,
+        ];
+        fs.exts(LABEL_MASK_EVAL, &mask_evals);
+        let coin = self.mask_coin(&mut fs)?;
+        let x = ctx.sub.embed(&coin);
+        let targets = [
+            ring.add(&y_share, &ring.mul(&x, &y_mask)?)?,
+            ring.add(&ys[0], &ring.mul(&x, &rows[0])?)?,
+            ring.add(&ys[1], &ring.mul(&x, &rows[1])?)?,
+        ];
+        for ((t, vv), (value, m)) in targets
+            .iter()
+            .zip([&v, &one, &one])
+            .zip(out.iter().zip(&mask_evals))
+        {
+            if self.traced(t, vv)? != field.add(value, &field.mul(&coin, m)) {
+                return Err(Error::Protocol(
+                    "the trace check of the merged claim fails".into(),
+                ));
+            }
+        }
+        fs.polys(LABEL_RING_VALUE, &targets);
+        let lambda = self.nonzero_coin(&mut fs, LABEL_MERGED_COIN)?;
+        let vector_weights: [Vec<Poly>; 2] = vector_weights
+            .try_into()
+            .map_err(|_| Error::Shape("two vectors are expected".into()))?;
+        let claim = self.merged_claim(&layout, b, a, &vector_weights, &coin, &lambda, &targets)?;
+        let (iterations, final_message) = self.prove_rest(
+            layout,
+            Reduction::Merged,
+            &state.committed,
+            claim,
+            &mut fs,
+            seed,
+        )?;
+        let [ring_value, r0, r1] = targets;
+        Ok((
+            out,
+            Proof {
+                partials: Vec::new(),
+                batch_rounds: Vec::new(),
+                batch_eval: None,
+                mask_eval: Some(mask_evals[0]),
+                ring_value,
+                iterations,
+                final_message,
+                blinder_mask_evals: vec![mask_evals[1], mask_evals[2]],
+                blinder_ring_values: vec![r0, r1],
+            },
+        ))
+    }
+
+    /// Verifies a merged opening ([`HachiPcs::prove_merged`]): the polynomial in `vars` variables
+    /// takes `values[0]` at `point`, and the two vectors, of the lengths of `weights`, have the
+    /// inner products `values[1]` and `values[2]` with them.
+    ///
+    /// # Errors
+    /// [`VerifyError`] for a malformed or rejected proof.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_merged(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        values: &[Ext<K>; 3],
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<(), VerifyError> {
+        let ctx = &self.ctx;
+        let field = ctx.field();
+        self.check_commitment(commitment)?;
+        if point.len() != vars {
+            return Err(VerifyError::Malformed(format!(
+                "a point of {vars} coordinates is expected"
+            )));
+        }
+        check_exts(ctx, "point", point, vars)?;
+        check_exts(ctx, "values", values, 3)?;
+        for e in weights {
+            check_exts(ctx, "weights", e, e.len())?;
+        }
+        if !proof.partials.is_empty()
+            || !proof.batch_rounds.is_empty()
+            || proof.batch_eval.is_some()
+        {
+            return Err(VerifyError::Malformed(
+                "a merged opening has no partial evaluations and no batching sumcheck".into(),
+            ));
+        }
+        let (Some(mask_eval), [m0, m1], [r0, r1]) = (
+            &proof.mask_eval,
+            proof.blinder_mask_evals.as_slice(),
+            proof.blinder_ring_values.as_slice(),
+        ) else {
+            return Err(VerifyError::Malformed(
+                "a merged opening carries three masks' values and three ring values".into(),
+            ));
+        };
+        let mask_evals = [*mask_eval, *m0, *m1];
+        check_exts(ctx, "masks' values", &mask_evals, 3)?;
+        let targets = [proof.ring_value.clone(), r0.clone(), r1.clone()];
+        check_polys(ctx, "ring values", &targets, 3)?;
+        let layout = self.merged_layout(vars, [weights[0].len(), weights[1].len()])?;
+        let (b, a, v) = self.ring_weights(&layout, point)?;
+        let one = ctx.ring.monomial(0);
+        let vector_weights = [
+            self.block_weights(weights[0])?,
+            self.block_weights(weights[1])?,
+        ];
+        let mut fs = self.merged_statement(context, vars, &commitment.u, point, weights, values);
+        fs.exts(LABEL_MASK_EVAL, &mask_evals);
+        let coin = self.mask_coin(&mut fs)?;
+        for ((t, vv), (value, m)) in targets
+            .iter()
+            .zip([&v, &one, &one])
+            .zip(values.iter().zip(&mask_evals))
+        {
+            if self.traced(t, vv)? != field.add(value, &field.mul(&coin, m)) {
+                return Err(VerifyError::Check("the trace of the merged claim".into()));
+            }
+        }
+        fs.polys(LABEL_RING_VALUE, &targets);
+        let lambda = self.nonzero_coin(&mut fs, LABEL_MERGED_COIN)?;
+        let claim = self.merged_claim(&layout, b, a, &vector_weights, &coin, &lambda, &targets)?;
+        self.verify_rest(
+            layout,
+            Reduction::Merged,
             &commitment.u,
             claim,
             proof,
@@ -1624,7 +2150,8 @@ impl<const K: usize> HachiPcs<K> {
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
         out.push(proof.final_message.len() as u64);
         if self.ctx.hiding().is_some() {
-            out.push(u64::from(proof.mask_eval.is_some()));
+            let merged = !proof.blinder_ring_values.is_empty();
+            out.push(u64::from(proof.mask_eval.is_some()) | (u64::from(merged) << 1));
         }
         let mut w = BitWriter::default();
         self.put_exts(&mut w, &proof.partials);
@@ -1637,7 +2164,9 @@ impl<const K: usize> HachiPcs<K> {
         if let Some(y_mask) = &proof.mask_eval {
             self.put_exts(&mut w, core::slice::from_ref(y_mask));
         }
+        self.put_exts(&mut w, &proof.blinder_mask_evals);
         self.put_polys(&mut w, core::slice::from_ref(&proof.ring_value));
+        self.put_polys(&mut w, &proof.blinder_ring_values);
         for it in &proof.iterations {
             self.put_polys(&mut w, &it.v);
             self.put_polys(&mut w, &it.next_commitment);
@@ -1714,8 +2243,9 @@ impl<const K: usize> HachiPcs<K> {
             match (masked, reduction) {
                 (0, _) => {}
                 (1, Reduction::Direct) => reduction = Reduction::Masked,
-                (1, _) => return Err(shape("a masks' value next to partial evaluations")),
-                _ => return Err(shape("the masked word of the header is not a bit")),
+                (3, Reduction::Direct) => reduction = Reduction::Merged,
+                (1 | 3, _) => return Err(shape("a masks' value next to partial evaluations")),
+                _ => return Err(shape("the masked word of the header is not 0, 1 or 3")),
             }
             stream
         } else {
@@ -1771,13 +2301,16 @@ impl<const K: usize> HachiPcs<K> {
             .collect::<Result<Vec<_>>>()?;
         let batch_eval = match reduction {
             Reduction::Multilinear { .. } => Some(self.take_ext(&mut r)?),
-            Reduction::Direct | Reduction::Masked => None,
+            Reduction::Direct | Reduction::Masked | Reduction::Merged => None,
         };
         let mask_eval = match reduction {
-            Reduction::Masked => Some(self.take_ext(&mut r)?),
+            Reduction::Masked | Reduction::Merged => Some(self.take_ext(&mut r)?),
             _ => None,
         };
+        let merged = usize::from(reduction == Reduction::Merged) * 2;
+        let blinder_mask_evals = self.take_exts(&mut r, merged)?;
         let ring_value = self.take_poly(&mut r)?;
+        let blinder_ring_values = self.take_polys(&mut r, merged)?;
         let mut iterations = Vec::with_capacity(count);
         for l in round_counts {
             let v = self.take_polys(&mut r, c.n_d)?;
@@ -1823,6 +2356,8 @@ impl<const K: usize> HachiPcs<K> {
             ring_value,
             iterations,
             final_message,
+            blinder_mask_evals,
+            blinder_ring_values,
         })
     }
 }
@@ -1830,15 +2365,16 @@ impl<const K: usize> HachiPcs<K> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BitReader, BitWriter, Commitment, HachiPcs, LABEL_PARTIALS, LABEL_RING_VALUE, Proof, State,
+        BitReader, BitWriter, Commitment, HachiPcs, Input, LABEL_MASK_EVAL, LABEL_MERGED_COIN,
+        LABEL_PARTIALS, LABEL_RING_VALUE, Proof, State,
     };
     use crate::error::VerifyError;
     use crate::fs::Fs;
     use crate::iteration::{Claim, basis, evaluate_claim};
     use crate::mle::mle_eval;
-    use crate::params::HachiChoices;
+    use crate::params::{HachiChoices, Hiding};
     use crate::partials::{self, RoundValues};
-    use hachi_co_math::Ext;
+    use hachi_co_math::{Ext, Poly};
 
     const K: usize = 4;
     /// The modulus of Hachi-Co's toy-n1 preset (24 bits).
@@ -1973,6 +2509,8 @@ mod tests {
                 ring_value,
                 iterations,
                 final_message,
+                blinder_mask_evals: Vec::new(),
+                blinder_ring_values: Vec::new(),
             }
         }
 
@@ -2217,5 +2755,151 @@ mod tests {
         assert!(r.finish().is_err());
         let r = BitReader { words: &[], bit: 0 };
         r.finish().unwrap();
+    }
+
+    /// Step 1 of a merged opening for a prover that claims `values` and adds `shifts` to its three
+    /// ring values after the masking challenge of its own transcript: whether its three trace
+    /// checks pass, its ring values, and the combined claim the iterations would have to prove.
+    #[allow(clippy::too_many_arguments)]
+    fn lying_merged_claim(
+        pcs: &HachiPcs<K>,
+        state: &State<K>,
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        values: &[Ext<K>; 3],
+        shifts: &[Poly; 3],
+        context: &[u8; 32],
+    ) -> (bool, [Poly; 3], Claim) {
+        let ctx = pcs.ctx();
+        let (field, ring) = (ctx.field(), &ctx.ring);
+        let Input::Merged {
+            vars,
+            values: vectors,
+        } = &state.input
+        else {
+            panic!("a merged state")
+        };
+        let layout = state.committed.layout;
+        let chunks = &state.committed.message;
+        let (b, a, v) = pcs.ring_weights(&layout, point).unwrap();
+        let one = ring.monomial(0);
+        let len = layout.message_len();
+        let share: Vec<Vec<Poly>> = chunks.iter().map(|c| c[..len].to_vec()).collect();
+        let y_share = evaluate_claim(ctx, &b, &a, &share).unwrap();
+        let mut y_mask = ring.zero();
+        for (bi, chunk) in b.iter().zip(chunks) {
+            y_mask = ring
+                .add(&y_mask, &ring.mul(bi, chunk.last().unwrap()).unwrap())
+                .unwrap();
+        }
+        let mut at = len;
+        let (mut ys, mut rows, mut block_weights) = (Vec::new(), Vec::new(), Vec::new());
+        for (vals, e) in vectors.iter().zip(weights) {
+            let n = vals.len().div_ceil(ctx.d_over_k());
+            let w = pcs.block_weights(e).unwrap();
+            ys.push(ring.inner(&w, &chunks[0][at..at + n]).unwrap());
+            rows.push(chunks[0][at + n].clone());
+            block_weights.push(w);
+            at += n + 1;
+        }
+        let mut fs =
+            pcs.merged_statement(context, *vars, &state.committed.u, point, weights, values);
+        let mask_evals = [
+            pcs.traced(&y_mask, &v).unwrap(),
+            pcs.traced(&rows[0], &one).unwrap(),
+            pcs.traced(&rows[1], &one).unwrap(),
+        ];
+        fs.exts(LABEL_MASK_EVAL, &mask_evals);
+        let coin = pcs.mask_coin(&mut fs).unwrap();
+        let x = ctx.sub.embed(&coin);
+        let honest = [
+            ring.add(&y_share, &ring.mul(&x, &y_mask).unwrap()).unwrap(),
+            ring.add(&ys[0], &ring.mul(&x, &rows[0]).unwrap()).unwrap(),
+            ring.add(&ys[1], &ring.mul(&x, &rows[1]).unwrap()).unwrap(),
+        ];
+        let targets: [Poly; 3] =
+            core::array::from_fn(|i| ring.add(&honest[i], &shifts[i]).unwrap());
+        let traces_pass = targets
+            .iter()
+            .zip([&v, &one, &one])
+            .zip(values.iter().zip(&mask_evals))
+            .all(|((t, vv), (value, m))| {
+                pcs.traced(t, vv).unwrap() == field.add(value, &field.mul(&coin, m))
+            });
+        fs.polys(LABEL_RING_VALUE, &targets);
+        let lambda = pcs.nonzero_coin(&mut fs, LABEL_MERGED_COIN).unwrap();
+        let block_weights: [Vec<Poly>; 2] = block_weights.try_into().unwrap();
+        let claim = pcs
+            .merged_claim(&layout, b, a, &block_weights, &coin, &lambda, &targets)
+            .unwrap();
+        (traces_pass, targets, claim)
+    }
+
+    #[test]
+    fn a_false_merged_value_fitted_to_its_trace_check_fails_after_lambda() {
+        let choices = HachiChoices {
+            hiding: Some(Hiding {
+                nu: 1,
+                n_a: 1,
+                lambda: 128,
+                phi: 13,
+            }),
+            fixed_iterations: Some(1),
+            ..HachiChoices::toy(16)
+        };
+        let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+        let ctx = pcs.ctx();
+        let (field, ring) = (ctx.field(), &ctx.ring);
+        let ext = |i: u64| Ext([i % Q, (3 * i + 1) % Q, (7 * i + 2) % Q, (11 * i + 5) % Q]);
+        let coeffs: Vec<Ext<K>> = (0..256).map(ext).collect();
+        let g0: Vec<Ext<K>> = (300..333).map(ext).collect();
+        let g1: Vec<Ext<K>> = (400..409).map(ext).collect();
+        let point: Vec<Ext<K>> = (500..508).map(ext).collect();
+        let e0: Vec<Ext<K>> = (600..633).map(ext).collect();
+        let e1: Vec<Ext<K>> = (700..709).map(ext).collect();
+        let context = [3u8; 32];
+        let (_, state) = pcs.commit_merged(&coeffs, [&g0, &g1], &[1u8; 32]).unwrap();
+        let (values, honest) = pcs
+            .prove_merged(&state, &point, [&e0, &e1], &context, &[2u8; 32])
+            .unwrap();
+        let holds = |claim: &Claim| {
+            evaluate_claim(ctx, &claim.b, &claim.a, &state.committed.message).unwrap()
+                == claim.target
+        };
+        let zero = [ring.zero(), ring.zero(), ring.zero()];
+        // Control: the true values and no shift give the honest prover's ring values and a claim
+        // the witness meets.
+        let (passes, targets, claim) =
+            lying_merged_claim(&pcs, &state, &point, [&e0, &e1], &values, &zero, &context);
+        assert!(passes && holds(&claim));
+        assert_eq!(targets[0], honest.ring_value);
+        assert_eq!(targets[1..], honest.blinder_ring_values[..]);
+        // A false vector value with the ring value moved by 1, whose trace is 1 for v = 1: every
+        // trace check passes under the prover's own x*, and the combined claim is false.
+        for i in 1..3 {
+            let mut lie = values;
+            lie[i] = field.add(&lie[i], &field.one());
+            let mut shifts = zero.clone();
+            shifts[i] = ring.monomial(0);
+            let (passes, _, claim) =
+                lying_merged_claim(&pcs, &state, &point, [&e0, &e1], &lie, &shifts, &context);
+            assert!(
+                passes,
+                "vector {i}: the fitted ring value passes its trace check"
+            );
+            assert!(!holds(&claim), "vector {i}: the combined claim is false");
+        }
+        // Both vectors lying at once, by amounts that would cancel for one value of lambda only.
+        let mut lie = values;
+        lie[1] = field.add(&lie[1], &field.one());
+        lie[2] = field.sub(&lie[2], &field.one());
+        let shifts = [
+            ring.zero(),
+            ring.monomial(0),
+            ring.neg(&ring.monomial(0)).unwrap(),
+        ];
+        let (passes, _, claim) =
+            lying_merged_claim(&pcs, &state, &point, [&e0, &e1], &lie, &shifts, &context);
+        assert!(passes && !holds(&claim), "two lies");
     }
 }

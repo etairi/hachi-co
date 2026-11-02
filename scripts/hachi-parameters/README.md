@@ -4,7 +4,7 @@
 base b, challenge radius ω and matrix height n_A (n_B = n_D = 1), and where one exists the masks of the share
 polynomial and the blinders: the MLWE rank ν and the height of level 0, shared by the three objects. It is an
 estimate of the Module-SIS instances that Hachi's iterations use and of the MLWE instance of its commitments, not a
-proof.
+proof. The masks are chosen for the draft's three commitments per prover, not for the merged option.
 
 Steps, from the repository root:
 
