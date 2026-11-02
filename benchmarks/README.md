@@ -18,6 +18,14 @@ quiet, so read the times as indicative. Runs across real machines come later.
 - **Proof.** The measured encoding, always equal to the prediction of `hachi_co_params::sizes_with_base`. The raw lines
   in `local-2026-10-31.jsonl` also give `packed_bytes`, the size with each residue in ⌈log₂ q⌉ bits. The grid of
   2026-10-30, with one core per party and proof format version 3, stays in `local-2026-10-30.jsonl`.
+- **Masks.** These grids predate the masks of hiding Hachi, so the commands below no longer reproduce them: from proof
+  format version 5 on, `hachi.json` sets masks at 24 of the 26 presets, and the `bench-*` presets over the field take
+  the toy masks. Commit `b7a9477` repeats the grids. `local-2026-11-01.jsonl` has one run with masks, of
+  `secure-l16-n2-a8` with n = 2, against the line of the same preset here: Eval 79.7 s against 33.6 s, Verify 1.71 s
+  against 1.04 s, the proof 992,088 bytes against 989,976, and the larger party's peak 8.5 GiB against 3.0 GiB. An
+  earlier run of the same preset took 64.9 s for Eval, so read that time as a rough one. The parameters differ too
+  (ω = 24 against 32, height 11 at the first level), and vector commitments are not masked yet, so this is not yet the
+  cost of a hiding proof.
 
 Commands, from the repository root. The seeds are SHA-256 of the tag `hachi-co/bench` and an index, so each line
 reproduces its instance:

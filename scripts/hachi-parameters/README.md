@@ -1,8 +1,9 @@
 # Hachi's parameters for the secure presets
 
 `crates/params/presets/hachi.json` gives, for each secure preset of Hachi-Co, one choice of Hachi's decomposition
-base b, challenge radius ω and matrix height n_A (n_B = n_D = 1), without hiding. It is an estimate of the binding of
-the Module-SIS instances that Hachi's iterations use, not a proof, and it does not cover hiding.
+base b, challenge radius ω and matrix height n_A (n_B = n_D = 1), and where one exists the masks of the share
+polynomial: the MLWE rank ν and the height of level 0. It is an estimate of the Module-SIS instances that Hachi's
+iterations use and of the MLWE instance of its commitments, not a proof. The blinders are not masked yet.
 
 Steps, from the repository root:
 
@@ -16,15 +17,22 @@ Steps, from the repository root:
 
    The moduli are those of `secure.json`; pass new ones as arguments, each as its own word.
 
-2. The schedules and proof sizes of the candidates, for the secure presets as they are in `secure.json`:
+2. `mlwe_ranks.txt`: the least ν per modulus, ring degree and base, for uniform digits as secret and error. Some
+   minutes on one core, with the same lattice estimator next to the script and `secure.json` as its argument:
+
+   ```text
+   sage mlwe_ranks.sage crates/params/presets/secure.json > scripts/hachi-parameters/mlwe_ranks.txt
+   ```
+
+3. The schedules and proof sizes of the candidates, for the secure presets as they are in `secure.json`:
 
    ```text
    cargo test --release -p hachi-co --test hachi_parameters hachi_layouts -- --ignored --nocapture \
      | grep '^{' > /tmp/layouts.jsonl
    ```
 
-3. The choice: per preset, among the candidates where the share polynomial and both blinders reach the target, the one
-   with the fewest proof words (`choose.py` documents the instances):
+4. The choice: per preset, among the candidates where the share polynomial and both blinders reach the target, the one
+   with the fewest proof words, a masked share polynomial first (`choose.py` documents the instances):
 
    ```text
    python3 scripts/hachi-parameters/choose.py /tmp/layouts.jsonl > crates/params/presets/hachi.json
