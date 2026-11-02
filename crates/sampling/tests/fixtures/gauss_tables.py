@@ -10,15 +10,17 @@ Pr[K = i] proportional to rho(i) = exp(-(num/den) i^2), that is of standard devi
 1/(2 sigma^2) = num/den (not the width s = sigma sqrt(2 pi) of GPV and of Hwang-Seo-Song):
 
     name             num/den   sigma   bits   use
-    GAUSS_SIGMA_1    1/2       1       128
-    GAUSS_SIGMA_2    1/8       2       128
-    GAUSS_SIGMA_4    1/32      4       128
-    GAUSS_SIGMA_8    1/128     8       128
-    GAUSS_SIGMA_16   1/512     16      128    the base of gauss::WideGaussian, the masks of hiding Hachi
+    GAUSS_SIGMA_1    1/2       1       192
+    GAUSS_SIGMA_2    1/8       2       192
+    GAUSS_SIGMA_4    1/32      4       192
+    GAUSS_SIGMA_8    1/128     8       192
+    GAUSS_SIGMA_16   1/512     16      192    the base of gauss::WideGaussian, the masks of hiding Hachi
 
-Entry j of a table is round(2^128 Pr[K > j]); a table keeps the entries that do not round to 0.
-A sampler draws V uniform in [0, 2^128) and sets K = #{j : V < entry j}. The entries are
-non-increasing, so Pr[K > j] = entry_j / 2^128 exactly and K never exceeds the table length.
+Entry j of a table is round(2^192 Pr[K > j]); a table keeps the entries that do not round to 0.
+A sampler draws V uniform in [0, 2^192) and sets K = #{j : V < entry j}. The entries are
+non-increasing, so Pr[K > j] = entry_j / 2^192 exactly and K never exceeds the table length.
+The Rust file writes an entry as three 64-bit limbs, most significant first, so that the arrays
+compare as the integers do.
 
 Every entry is enclosed in interval arithmetic (mpmath.iv, 1024-bit endpoints). The sums are
 cut after TERMS terms and the rest is bounded by a geometric series:
@@ -43,11 +45,11 @@ RUST = Path(__file__).resolve().parents[2] / "src" / "gauss_tables.rs"
 
 # name: (num, den, sigma as the documentation writes it, bits, TERMS)
 TABLES = {
-    "GAUSS_SIGMA_1": (1, 2, "1", 128, 64),
-    "GAUSS_SIGMA_2": (1, 8, "2", 128, 88),
-    "GAUSS_SIGMA_4": (1, 32, "4", 128, 136),
-    "GAUSS_SIGMA_8": (1, 128, "8", 128, 232),
-    "GAUSS_SIGMA_16": (1, 512, "16", 128, 424),
+    "GAUSS_SIGMA_1": (1, 2, "1", 192, 64),
+    "GAUSS_SIGMA_2": (1, 8, "2", 192, 88),
+    "GAUSS_SIGMA_4": (1, 32, "4", 192, 136),
+    "GAUSS_SIGMA_8": (1, 128, "8", 192, 232),
+    "GAUSS_SIGMA_16": (1, 512, "16", 192, 424),
 }
 
 
@@ -114,13 +116,17 @@ HEADER = r"""//! The tables of [`crate::gauss`], written by `tests/fixtures/gaus
 //! Every table is the reverse CDT of a half-Gaussian $K \in \lbrace 0, 1, 2, \dots \rbrace$ with
 //! $\Pr\[K = i\] \propto e^{-(a/b) i^2}$, that is of standard deviation $\sigma$ with
 //! $1/(2\sigma^2) = a/b$ (not the width $s = \sigma\sqrt{2\pi}$ of GPV and Hwang-Seo-Song). Entry
-//! $j$ is $2^{128}\Pr\[K > j\]$ rounded to the nearest integer; a table keeps the entries that do
-//! not round to 0. A sampler draws $V$ uniform in $\[0, 2^{128})$ and returns
-//! $K = \\#\lbrace j : V < T_j \rbrace$, so that $\Pr\[K > j\] = T_j/2^{128}$ exactly. The entries are
+//! $j$ is $2^{192}\Pr\[K > j\]$ rounded to the nearest integer, and a table keeps the entries that
+//! do not round to 0. A sampler draws $V$ uniform in $\[0, 2^{192})$ and returns
+//! $K = \\#\lbrace j : V < T_j \rbrace$, so that $\Pr\[K > j\] = T_j/2^{192}$ exactly. The entries are
 //! non-increasing. Every entry is enclosed in 1024-bit interval arithmetic and its rounding is
 //! certain (the script fails otherwise).
 //!
 //! Generator: a port of ntru-trapdoor's `tools/gauss_tables.py` (same author, MIT).
+
+/// An entry of a table: a 192-bit integer as three 64-bit limbs, most significant first, so that
+/// entries compare as the integers do.
+pub type Entry = [u64; 3];
 """
 
 
@@ -134,21 +140,22 @@ def rust(values):
                f"rounds to 0).")
         parts.append("\n" + "".join(f"/// {line}\n" for line in textwrap.wrap(
             doc, 96, break_long_words=False, break_on_hyphens=False)))
-        assert bits == 128
-        parts.append(f"pub const {name}: [u128; {len(entries)}] = [\n")
-        parts.extend(f"    0x{v:032x},\n" for v in entries)
+        assert bits == 192
+        parts.append(f"pub const {name}: [Entry; {len(entries)}] = [\n")
+        parts.extend(f"    [0x{v >> 128:016x}, 0x{(v >> 64) & (2**64 - 1):016x}, 0x{v & (2**64 - 1):016x}],\n"
+                     for v in entries)
         parts.append("];\n")
     return "".join(parts)
 
 
 def digest(values):
-    """SHAKE256, 32 bytes in hex, per table: LE64(length), then every entry as 16 little-endian
+    """SHAKE256, 32 bytes in hex, per table: LE64(length), then every entry as 24 little-endian
     bytes."""
     out = {}
     for name in TABLES:
         entries = values[name]
         data = len(entries).to_bytes(8, "little")
-        data += b"".join(v.to_bytes(16, "little") for v in entries)
+        data += b"".join(v.to_bytes(24, "little") for v in entries)
         out[name] = hashlib.shake_256(data).hexdigest(32)
     return out
 

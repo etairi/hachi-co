@@ -13,7 +13,7 @@
 //!
 //! **Exactness.** Every uniform sampler is exactly uniform on its set given a uniform source, by
 //! rejection on whole words (no modular reduction, no floating point). The Gaussian samplers are
-//! exact up to their 128-bit tables (statistical distance below $2^{-122.8}$ per sample at every
+//! exact up to their 192-bit tables (statistical distance below $2^{-186.5}$ per sample at every
 //! width computed, [`gauss`]). A rejection loop that fails [`uniform::MAX_TRIES`] times in a row returns
 //! [`Error::RejectionLimit`], which a uniform source triggers with probability below $2^{-256}$.
 //!

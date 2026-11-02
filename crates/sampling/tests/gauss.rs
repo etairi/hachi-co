@@ -5,7 +5,7 @@
 //!   non-increasing and end in a nonzero entry;
 //! - samples follow the distribution the table defines (chi-square) with its variance, and stay
 //!   within the bound;
-//! - a try reads three words and follows the documented rule, including the repetition;
+//! - a try reads four words and follows the documented rule, including the repetition
 //! - the repetition cap and an unsupported width are errors.
 //! - wide samples follow $D_{\mathbb Z,\sigma}$ itself (chi-square against the exact probabilities
 //!   for small $k$), and have the moments of a Gaussian at the sizes of Hachi's masks.
@@ -18,17 +18,21 @@
 mod common;
 
 use common::{Constant, Scripted, assert_chi_square};
+use hachi_co_sampling::gauss_tables::Entry;
 use hachi_co_sampling::uniform::MAX_TRIES;
 use hachi_co_sampling::{Error, ShakePrg, gauss};
 use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
-/// SHAKE256 of LE64(length) and every entry as 16 little-endian bytes, 32 bytes in hex (the
+/// SHAKE256 of LE64(length) and every entry as 24 little-endian bytes, 32 bytes in hex (the
 /// digest of `gauss_tables.py --digest`).
-fn digest(table: &[u128]) -> String {
+fn digest(table: &[Entry]) -> String {
     let mut h = Shake256::default();
     h.update(&(table.len() as u64).to_le_bytes());
     for t in table {
-        h.update(&t.to_le_bytes());
+        // The limbs are most significant first.
+        for limb in t.iter().rev() {
+            h.update(&limb.to_le_bytes());
+        }
     }
     let mut out = [0u8; 32];
     h.finalize_xof().read(&mut out);
@@ -40,24 +44,24 @@ fn the_tables_have_the_pinned_digests_and_shapes() {
     // From `sage -python crates/sampling/tests/fixtures/gauss_tables.py --digest`.
     let pinned = [
         (
-            13,
-            "e6356c3b562ebbef593848be323aef0e6f04b6fde5ebfd7126f79ab6d1a1db4f",
+            16,
+            "b2ad20f5401f0e09a755a869d4ba2460e6cf9c64a12c952f7c005f372ea496a1",
         ),
         (
-            26,
-            "8ceeeac4419ab3de2b9535833cd9efbae68e8b4d52bddfce2ad2282603df17e5",
+            32,
+            "6a93871ee2a63f7168b774ec11333583dadc80173caa104fb12ae6b914d8698a",
         ),
         (
-            52,
-            "7e6a023301124e0af489cc04a5ee314c1cd9514d1fc5a49ec8c5d684ce2b8fee",
+            65,
+            "5a4965aeb14b0d5263b04e45f18d516d85fa865c77f93f6e93791a4c43b196d9",
         ),
         (
-            105,
-            "faf0e017cdb439e906636d3358b3bff89d75849ec076145b0ced2703a53db4e9",
+            129,
+            "b8743cc155b8e9dee71682999b6eb6c268ed42a0ff1667add01752134e749be8",
         ),
         (
-            211,
-            "65db6f695523a5d0a6271c3f74589f31b9ca214019e76860a10f8687ae408017",
+            259,
+            "3683ed4027be9d1f865bafdf4c724cf0005bec066ed0c8cdbed6a78565609996",
         ),
     ];
     for (j, (len, d)) in pinned.iter().enumerate() {
@@ -65,7 +69,7 @@ fn the_tables_have_the_pinned_digests_and_shapes() {
         assert_eq!(table.len(), *len, "sigma 2^{j}: length");
         assert_eq!(digest(table), *d, "sigma 2^{j}: digest");
         assert!(table.windows(2).all(|w| w[0] >= w[1]), "non-increasing");
-        assert!(*table.last().unwrap() > 0, "the last entry is nonzero");
+        assert!(*table.last().unwrap() > [0; 3], "the last entry is nonzero");
         assert_eq!(gauss::bound(j as u32).unwrap(), *len as u64);
     }
     for j in [gauss::MAX_LOG_SIGMA + 1, u32::MAX] {
@@ -81,11 +85,19 @@ fn the_tables_have_the_pinned_digests_and_shapes() {
 
 /// The probabilities of the construction for `table`: entry $x + B$ is $\Pr[x]$ for
 /// $\lvert x \rvert \le B$, $B$ the table's length.
-fn pmf(table: &[u128]) -> Vec<f64> {
-    let scale = 2f64.powi(128);
-    let tail: Vec<f64> = table.iter().map(|t| *t as f64 / scale).collect();
+fn pmf(table: &[Entry]) -> Vec<f64> {
+    // T_j / 2^192, limb by limb.
+    let tail: Vec<f64> = table
+        .iter()
+        .map(|t| {
+            t.iter()
+                .zip([-64, -128, -192])
+                .map(|(limb, e)| *limb as f64 * 2f64.powi(e))
+                .sum()
+        })
+        .collect();
     let len = table.len();
-    // Pr[K = i] = T_{i-1} - T_i over 2^128, with T_{-1} = 2^128 and T_len = 0.
+    // Pr[K = i] = T_{i-1} - T_i over 2^192, with T_{-1} = 2^192 and T_len = 0.
     let pk: Vec<f64> = (0..=len)
         .map(|i| {
             let above = if i == 0 { 1.0 } else { tail[i - 1] };
@@ -148,43 +160,42 @@ fn samples_follow_the_table_and_stay_within_the_bound() {
 }
 
 #[test]
-fn a_try_reads_three_words_and_follows_the_rule() {
+fn a_try_reads_four_words_and_follows_the_rule() {
     let table = gauss::table(0).unwrap();
     let len = table.len() as i64;
-    let t0 = table[0];
-    let split = |v: u128| (v as u64, (v >> 64) as u64);
+    let [high, middle, low] = table[0];
+    assert!(low > 0, "T_0 - 1 below needs no borrow");
     // V = 0 is below every entry: K = len. Sign 0 gives -K, sign 1 gives K.
     for (sign, want) in [(0u64, -len), (1, len), (2, -len), (3, len)] {
-        let mut rng = Scripted::new(&[0, 0, sign]);
+        let mut rng = Scripted::new(&[0, 0, 0, sign]);
         assert_eq!(gauss::gaussian(&mut rng, 0, 1).unwrap(), vec![want]);
-        assert_eq!(rng.read, 3);
+        assert_eq!(rng.read, 4);
     }
-    // V = T_0 - 1 gives K = 1, V = T_0 gives K = 0 (with sign 0: the sample 0).
-    let (a, b) = split(t0 - 1);
-    let mut rng = Scripted::new(&[a, b, 1]);
+    // V = T_0 - 1 gives K = 1, V = T_0 gives K = 0 (with sign 0: the sample 0). V is read least
+    // significant word first.
+    let mut rng = Scripted::new(&[low - 1, middle, high, 1]);
     assert_eq!(gauss::gaussian(&mut rng, 0, 1).unwrap(), vec![1]);
-    let (a, b) = split(t0);
-    let mut rng = Scripted::new(&[a, b, 0]);
+    let mut rng = Scripted::new(&[low, middle, high, 0]);
     assert_eq!(gauss::gaussian(&mut rng, 0, 1).unwrap(), vec![0]);
     // K = 0 with sign 1 is drawn again: the second try decides.
-    let mut rng = Scripted::new(&[a, b, 1, 0, 0, 0]);
+    let mut rng = Scripted::new(&[low, middle, high, 1, 0, 0, 0, 0]);
     assert_eq!(gauss::gaussian(&mut rng, 0, 1).unwrap(), vec![-len]);
-    assert_eq!(rng.read, 6);
+    assert_eq!(rng.read, 8);
     // Two samples read two tries.
-    let mut rng = Scripted::new(&[0, 0, 0, u64::MAX, u64::MAX, 0]);
+    let mut rng = Scripted::new(&[0, 0, 0, 0, u64::MAX, u64::MAX, u64::MAX, 0]);
     assert_eq!(gauss::gaussian(&mut rng, 0, 2).unwrap(), vec![-len, 0]);
-    assert_eq!(rng.read, 6);
+    assert_eq!(rng.read, 8);
 }
 
 #[test]
 fn the_repetition_cap_is_an_error() {
-    // Every word all ones: V = 2^128 - 1 is above every entry (K = 0) and the sign is 1.
+    // Every word all ones: V = 2^192 - 1 is above every entry (K = 0) and the sign is 1.
     let mut rng = Constant(u64::MAX, 0);
     assert_eq!(
         gauss::gaussian(&mut rng, 3, 1),
         Err(Error::RejectionLimit(MAX_TRIES))
     );
-    assert_eq!(rng.1, 3 * MAX_TRIES as usize);
+    assert_eq!(rng.1, 4 * MAX_TRIES as usize);
 }
 
 /// $\sum_x \rho_\sigma(x)$ and the moments of $D_{\mathbb Z,\sigma}$ over $\lvert x \rvert \le 14
@@ -316,4 +327,14 @@ fn unusable_widths_are_refused() {
         );
     }
     assert_eq!(gauss::WideGaussian::new(16).unwrap().sigma(), 16);
+    // At the largest width a sample still fits i64: its bound, (table length + 1) k, is below
+    // 2^63. At twice that width it would not, so the limit is the largest power of two that fits.
+    let widest = gauss::WideGaussian::new(gauss::MAX_WIDE_SIGMA).unwrap();
+    assert!(widest.bound() < 1 << 63, "{}", widest.bound());
+    let rows = gauss::bound(gauss::MAX_LOG_SIGMA).unwrap() + 1;
+    assert!(
+        rows.checked_mul(2 * gauss::MAX_WIDE_SIGMA / gauss::WIDE_BASE)
+            .is_none_or(|b| b >= 1 << 63),
+        "MAX_WIDE_SIGMA could double"
+    );
 }

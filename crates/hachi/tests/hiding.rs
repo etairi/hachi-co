@@ -711,7 +711,9 @@ fn sha256_hex(words: &[u64]) -> String {
 #[test]
 fn outputs_are_pinned() {
     // Regression values of this implementation. Version 6 left the opening of a polynomial over
-    // the field as it was: its pins of version 5 held before the version word moved.
+    // the field as it was: its pins of version 5 held before the version word moved. Updated on
+    // 2026-11-02 for the 192-bit tables of the Gaussian sampler: the commitments held, and the
+    // proofs changed with their masks.
     let o = Opening::new(Q, masked(1, 1, Some(2)), 8, 20);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
@@ -725,7 +727,7 @@ fn outputs_are_pinned() {
     );
     assert_eq!(
         proof,
-        "235a2d72468d87d13c95ca77e4345d6402f6255e3a0adcdc3fa57a8143f8c2df"
+        "81951a6db2944f4e74922758e1ba0e60bab09f87a038a0a6b10a6c8377419b65"
     );
     assert_eq!(
         vector_commitment,
@@ -733,7 +735,7 @@ fn outputs_are_pinned() {
     );
     assert_eq!(
         vector_proof,
-        "adf7e6513b4f3adb073689bbf58ee9cfff147c34a8aa67076384bff09db97b2a"
+        "8b456dfa21f6e6a70c16e54a9ef4ada15a69714e11e97eecc907cd3971f8e3cd"
     );
 }
 

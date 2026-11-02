@@ -22,17 +22,22 @@ from pathlib import Path
 from sage.stats.distributions.discrete_gaussian_integer import DiscreteGaussianDistributionIntegerSampler
 
 R = RealField(512)
+BITS = 192
 src = Path(__file__).resolve().parents[2] / "src" / "gauss_tables.rs"
 text = src.read_text()
 tables = {}
-for name, body in re.findall(r"pub const (GAUSS_SIGMA_\d+): \[u128; \d+\] = \[(.*?)\];", text, re.S):
-    tables[int(name.split("_")[-1])] = [Integer(h, 16) for h in re.findall(r"0x([0-9a-f]{32})", body)]
+# An entry is three 64-bit limbs, most significant first.
+LIMBS = r"\[0x([0-9a-f]{16}), 0x([0-9a-f]{16}), 0x([0-9a-f]{16})\]"
+for name, body in re.findall(r"pub const (GAUSS_SIGMA_\d+): \[Entry; \d+\] = \[(.*?)\n\];", text, re.S):
+    tables[int(name.split("_")[-1])] = [(Integer(a, 16) << 128) + (Integer(b, 16) << 64) + Integer(c, 16)
+                                        for a, b, c in re.findall(LIMBS, body)]
+assert sorted(tables) == [1, 2, 4, 8, 16], "the five tables"
 
 set_random_seed(20261021)
 for sigma, t in sorted(tables.items()):
-    two = R(2) ** 128
-    # Pr[K = i] = (T_{i-1} - T_i) / 2^128, T_{-1} = 2^128, T_len = 0.
-    full = [Integer(2) ** 128] + t + [0]
+    two = R(2) ** BITS
+    # Pr[K = i] = (T_{i-1} - T_i) / 2^BITS, T_{-1} = 2^BITS, T_len = 0.
+    full = [Integer(2) ** BITS] + t + [0]
     pk = [R(full[i] - full[i + 1]) / two for i in range(len(t) + 1)]
     accept = 1 - pk[0] / 2
     table_pmf = {0: (pk[0] / 2) / accept}
@@ -83,8 +88,8 @@ for sigma, t in sorted(tables.items()):
 
 # 3. The wide sampler, from the table of sigma = 16.
 t = tables[16]
-full = [Integer(2) ** 128] + t + [0]
-pk = [R(full[i] - full[i + 1]) / R(2) ** 128 for i in range(len(t) + 1)]
+full = [Integer(2) ** BITS] + t + [0]
+pk = [R(full[i] - full[i + 1]) / R(2) ** BITS for i in range(len(t) + 1)]
 CUT = 400
 rho0 = lambda i: exp(-R(i) ** 2 / 512)
 half = sum(rho0(i) for i in range(1200))

@@ -5,26 +5,28 @@
 //! $\sigma$ is the standard deviation: $\Pr\[x\] \propto \exp(-x^2/(2\sigma^2))$. The width of GPV
 //! and of Hwang-Seo-Song is $s = \sigma\sqrt{2\pi}$.
 //!
-//! **Construction** (ntru-trapdoor's `src/keygen/gauss.rs`, same author, MIT). Each try reads three
-//! 64-bit words, little-endian, from the source:
-//! - $V = w_0 + 2^{64} w_1$, uniform in $\[0, 2^{128})$;
-//! - a sign bit $b$, the low bit of $w_2$.
+//! **Construction** (ntru-trapdoor's `src/keygen/gauss.rs`, same author, MIT, with entries of 192
+//! bits instead of 128). Each try reads four 64-bit words, little-endian, from the source:
+//! - $V = w_0 + 2^{64} w_1 + 2^{128} w_2$, uniform in $\[0, 2^{192})$
+//! - a sign bit $b$, the low bit of $w_3$.
 //!
 //! Then $K = \\#\lbrace j : V < T_j \rbrace$ for the table $T$ of [`crate::gauss_tables`], so
-//! $\Pr\[K > j\] = T_j / 2^{128}$. A try returns $-K$ if $b = 0$, and $K$ if $b = 1$ and $K \ne 0$.
+//! $\Pr\[K > j\] = T_j / 2^{192}$. A try returns $-K$ if $b = 0$, and $K$ if $b = 1$ and $K \ne 0$.
 //! It is repeated if $b = 1$ and $K = 0$. So a try returns $x$ with probability
 //! $\frac12 \Pr\[K = \lvert x \rvert\]$ for every $x$, 0 included (0 only with $b = 0$), and since
 //! $\Pr\[K = i\] \propto \rho(i)$, a sample has $\Pr\[x\] \propto \rho(x)$, up to the rounding of
 //! the table.
 //!
 //! **Support and distance.**
-//! - Every sample has absolute value at most the table's length, [`bound`] ($13\sigma$ to
-//!   $13.2\sigma$).
-//! - The construction is within statistical distance about $2^{-126.2}$ ($\sigma = 1$) to
-//!   $2^{-122.9}$ ($\sigma = 16$; $2^{-122.87}$ unrounded) of $D_{\mathbb Z,\sigma}$. This was
-//!   computed in Sage against the exact distribution, independently of the table generator
-//!   (`tests/fixtures/gauss_check.sage`).
-//! - The far tail rows have relative errors of up to $2^{1.3}$, so the tables support
+//! - Every sample has absolute value at most the table's length, [`bound`] ($16\sigma$ to
+//!   $16.2\sigma$).
+//! - The construction is within statistical distance about $2^{-190.6}$ ($\sigma = 1$) to
+//!   $2^{-186.6}$ ($\sigma = 16$) of $D_{\mathbb Z,\sigma}$. This was computed in Sage against the
+//!   exact distribution, independently of the table generator (`tests/fixtures/gauss_check.sage`).
+//!   So $N$ samples are within $N \cdot 2^{-186.5}$ of $N$ exact ones, below $2^{-128}$ for $N$ up
+//!   to $2^{58}$. With the 128-bit tables of earlier versions the distance was about $2^{-122.9}$
+//!   per sample.
+//! - The far tail rows have relative errors of up to $2^{0.7}$, so the tables support
 //!   statistical-distance arguments, not Rényi-divergence ones.
 //!
 //! **Time.** The count of $K$, the repetition and the sign make the time depend on the sample.
@@ -47,13 +49,13 @@
 //! $r(K)$ the ratio of the table's $\Pr\[K\]$ to the exact one, a sample in block
 //! $K = \lfloor \lvert x \rvert / k \rfloor$ has probability $D_{\mathbb Z,\sigma}(x) r(K) /
 //! \mathbb E\[r\]$. So the distance can be computed, and `tests/fixtures/gauss_check.sage` does
-//! that with the real table: $2^{-122.87}$ per sample at $k = 1$, falling with $k$ at the values
-//! computed, to $2^{-123.14}$ in the limit. Samples have absolute value below
-//! `(table length + 1) k`, about $13.3\sigma$, and a proposal is kept with probability about
+//! that with the real table: $2^{-186.58}$ per sample at $k = 1$, falling with $k$ at the values
+//! computed, to $2^{-186.91}$ in the limit. Samples have absolute value below
+//! `(table length + 1) k`, about $16.3\sigma$, and a proposal is kept with probability about
 //! $0.976$ at large $k$.
 
 use crate::gauss_tables::{
-    GAUSS_SIGMA_1, GAUSS_SIGMA_2, GAUSS_SIGMA_4, GAUSS_SIGMA_8, GAUSS_SIGMA_16,
+    Entry, GAUSS_SIGMA_1, GAUSS_SIGMA_2, GAUSS_SIGMA_4, GAUSS_SIGMA_8, GAUSS_SIGMA_16,
 };
 use crate::uniform::MAX_TRIES;
 use crate::{Error, Result};
@@ -66,7 +68,7 @@ pub const MAX_LOG_SIGMA: u32 = 4;
 ///
 /// # Errors
 /// [`Error::InvalidParameter`] for $j \gt$ [`MAX_LOG_SIGMA`].
-pub fn table(log_sigma: u32) -> Result<&'static [u128]> {
+pub fn table(log_sigma: u32) -> Result<&'static [Entry]> {
     Ok(match log_sigma {
         0 => &GAUSS_SIGMA_1,
         1 => &GAUSS_SIGMA_2,
@@ -99,7 +101,7 @@ pub fn gaussian<R: Rng + ?Sized>(rng: &mut R, log_sigma: u32, len: usize) -> Res
 }
 
 /// One sample from `table` (module documentation).
-fn sample<R: Rng + ?Sized>(rng: &mut R, table: &[u128]) -> Result<i64> {
+fn sample<R: Rng + ?Sized>(rng: &mut R, table: &[Entry]) -> Result<i64> {
     for _ in 0..MAX_TRIES {
         let k = magnitude(rng, table) as i64;
         let sign = rng.next_u64() & 1;
@@ -113,10 +115,11 @@ fn sample<R: Rng + ?Sized>(rng: &mut R, table: &[u128]) -> Result<i64> {
     Err(Error::RejectionLimit(MAX_TRIES))
 }
 
-/// $K = \\#\lbrace j : V < T_j \rbrace$ for $V$ read from two words (module documentation).
-fn magnitude<R: Rng + ?Sized>(rng: &mut R, table: &[u128]) -> u64 {
-    let low = u128::from(rng.next_u64());
-    let v = low | (u128::from(rng.next_u64()) << 64);
+/// $K = \\#\lbrace j : V < T_j \rbrace$ for $V$ read from three words (module documentation).
+fn magnitude<R: Rng + ?Sized>(rng: &mut R, table: &[Entry]) -> u64 {
+    let (w0, w1, w2) = (rng.next_u64(), rng.next_u64(), rng.next_u64());
+    // V = w0 + 2^64 w1 + 2^128 w2, as an entry: most significant limb first.
+    let v: Entry = [w2, w1, w0];
     // The entries are non-increasing, so {j : V < T_j} is a prefix.
     table.partition_point(|t| v < *t) as u64
 }
@@ -186,7 +189,7 @@ pub const WIDE_BASE: u64 = 16;
 
 /// The largest $\sigma$ of a [`WideGaussian`]: then $\lvert z \rvert \lt 2^{63}$, and every
 /// product of step 2 fits 128 bits.
-pub const MAX_WIDE_SIGMA: u64 = 1 << 59;
+pub const MAX_WIDE_SIGMA: u64 = 1 << 58;
 
 /// $D_{\mathbb Z,\sigma}$ for a multiple $\sigma = 16k$ of [`WIDE_BASE`] (module documentation,
 /// "Wide Gaussians").
@@ -197,7 +200,7 @@ pub struct WideGaussian {
     /// The denominator $512 k^2$ of step 2.
     den: u128,
     /// The table of $\sigma_0 = 16$.
-    table: &'static [u128],
+    table: &'static [Entry],
 }
 
 impl WideGaussian {
@@ -209,7 +212,7 @@ impl WideGaussian {
     pub fn new(sigma: u64) -> Result<Self> {
         if sigma == 0 || !sigma.is_multiple_of(WIDE_BASE) || sigma > MAX_WIDE_SIGMA {
             return Err(Error::InvalidParameter(
-                "sigma must be a positive multiple of 16 of at most 2^59",
+                "sigma must be a positive multiple of 16 of at most 2^58",
             ));
         }
         let k = sigma / WIDE_BASE;
@@ -230,7 +233,7 @@ impl WideGaussian {
         (self.table.len() as u64 + 1) * self.k
     }
 
-    /// One sample. A try reads two words for $K$, then one or more for $y$ and the sign, then
+    /// One sample. A try reads three words for $K$, then one or more for $y$ and the sign, then
     /// what [`bernoulli_exp`] needs.
     ///
     /// # Errors

@@ -94,22 +94,26 @@ def short(prg, beta, n):
 
 def gauss_tables():
     """The tables of src/gauss_tables.rs, read from the Rust file (so that this script needs no
-    mpmath): GAUSS_SIGMA_<sigma> by log2(sigma)."""
+    mpmath): GAUSS_SIGMA_<sigma> by log2(sigma). An entry is three 64-bit limbs, most significant
+    first."""
     text = (Path(__file__).resolve().parents[2] / "src" / "gauss_tables.rs").read_text()
     out = {}
-    for sigma, body in re.findall(r"pub const GAUSS_SIGMA_(\d+): \[u128; \d+\] = \[(.*?)\];", text, re.S):
-        out[int(sigma).bit_length() - 1] = [int(h, 16) for h in re.findall(r"0x([0-9a-f]{32})", body)]
+    limbs = r"\[0x([0-9a-f]{16}), 0x([0-9a-f]{16}), 0x([0-9a-f]{16})\]"
+    for sigma, body in re.findall(r"pub const GAUSS_SIGMA_(\d+): \[Entry; \d+\] = \[(.*?)\n\];", text, re.S):
+        out[int(sigma).bit_length() - 1] = [(int(a, 16) << 128) | (int(b, 16) << 64) | int(c, 16)
+                                            for a, b, c in re.findall(limbs, body)]
+    assert sorted(out) == [0, 1, 2, 3, 4], "the five tables"
     return out
 
 
 def gaussian(prg, table, n):
-    """gauss::gaussian: per try V = w0 + 2^64 w1 and the sign bit of w2; K counts the entries
-    above V (a full count here; Rust searches the prefix); -K for sign 0, K for sign 1 and
-    K != 0, else another try."""
+    """gauss::gaussian: per try V = w0 + 2^64 w1 + 2^128 w2 and the sign bit of w3. K counts the
+    entries above V (a full count here, where Rust searches the prefix), and a try returns -K for
+    sign 0, K for sign 1 and K != 0, and is repeated otherwise."""
     out = []
     for _ in range(n):
         for _try in range(256):
-            v = prg.u64() | (prg.u64() << 64)
+            v = prg.u64() | (prg.u64() << 64) | (prg.u64() << 128)
             sign = prg.u64() & 1
             k = sum(1 for t in table if v < t)
             if sign == 0:
