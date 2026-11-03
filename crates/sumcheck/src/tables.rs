@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn range_product_matches_the_literal_product() {
-        let q = 134217757u64; // toy-n3
+        let q = 134217757u64; // toy-n4
         let f = Fqk::<4>::new(q).unwrap();
         for b in 0..=6u64 {
             let rp = RangeProduct::new(f.zq(), b);

@@ -257,7 +257,7 @@ if RUN_SINGLE_PROVER:
 # CASCADE (6_CH:272-291; log is base 2):
 #   d = 2^alpha, k = 2^kappa, delta = ceil(log_b q), l' = ceil(log n) + l - alpha + kappa,
 #   r = max(ceil(l'/2), ceil(log n)), m = l' - r,
-#   beta_1 = 2^(r - ceil(log n)) omega b, N = d delta 2^m, gamma = 2 n N beta_1,
+#   beta_1 = 2^(r - ceil(log n)) omega floor(b/2), N = d delta 2^m, gamma = 2 n N beta_1,
 #   M = ((2 gamma + 1)/(2 gamma - 2 beta_1 + 1))^N, beta = n gamma,
 #   tau (rule below), (beta_bar, omega_bar, gamma_bar) = (2 b^tau, 2 omega, b),
 #   mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_u + n m_v + 2^m delta tau + 2,
@@ -417,7 +417,7 @@ def hco_structure(ch):
 def hco_delta_dependent(ch, st, omega, delta):
     """6_CH:279-280 for a given delta, and the binding guard 16 omega b^tau."""
     n = ch["n"]; b = ch["b"]
-    beta1 = 2^(st["r"] - st["log_n"]) * omega * b
+    beta1 = 2^(st["r"] - st["log_n"]) * omega * (b // 2)
     big_n = st["d"] * delta * 2^st["m"]
     gamma = 2 * n * big_n * beta1
     beta = n * gamma
@@ -899,9 +899,11 @@ if RUN_COLLABORATIVE:
         HCO_LAMBDA, 2^HCO_KAPPA, HCO_B, HCO_TAU_RULE, HCO_CHALLENGE_SET, HCO_ND))
     _hco_started = datetime.datetime.now()
 
-    # The toy presets of docs/m0-spec.md (a check of this implementation against the brief's table).
-    for _n, _row in [(1, (8388637, 12, 49152, 9, 558, 15, 14)), (2, (33554501, 13, 212992, 10, 790, 15, 14)),
-                     (3, (134217757, 14, 516096, 11, 1554, 16, 14))]:
+    # The toy presets of docs/m0-spec.md with beta_1 = 2^(r - ceil(log n)) omega floor(b/2), the revised Setup
+    # of 2026-11-02 (a check of this implementation against the table that the Sage oracle and the Rust
+    # crate both compute: beta halves, and at n = 3 tau drops to 10 and q to the band delta = 13).
+    for _n, _row in [(1, (8388637, 12, 24576, 9, 558, 15, 14)), (2, (33554501, 13, 106496, 10, 790, 15, 14)),
+                     (3, (33554501, 13, 239616, 10, 1340, 16, 14))]:
         _P, _ = hco_derive(hco_choices(115, _n, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None))
         assert (_P["q"], _P["delta"], _P["beta"], _P["tau"], _P["mu"], _P["ell_dprime"], _P["d0"]) == _row, _n
     hco_log("toy presets: the brief's table is reproduced")
@@ -993,7 +995,7 @@ if RUN_COLLABORATIVE:
         "",
         "- Command: `%s` (run from the repository root; %s, started %s)." % (_cmd.strip(), _sage_version, _hco_started.strftime("%Y-%m-%d %H:%M")),
         "- Lattice estimator: %s, revision `%s` (%s)." % (ESTIMATOR_REPO, _estimator_rev, "cloned into a temporary directory and removed at exit" if _estimator_tmp is not None else "an existing checkout given by LATTICE_ESTIMATOR_DIR"),
-        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with the tight tau and the rules of `docs/m0-spec.md`.",
+        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), the tight tau and the rules of `docs/m0-spec.md`.",
         "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, n_D = %d, t = floor((n - 1)/2)." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
         "- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/%d bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2b); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207)." % HCO_Q_STEPS,
         "- MSIS: first the trivial linear-algebra attack, rank log2(q/(2B + 1)) >= lambda, then `SIS.lattice` (infinity norm) with zeta = 0 on m' columns, minimised over m' (a grid of 1.25 to 64 times the rank, refined by ternary search), because the estimator's own search over ignored columns misses interior optima and returns infinite costs for wide matrices. MLWE: `LWE.estimate` without arora-gb and bkw (only n_D d samples per secret), and also without dual_hybrid when n d < (m - n) d, because its MATZOV cost model assumes n samples and uses m only to cap the block size; secret and error uniform on [-8, 7].",

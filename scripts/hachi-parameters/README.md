@@ -16,7 +16,14 @@ Steps, from the repository root:
    sage scripts/hachi-parameters/msis_thresholds.sage > scripts/hachi-parameters/thresholds.txt
    ```
 
-   The moduli are those of `secure.json`; pass new ones as arguments, each as its own word.
+   The moduli are those of `secure.json`. Pass new ones as arguments, each as its own word. The rows of
+   107304362334462661, the modulus of `secure-l30-n2-a8` since the revised β₁ of 2026-11-02, took 37 minutes:
+
+   ```text
+   sage msis_thresholds.sage 107304362334462661 ranks=256,512,1024,1280,1536,1792,2048,3072,4096 mlwe=256,512,1024,2048,3072
+   ```
+
+   Since then no preset uses 6062548914780259333, whose rows stay.
 
 2. `mlwe_ranks.txt`: the least ν per modulus, ring degree and base, for uniform digits as secret and error. Some
    minutes on one core, with the same lattice estimator next to the script and `secure.json` as its argument:

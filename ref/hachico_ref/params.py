@@ -158,7 +158,7 @@ def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau
     r = max((ell_prime + 1) // 2, logn)
     m = ell_prime - r
     assert m >= 0
-    beta1 = 2 ** (r - logn) * omega * b
+    beta1 = 2 ** (r - logn) * omega * (b // 2)   # floor(b/2): 6_CH:279 as revised in the draft's commit 2ee6507 (5_BB:141)
     N = d * delta * 2 ** m
     gamma = 2 * n * N * beta1
     beta = n * gamma
@@ -199,7 +199,7 @@ def choose_q(n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, tau_rule="
         ell_prime = logn + ell - alpha + kappa
         r = max((ell_prime + 1) // 2, logn)
         m = ell_prime - r
-        beta1 = 2 ** (r - logn) * omega * b
+        beta1 = 2 ** (r - logn) * omega * (b // 2)
         N = d * delta * 2 ** m
         beta = n * 2 * n * N * beta1
         tau = tight_tau(beta, b) if tau_rule == "tight" else draft_tau(beta, b)
@@ -215,16 +215,17 @@ def choose_q(n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, tau_rule="
 TOY_COMMON = dict(ell=6, alpha=4, kappa=2, b=4, omega=2, n_A=1, n_B=1, n_D=1, m_u=2, m_v=2)
 
 # name -> (n, q, delta, r, m, beta1, N, gamma, beta, tau, mu, l'', d0).
-# toy-n1..n3: the m0-spec "Toy presets" table.  toy-n4 and toy-n8: the same
+# toy-n1..n3: the choices of the m0-spec "Toy presets" table.  toy-n4 and toy-n8: the same
 # choices with n = 4 and 8, every number produced by choose_q and derive below.  check_toy_table re-derives
-# every row.  toy-n4 has the modulus of toy-n3: both have tau = 11, so the binding guard 16 omega b^tau = 2^27
-# is the largest bound for both.
+# every row.  The rows have the revised beta_1 (2026-11-02), so their numbers no longer match that table: toy-n2
+# and toy-n3 share a modulus (both have tau = 10, so the binding guard 16 omega b^tau = 2^25 is the largest
+# bound for both), and toy-n4 has tau = 11 and the guard 2^27.
 TOY_TABLE = {
-    "toy-n1": (1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 558, 15, 14),
-    "toy-n2": (2, 33554501, 13, 3, 2, 32, 832, 106496, 212992, 10, 790, 15, 14),
-    "toy-n3": (3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1554, 16, 14),
-    "toy-n4": (4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1586, 16, 14),
-    "toy-n8": (8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2194, 17, 14),
+    "toy-n1": (1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 558, 15, 14),
+    "toy-n2": (2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 790, 15, 14),
+    "toy-n3": (3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 1340, 16, 14),
+    "toy-n4": (4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 1586, 16, 14),
+    "toy-n8": (8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 2194, 17, 14),
 }
 
 

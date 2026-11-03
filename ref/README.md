@@ -2,7 +2,9 @@
 
 A SageMath/numpy reference implementation of the Hachi-Co protocol at the toy presets of `docs/m0-spec.md`, for
 n ∈ {1, 2, 3}, extended to n ∈ {4, 8} (see "Party counts 4 and 8" below). It is a test oracle and fixture generator for the Rust code. It is not secure and not optimized.
-Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`).
+Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`). One change since: Setup's
+$\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (6_CH:279 as the draft's commit `2ee6507` revises it, the bound of 5_BB:141), in
+place of $\omega b$, so $\gamma$ and $\beta$ halve and `toy-n3` moves to $q = 33554501$.
 Line references use the short names `4_P` (4_preliminaries.tex), `5_BB` (5_Building_Blocks.tex),
 `6_CH` (6_Collaborative_Hachi.tex), `F2R` (field-to-ring-rok.tex) and `tH` (t-hiding.tex).
 
@@ -33,7 +35,8 @@ development machine with Sage 10.9, Python 3.14.3 and numpy 2.4.4 (one default r
 | toy-n4 | 3.7 s | 24 s | 748 KB |
 | toy-n8 | 13 s | 90 s | 1676 KB |
 
-The full default run takes about 200 s (197 s measured), including the self-tests and the runs tried by the
+The fixtures regenerated for the revised β₁ (2026-11-02, one default run of 270 s) are 189, 334, 525, 779 and
+1490 KB. The full default run takes about 200 s (197 s measured), including the self-tests and the runs tried by the
 seed selection (15 s for toy-n4, 27 s for toy-n8). Two runs produce byte-identical fixtures: toy-n1..n3 as
 regenerated after adding n = 4 and 8 are identical to the previous ones (`cmp`), and a second run of n = 4 and 8
 reproduces their fixtures.
@@ -155,8 +158,10 @@ reproduces their fixtures.
 19. **Fixture seed.** The fixture uses the smallest seed index whose run contains an aborted attempt, so that
     the fixtures cover the abort-and-retry path. This is test coverage, not selection of results: every run
     tried on the way is fully checked, printed and listed under `seeds.selection.tried`. All of them passed.
-    Fixture seeds: toy-n1 index 3 (four aborts), toy-n2 index 1 (four aborts), toy-n3 index 1 (one abort),
-    toy-n4 index 3 (one abort, by provers 1 and 4), toy-n8 index 1 (two aborts, by prover 7, then prover 2).
+    Fixture seeds since the revised beta_1 of 2026-11-02: toy-n1 index 4 (two aborts), toy-n2 index 9 (one
+    abort, by prover 2), toy-n3 index 1 (one abort, by prover 1), toy-n4 index 0 (two aborts, by prover 3, then
+    prover 2), toy-n8 index 2 (one abort, by prover 4). Before it: toy-n1 index 3, toy-n2 index 1, toy-n3 index 1,
+    toy-n4 index 3, toy-n8 index 1.
 
 ### Observations about the draft (no effect on correctness)
 
@@ -179,11 +184,11 @@ reproduces their fixtures.
 
   | name | n | q | δ | r | m | β₁ | N | γ | β | τ | μ | ℓ″ | d₀ |
   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-  | toy-n4 | 4 | 134217757 | 14 | 3 | 3 | 16 | 1792 | 229376 | 917504 | 11 | 1586 | 16 | 14 |
-  | toy-n8 | 8 | 536871029 | 15 | 4 | 3 | 16 | 1920 | 491520 | 3932160 | 12 | 2194 | 17 | 14 |
+  | toy-n4 | 4 | 134217757 | 14 | 3 | 3 | 8 | 1792 | 114688 | 458752 | 11 | 1586 | 16 | 14 |
+  | toy-n8 | 8 | 536871029 | 15 | 4 | 3 | 8 | 1920 | 245760 | 1966080 | 12 | 2194 | 17 | 14 |
 
-  toy-n4 has the modulus of toy-n3: both have τ = 11, so the binding guard 16ωb^τ = 2²⁷ is the largest bound
-  for both. Both n are powers of two, so every block has an owner and no position is unheld; each prover owns
+  These rows have the revised β₁. At toy-n4 the binding guard 16ωb^τ = 2²⁷ (τ = 11) is the largest bound. Before
+  the revision toy-n3 had τ = 11 and this modulus too, and now it has τ = 10 and the modulus of toy-n2. Both n are powers of two, so every block has an owner and no position is unheld; each prover owns
   2^{r−⌈log n⌉} = 2 blocks.
 - **Code.** The protocol code (Commit, Πconv, ring-to-linear, sumcheck, verifier) and the negative tests were
   already written for any n; nothing in them assumes n ≤ 3. The witness tests that move shares between provers
@@ -193,7 +198,7 @@ reproduces their fixtures.
   2⁶²·(1 + 10⁻⁶) < 2⁶³. The guard is now the exact int64 condition d(q−1)² + (q−1) ≤ 2⁶³ − 1 (the docstring
   of `ring.py` lists every sum of products it covers), with self-tests at the worst case. It changes no value:
   toy-n1..n3 regenerate byte-identically.
-- **Fixture seeds** (choice 19): toy-n4 index 3, toy-n8 index 1.
+- **Fixture seeds** (choice 19): toy-n4 index 3, toy-n8 index 1 (index 0 and 2 since the revised beta_1 of 2026-11-02).
 
 ## Fixture format (`fixtures/toy-n{1,2,3,4,8}.json`, format `hachi-co-ref-fixture/v1`)
 
@@ -286,7 +291,7 @@ seeds (`--sweep`).
 
 **Self-tests.**
 - The toy table and q rule are re-derived (all five rows).
-- `subfield.self_test` passes at the four distinct toy moduli (toy-n3 and toy-n4 share q).
+- `subfield.self_test` passes at the four distinct toy moduli (toy-n2 and toy-n3 share q).
 - The vectorized field product agrees with `Subfield.fmul`; associativity, distributivity and the Frobenius
   order hold.
 - Ring products and mat-vec agree with Sage, including all-(q−1) operands. Every kind of int64 sum of

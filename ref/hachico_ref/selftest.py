@@ -20,7 +20,7 @@ def t_params():
 
 
 def toy_moduli():
-    """The distinct moduli of the toy presets, ascending (toy-n3 and toy-n4 share one)."""
+    """The distinct moduli of the toy presets, ascending (toy-n2 and toy-n3 share one)."""
     return sorted({row[1] for row in TOY_TABLE.values()})
 
 

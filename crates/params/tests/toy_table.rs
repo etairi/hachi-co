@@ -27,22 +27,26 @@ type Row = (
 
 /// The table of `docs/m0-spec.md`, computed by the main session (independent of this crate), and
 /// the rows `toy-n4`, `toy-n8` of the Sage oracle's `TOY_TABLE` (`ref/hachico_ref/params.py`:
-/// $q$ by its `choose_q`, the rest by its `derive`, also independent of this crate).
+/// $q$ by its `choose_q`, the rest by its `derive`, also independent of this crate). Updated on
+/// 2026-11-02 for $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (the revised
+/// Setup): the rows are those of the oracle's `choose_q` and `derive`, which agree with this crate.
+/// $\beta_1$, $\gamma$ and $\beta$ halve, and at `toy-n3` $\tau$ drops to 10, so that $q$ drops to the
+/// smallest admissible prime of the band $\delta = 13$.
 const TABLE: [Row; 5] = [
     (
-        "toy-n1", 1, 8388637, 12, 2, 2, 32, 768, 49152, 49152, 9, 558, 15, 14,
+        "toy-n1", 1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 558, 15, 14,
     ),
     (
-        "toy-n2", 2, 33554501, 13, 3, 2, 32, 832, 106496, 212992, 10, 790, 15, 14,
+        "toy-n2", 2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 790, 15, 14,
     ),
     (
-        "toy-n3", 3, 134217757, 14, 3, 3, 16, 1792, 172032, 516096, 11, 1554, 16, 14,
+        "toy-n3", 3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 1340, 16, 14,
     ),
     (
-        "toy-n4", 4, 134217757, 14, 3, 3, 16, 1792, 229376, 917504, 11, 1586, 16, 14,
+        "toy-n4", 4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 1586, 16, 14,
     ),
     (
-        "toy-n8", 8, 536871029, 15, 4, 3, 16, 1920, 491520, 3932160, 12, 2194, 17, 14,
+        "toy-n8", 8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 2194, 17, 14,
     ),
 ];
 
@@ -97,7 +101,7 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         let log_n = (n - 1).checked_ilog2().map_or(0, |l| l + 1); // ceil(log2 n)
         assert_eq!(p.log_n, log_n);
         assert_eq!(p.ell_prime, log_n + 6 - 4 + 2);
-        assert_eq!(big(p.beta1), pow2(p.r - log_n) * &omega * &b);
+        assert_eq!(big(p.beta1), pow2(p.r - log_n) * &omega * (&b / big(2)));
         assert_eq!(big(p.big_n), &d * &delta * pow2(p.m));
         assert_eq!(big(p.gamma), &two * &nn * big(p.big_n) * big(p.beta1));
         assert_eq!(big(p.beta), &nn * big(p.gamma));

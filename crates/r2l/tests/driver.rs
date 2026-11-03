@@ -116,8 +116,8 @@ fn loopback_replay_reproduces_toy_n1_with_its_aborted_attempts() {
     compare_with_fixture(&fx, &out, 1);
     assert_eq!(
         out.attempts.iter().map(|r| r.aborted).collect::<Vec<_>>(),
-        [true, true, true, true, false],
-        "toy-n1 has four aborted attempts (ref/README.md, choice 19)"
+        [true, true, false],
+        "toy-n1 has two aborted attempts (ref/README.md, choice 19)"
     );
     // n = 1: the share is the whole witness, <u>_1 = u included, and the whole y.
     assert_eq!(

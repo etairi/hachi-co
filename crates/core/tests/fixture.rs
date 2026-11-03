@@ -279,7 +279,7 @@ fn decoders_check_types_shapes_and_residues() {
         fx.int_rows("/ring_to_linear/attempts/0/c").unwrap().len(),
         4
     );
-    assert_eq!(fx.usize("/ring_to_linear/accepted_attempt").unwrap(), 4);
+    assert_eq!(fx.usize("/ring_to_linear/accepted_attempt").unwrap(), 2);
     assert!(fx.bool("/verifier/accept").unwrap());
     // Wrong shapes and types.
     assert!(fixture_err(fx.poly("/commit/u")).contains("expected 16 residues"));

@@ -60,7 +60,7 @@ fn tight_tau(b: u128, beta: u128) -> u32 {
 /// preset: max(16 omega b^tau, 1 + 2^(l+3) n omega^2 b, 2 beta + 1).
 fn q_bound(ell: u32, r: u32, m: u32, delta: u32) -> u128 {
     let (n, omega, b, d) = (1u128, 2u128, 4u128, 16u128);
-    let beta1 = (1u128 << r) * omega * b; // log n = 0
+    let beta1 = (1u128 << r) * omega * (b / 2); // log n = 0, floor(b/2)
     let big_n = d * u128::from(delta) * (1u128 << m);
     let gamma = 2 * n * big_n * beta1;
     let beta = n * gamma;
@@ -137,7 +137,7 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         assert_eq!(x.ell_prime, ell - 4 + 2, "{}", p.name);
         assert_eq!(x.r, x.ell_prime.div_ceil(2), "{}", p.name);
         assert_eq!(x.m, x.ell_prime - x.r, "{}", p.name);
-        assert_eq!(big(x.beta1), pow2(x.r) * &omega * &b);
+        assert_eq!(big(x.beta1), pow2(x.r) * &omega * (&b / big(2)));
         assert_eq!(big(x.big_n), &d * &delta * pow2(x.m));
         assert_eq!(big(x.gamma), big(2) * &n * big(x.big_n) * big(x.beta1));
         assert_eq!(big(x.beta), &n * big(x.gamma));

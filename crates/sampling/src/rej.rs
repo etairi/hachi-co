@@ -11,7 +11,7 @@
 //! cites Lemma 4 of Del Pino and Niot, "Finally! A Compact Lattice-Based Threshold Signature",
 //! PKC 2025), for every $v$ with $\lVert v \rVert_\infty \le \beta_1$ the two have the same
 //! output distribution. In Hachi-Co each prover runs [`rej`] on its own fold
-//! (5_Building_Blocks.tex:139-143) with $N = d \delta 2^m$, $\beta_1 = 2^{r - \lceil \log n \rceil} \omega b$
+//! (5_Building_Blocks.tex:139-143) with $N = d \delta 2^m$, $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$
 //! and $\gamma = 2 n N \beta_1$ (6_Collaborative_Hachi.tex:279).
 //!
 //! Vectors are flat coefficient vectors of length $N$ (the $N/d$ ring elements' coefficients,

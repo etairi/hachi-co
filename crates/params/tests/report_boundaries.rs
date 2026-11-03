@@ -109,8 +109,8 @@ fn q_above_binding_guard() {
 
 #[test]
 fn centered_responses() {
-    // With b = 2^20, d = 4, n = 1, omega = 1: beta = 2^25 at delta = 2, and 2 beta = 2^26 lies in
-    // the band 2^20 < q <= 2^40 of delta = 2.
+    // With b = 2^20, d = 4, n = 1, omega = 1: beta_1 = 2 omega floor(b/2) = 2^20, beta = 2^24 at
+    // delta = 2, and 2 beta = 2^25 lies in the band 2^20 < q <= 2^40 of delta = 2.
     let c = Choices {
         lambda: 1,
         n: 1,
@@ -130,15 +130,15 @@ fn centered_responses() {
         pad: hachi_co_params::PadRule::Field,
         q: QChoice::Smallest,
     };
-    let (p, r) = derive(&with_q(c, 1 << 26)).unwrap();
-    assert_eq!((p.delta, p.beta), (2, 1 << 25));
+    let (p, r) = derive(&with_q(c, 1 << 25)).unwrap();
+    assert_eq!((p.delta, p.beta), (2, 1 << 24));
     assert!(!r.holds(ConstraintId::CenteredResponses));
     assert_eq!(
         r.get(ConstraintId::CenteredResponses).severity,
         Severity::Fatal
     );
-    let (p, r) = derive(&with_q(c, (1 << 26) + 1)).unwrap();
-    assert_eq!((p.delta, p.beta), (2, 1 << 25));
+    let (p, r) = derive(&with_q(c, (1 << 25) + 1)).unwrap();
+    assert_eq!((p.delta, p.beta), (2, 1 << 24));
     assert!(r.holds(ConstraintId::CenteredResponses));
 }
 

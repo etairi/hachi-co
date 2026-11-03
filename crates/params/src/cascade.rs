@@ -38,8 +38,10 @@ pub struct Params {
     pub r: u32,
     /// $m = \ell' - r$: each block has $2^m$ ring elements (line 276).
     pub m: u32,
-    /// $\beta_1 = 2^{r - \lceil \log n \rceil} \omega b$, the bound on each prover's share of the
-    /// folded witness (line 279).
+    /// $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$, the bound on each
+    /// prover's share of the folded witness (line 279 as the draft's commit `2ee6507` revises it: the
+    /// bound $\lvert \mathcal I_i \rvert \omega \lfloor b/2 \rfloor$ of 5_Building_Blocks.tex:141, which
+    /// the draft at `8834c9f` relaxed to $\omega b$).
     pub beta1: u128,
     /// $N = d \delta 2^m$, the number of integer coefficients of a mask (line 279).
     pub big_n: u128,
@@ -117,7 +119,7 @@ impl DeltaDependent {
         let pow2 = |e: u32, what| rules::checked_pow(2, e, what);
         let beta1 = pow2(s.r - s.log_n, "beta_1")?
             .checked_mul(omega)
-            .and_then(|x| x.checked_mul(b))
+            .and_then(|x| x.checked_mul(b / 2))
             .ok_or(Error::Overflow("beta_1"))?;
         let big_n = u128::from(s.d)
             .checked_mul(u128::from(delta))

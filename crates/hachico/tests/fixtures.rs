@@ -125,8 +125,8 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     compare_attempts(&fx, &out, 1, "toy-n1");
     assert_eq!(
         out.r2l.attempts.iter().filter(|a| a.aborted).count(),
-        4,
-        "toy-n1 has four aborted attempts (ref/README.md, choice 19)"
+        2,
+        "toy-n1 has two aborted attempts (ref/README.md, choice 19)"
     );
     assert_eq!(
         out.sumcheck.point,

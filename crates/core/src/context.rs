@@ -232,9 +232,9 @@ impl<const K: usize> Context<K> {
         u64::try_from(self.params.gamma).unwrap_or(u64::MAX)
     }
 
-    /// $\beta\_1 = 2^{r - \lceil \log n \rceil} \omega b$, the bound on each prover's fold
-    /// (`6_Collaborative_Hachi.tex`:279; `5_Building_Blocks.tex`:141). Saturating as
-    /// [`Context::gamma`].
+    /// $\beta\_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$, the bound on each
+    /// prover's fold (`6_Collaborative_Hachi.tex`:279 as the draft's commit `2ee6507` revises it,
+    /// `5_Building_Blocks.tex`:141). Saturating as [`Context::gamma`].
     pub fn beta1(&self) -> u64 {
         u64::try_from(self.params.beta1).unwrap_or(u64::MAX)
     }
