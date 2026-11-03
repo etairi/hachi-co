@@ -99,7 +99,8 @@
 //! last word padded with zero bits. A residue takes $\lceil \log_2 q \rceil$ bits. After at
 //! least one iteration the final witness is a table of digits of base $b$ (its range was proved
 //! by the last iteration's sumcheck), sent as $\psi^{-1}$ of its ring elements, each digit as its
-//! index in the digit set: $\lceil \log_2 b \rceil$ bits. Without iterations the final witness
+//! index in the balanced digit set of [`crate::sumcheck`] (a deviation from the appendix's set,
+//! noted there): $\lceil \log_2 b \rceil$ bits. Without iterations the final witness
 //! is the input, sent as residues. The decoders know the parameters, so a header holds only
 //! what they do not fix:
 //! - commitment: `[VERSION]`, then the $n_B d$ coefficients of $\mathbf u$;

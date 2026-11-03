@@ -7,6 +7,16 @@
 //!   $\tilde g$ is the public multilinear table $g(u \Vert \ell) = m^\ast(u) \alpha^\ell$
 //!   (`crate::relation`), claimed sum $\sum_i \widetilde{eq}(\tau_1, i) y_i(\alpha)$.
 //!
+//! **Digit set, a deviation from `hachi-pcs.tex`.** $D$ is the set of the $b$ balanced digits
+//! $\[-\lfloor b/2 \rfloor, \lceil b/2 \rceil - 1\]$ of
+//! [`hachi_co_math::decompose::digit_range`], which holds every digit of an honest prover
+//! ($\mathbf G^{-1}$ and $\mathbf J^{-1}$ decompose into it). The appendix's range polynomial, that
+//! of Hachi's Eq. (23), runs over $\lbrace -b+1, \dots, b-1 \rbrace$ instead. With the smaller set
+//! $F_0$ has degree $b + 1$ in place of $2b$, and the digits that the range check lets through lie
+//! in the balanced range, which is the range the norm bounds of binding use
+//! (`scripts/hachi-parameters/choose.py`). The final witness is held to the same set
+//! ([`crate::pcs`], "Encodings").
+//!
 //! Each round the prover sends both round polynomials as their values at $t = 0, 1, \dots$,
 //! $\deg$: $|D| + 2$ values for $F_0$ (degree $|D| + 1$) and 3 for $F_\alpha$ (degree 2). After
 //! the last round it holds $\tilde w(\mathbf a)$ at the point $\mathbf a$ of the round
