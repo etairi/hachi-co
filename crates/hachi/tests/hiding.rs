@@ -238,7 +238,8 @@ fn the_parameters_are_those_of_setup() {
         let width = delta * ((1 << l.m) + 1);
         assert_eq!(l.width(delta), width, "W");
         let n = (width + nu + n_a) * d;
-        let target = 13.0 * (n as f64).sqrt() * chunks as f64 * (c.omega * c.b) as f64;
+        // Setup item 2(e) with the digit bound ceil(b/2) of Lemma 21's proof.
+        let target = 13.0 * (n as f64).sqrt() * chunks as f64 * (c.omega * c.b.div_ceil(2)) as f64;
         assert!(it.sigma as f64 >= target, "s {} {target}", it.sigma);
         assert!(
             (it.sigma as f64) < target * 1.05 + 32.0,
@@ -713,7 +714,9 @@ fn outputs_are_pinned() {
     // Regression values of this implementation. Version 6 left the opening of a polynomial over
     // the field as it was: its pins of version 5 held before the version word moved. Updated on
     // 2026-11-02 for the 192-bit tables of the Gaussian sampler: the commitments held, and the
-    // proofs changed with their masks.
+    // proofs changed with their masks. Updated again on 2026-11-02 for the masks' width with
+    // ceil(b/2), version 7: the commitments changed only in their version word, and the proofs
+    // with the halved masks and the version.
     let o = Opening::new(Q, masked(1, 1, Some(2)), 8, 20);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
@@ -723,19 +726,19 @@ fn outputs_are_pinned() {
     println!("{commitment} {proof} {vector_commitment} {vector_proof}");
     assert_eq!(
         commitment,
-        "206ee272e3358fe7bbc8c0c6def6f0442c2fc08e542594021688d52aebf15c26"
+        "fb3ce2514888e71c45d492c90ee26a5d9629e53f85243721efeab18bce2dc25b"
     );
     assert_eq!(
         proof,
-        "81951a6db2944f4e74922758e1ba0e60bab09f87a038a0a6b10a6c8377419b65"
+        "5305193c7ba9134adbe616bf5f8e05c59d367039a48c25c415b77d0fe1cdb849"
     );
     assert_eq!(
         vector_commitment,
-        "afb30fd6f54cfeb87a8be627c6c70f291f5d5d5e62152246d422c9dbc3be3142"
+        "abe0782fdaad52492626341c674e7d3e9b2a96bf93de8ad3b810b17bde566b78"
     );
     assert_eq!(
         vector_proof,
-        "8b456dfa21f6e6a70c16e54a9ef4ada15a69714e11e97eecc907cd3971f8e3cd"
+        "e2c9ca904861c73cf79664584b1ea98fb8ef11efd7d2cdb6d6d47b2791e20f6f"
     );
 }
 

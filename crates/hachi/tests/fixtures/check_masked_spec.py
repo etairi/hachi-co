@@ -17,6 +17,10 @@ those values must satisfy:
 - Level 0: w_i = a*^T G s_i, v = D (w_hat, w0_hat, t0_hat), the masks s_0 = z - sum c_i s_i and
   rho_0 = z_rho - sum c_i rho_i over Z, w_0 = a*^T G s_0, t_0 = A s_0 + A' rho_0, the bound beta,
   the challenges, and the widths of the masks against sigma.
+- Setup item 2(e) and 2(f) at level 0: s = phi ceil(sqrt N) 2^r omega ceil(b/2) rounded up to a
+  multiple of 16, beta^(0) from s, tau the fewest balanced digits whose positive end reaches beta,
+  and the bounds of Lemma 21 on the real fold v(c) = (sum c_i s_i, sum c_i rho_i):
+  ||v(c)||_inf <= 2^r omega ceil(b/2) and ||v(c)||_2 <= s / phi.
 
 Indices: the Rust code orders a table with the first variable as the most significant bit, and the
 appendix (nat, bits) as the least significant one. The layout and the weights are checked in the
@@ -27,11 +31,12 @@ Run: sage -python crates/hachi/tests/fixtures/check_masked_spec.py
 It prints one line per check and exits with status 1 if any check fails.
 """
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
 
-from sage.all import GF, ZZ, PolynomialRing
+from sage.all import GF, ZZ, PolynomialRing, RealField
 
 FAILS = []
 
@@ -416,6 +421,34 @@ def run(inst):
     check(zmax <= beta, name(f"||(z, z_rho)||_inf = {zmax} <= beta = {beta}"))
     samples = [x for a in s0 + rho0 for x in a]
     sd = statistics.pstdev(samples)
+    # Setup item 2(e) and 2(f) at level 0, with the digit bound ceil(b/2) of Lemma 21's proof.
+    phi, lam, width = inst["phi"], inst["sec_lambda"], inst["width"]
+    big_n = (width + nu + n_a) * d
+    root = math.isqrt(big_n - 1) + 1 if big_n > 1 else big_n
+    half = (b + 1) // 2
+    target = phi * root * 2 ** r * omega * half
+    check(sigma == -(-target // 16) * 16,
+          name(f"s = 16 ceil(phi ceil(sqrt N) 2^r omega ceil(b/2) / 16) = {sigma}, N = {big_n}"))
+    RR = RealField(200)
+    log = (2 * big_n - 1).bit_length()
+    want_beta = (RR(sigma) * (2 * RR(2).log() * (log + lam)).sqrt()).ceil()
+    check(beta == want_beta and RR(beta) >= RR(sigma) * (2 * RR(2 * big_n).log() + 2 * lam * RR(2).log()).sqrt(),
+          name(f"beta^(0) = ceil(s sqrt(2 ln 2 (ceil(log2 2N) + lambda))) = {beta}, at least the appendix's"))
+    tau = inst["tau"]
+    cover = lambda t: (half - 1) * (b ** t - 1) // (b - 1)
+    check(cover(tau) >= beta and (tau == 0 or cover(tau - 1) < beta),
+          name(f"tau = {tau}: the fewest balanced digits whose positive end reaches beta"))
+    fold = [[0] * d for _ in range(len(z) + len(z_rho))]
+    for i in range(2 ** r):
+        for pos, part in enumerate(s[i] + rho[i]):
+            prod = R.mul_int(ci[i], R.lift(part))
+            fold[pos] = [x + y for x, y in zip(fold[pos], prod)]
+    v_inf = max(abs(x) for a in fold for x in a)
+    v_two = math.sqrt(sum(x * x for a in fold for x in a))
+    check(v_inf <= 2 ** r * omega * half,
+          name(f"Lemma 21: ||v(c)||_inf = {v_inf} <= 2^r omega ceil(b/2) = {2 ** r * omega * half}"))
+    check(v_two <= sigma / phi,
+          name(f"Lemma 21: ||v(c)||_2 = {v_two:.0f} <= s / phi = {sigma / phi:.0f}"))
     check(abs(sd / sigma - 1) < 5 / (2 * len(samples)) ** 0.5 + 0.02,
           name(f"the masks' {len(samples)} coefficients have standard deviation {sd:.0f}, sigma = {sigma}"))
     check(max(abs(x) for x in samples) < 16.3 * sigma, name("the masks lie within the sampler's support"))

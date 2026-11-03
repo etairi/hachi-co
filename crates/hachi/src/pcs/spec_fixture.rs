@@ -148,6 +148,9 @@ fn common(
     o.num("nu", hiding.nu);
     o.num("n_b", c.n_b);
     o.num("n_d", c.n_d);
+    o.num("phi", hiding.phi);
+    // The statistical security parameter, not the coin lambda of a merged opening.
+    o.num("sec_lambda", hiding.lambda);
     o.num("r", layout.r);
     o.num("m", layout.m);
     o.num("extra", layout.extra);

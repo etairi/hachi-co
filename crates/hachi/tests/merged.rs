@@ -424,18 +424,21 @@ fn sha256_hex(words: &[u64]) -> String {
 #[test]
 fn outputs_are_pinned() {
     // Regression values of this implementation. Updated on 2026-11-02 for the 192-bit tables of
-    // the Gaussian sampler: the commitment held, and the proof changed with its masks.
+    // the Gaussian sampler: the commitment held, and the proof changed with its masks. Updated
+    // again on 2026-11-02 for the masks' width with ceil(b/2): the smaller masks make the layout
+    // of 4 chunks of 4 elements the smallest (8 chunks of 2 before), so the commitment changed,
+    // and version 7 moved the version word.
     let o = Merged::new(Q, masked(1, 1, Some(1)), 8, [33, 9], 60);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
     println!("{commitment} {proof}");
     assert_eq!(
         commitment,
-        "1bd8085c52524acadc26080ad45fcef97f7222ab08fea56b3979272ff70d7bd4"
+        "542907cddc6220199330f9e8da2972c14db7bc0baf0c81260b228d9559f1e633"
     );
     assert_eq!(
         proof,
-        "f89ebe149e75848ea5511dc9a18252e5f2335233905bee5bc5f6da4892e07b94"
+        "40e1355b579bf4dc8a62f847a31b04d4804f89be74f45240025b8d1488b90fd8"
     );
 }
 

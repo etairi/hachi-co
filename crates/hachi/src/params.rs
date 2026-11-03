@@ -24,7 +24,7 @@
 //! not, since their messages follow from the next witness of the first one, the public data and
 //! the coins. Level 0 commits one more ring element per chunk (the masking row), so that
 //! $W^{(0)} = \delta (2^m + 1)$, and its fold is masked by discrete Gaussians of parameter
-//! $\mathfrak s \ge \phi \sqrt N \, 2^r \omega b$, $N = (W^{(0)} + \nu + n_A) d$. The norm bound
+//! $\mathfrak s \ge \phi \sqrt N \, 2^r \omega \lceil b/2 \rceil$, $N = (W^{(0)} + \nu + n_A) d$. The norm bound
 //! $\beta^{(0)}$ and with it $\tau^{(0)}$ rise, and the next witness gains the digits of $\hat w_0$,
 //! $\hat{\mathbf t}_0$ and the folded randomness ([`IterParams`]). A masked witness needs at least
 //! one iteration, as the last witness is sent in the clear.
@@ -313,8 +313,12 @@ fn ceil_sqrt(x: u128) -> u128 {
 
 /// The Gaussian parameter and the norm bound $(\mathfrak s, \beta^{(0)})$ of a masked level with
 /// $N$ = `coeffs` coefficients in the masks (Setup, item 2(e)):
-/// - $\mathfrak s$ is $\phi \lceil \sqrt N \rceil 2^r \omega b$ rounded up to a multiple of 16,
-///   the widths of [`hachi_co_sampling::gauss::WideGaussian`].
+/// - $\mathfrak s$ is $\phi \lceil \sqrt N \rceil 2^r \omega \lceil b/2 \rceil$ rounded up to a
+///   multiple of 16, the widths of [`hachi_co_sampling::gauss::WideGaussian`]. The factor
+///   $\lceil b/2 \rceil$ is the bound on the digits of $\mathbf s_i$ and $\boldsymbol\varrho_i$
+///   that the proof of Lemma 21 uses, so that $\sqrt N \, 2^r \omega \lceil b/2 \rceil$ bounds
+///   $\lVert \mathbf v(\mathbf c) \rVert_2$, as in Setup item 2(e). Versions before 7 used
+///   $\omega b$, twice as large.
 /// - $\beta^{(0)} = \lceil \mathfrak s \sqrt{2 \ln 2 (\lceil \log_2 2N \rceil + \lambda)} \rceil$,
 ///   at least the paper's $\mathfrak s \sqrt{2 \ln(2N) + 2 \lambda \ln 2}$.
 ///
@@ -333,7 +337,7 @@ fn mask_widths(
         .checked_mul(root)
         .and_then(|x| x.checked_mul(1u128 << layout.r))
         .and_then(|x| x.checked_mul(u128::from(choices.omega)))
-        .and_then(|x| x.checked_mul(u128::from(choices.b)))
+        .and_then(|x| x.checked_mul(u128::from(choices.b.div_ceil(2))))
         .ok_or_else(too_large)?;
     let sigma = target
         .div_ceil(u128::from(WIDE_BASE))

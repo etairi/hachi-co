@@ -141,16 +141,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
-/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 6 since hiding masks the
-/// openings of vectors as well. Version 5 masked the first iteration of polynomials over the field
-/// only, with a masks' value in place of a final randomness. Version 4 randomized every level,
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 7 since the masks' width uses
+/// the digit bound $\lceil b/2 \rceil$ (Setup item 2(e), [`crate::params`]), which changes
+/// $\mathfrak s$, $\beta^{(0)}$ and with them $\tau^{(0)}$ and the shape of a masked proof for the same
+/// choices. Version 6 masked the openings of vectors as well, with the width from $b$. Version 5
+/// masked the first iteration of polynomials over the field only, with a masks' value in place of a
+/// final randomness. Version 4 randomized every level,
 /// and its sumcheck that binds the partial evaluations was already ring-switching, with 2 field
 /// elements per round and $K - 1$ partial evaluations ([`crate::partials`]). Version 3 batched the
 /// same claims on the orbit of the point, with 3 field elements per round and $K$ partial
 /// evaluations. Version 2 had no such sumcheck. It packed the values and
 /// chose the schedule that minimises the proof's size (version 1 had a 64-bit word per value and
 /// stopped at the first iteration that did not shrink the witness).
-pub const VERSION: u64 = 6;
+pub const VERSION: u64 = 7;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]

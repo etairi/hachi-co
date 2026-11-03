@@ -850,7 +850,7 @@ fn malformed_encodings_are_rejected() {
     assert!(proof_err(&[words.clone(), vec![0]].concat()).is_some());
     assert!(com_err(&[com_words.clone(), vec![0]].concat()).is_some());
     // The version.
-    for version in [0u64, 1, 2, 3, 4, 5, 7] {
+    for version in [0u64, 1, 2, 3, 4, 5, 6, 8] {
         assert!(proof_err(&edited(&words, 0, version)).is_some());
         assert!(com_err(&edited(&com_words, 0, version)).is_some());
     }
@@ -1026,30 +1026,32 @@ fn outputs_are_pinned() {
     // format: the pins of version 4 still held after that change, before the version word moved.
     // Updated again on 2026-11-01 for version 6, which masks vectors under hiding: the pins of
     // version 5 still held after that change, before the version word moved.
+    // Updated on 2026-11-02 for version 7, which changes only the masks' width under hiding: the
+    // pins of version 6 still held after that change, before the version word moved.
     let pinned: [(&str, usize, &str, &str); 4] = [
         (
             "multilinear",
             0,
-            "4bc249b2b4a5050d99de1a90fdf92e98ead6881d440725166b87b371405a3690",
-            "40c6ad34170516ed8269664a6189ae31eb72b0e95e640a471933f67fbdd0e321",
+            "0cf6f5404eaaf879e548030ee3ce22bbec58ddfc31b92a8d4342a915efbe1324",
+            "7951bc423e81f06d54bf03619012b0b400c02f4a7822cae8e390fc5f5c621d7b",
         ),
         (
             "multilinear",
             1,
-            "4bc249b2b4a5050d99de1a90fdf92e98ead6881d440725166b87b371405a3690",
-            "96fbae740015bec8d96dbec930b9f450587667a9a5f3a94a9a7b65a94ee3593c",
+            "0cf6f5404eaaf879e548030ee3ce22bbec58ddfc31b92a8d4342a915efbe1324",
+            "41ac6a20c91765c1cde138247200d3618bbcd1e5de8d1489d01b843e0fb62a7d",
         ),
         (
             "vector",
             0,
-            "b178d81d8ba18ae3288d293902fa308ed144d6f08748cfad8edee4b09d4fa034",
-            "39270304d130d725c4c3859149bf2c45b8732888c3da2d3eb06e104b2b0cd277",
+            "9528ca13a665802ac2ca987aa52e76a19000b9d003cfaf8fa7cf6b899bf97d67",
+            "0d1c64e86dd3a25890705a95fa143cbac5e2c2ffbd4efce4a5b4538dcc2cb71f",
         ),
         (
             "vector",
             1,
-            "b178d81d8ba18ae3288d293902fa308ed144d6f08748cfad8edee4b09d4fa034",
-            "f560d2f0e72f1e1178c76bbbe111009fa431407dbccee2e316dd1d719f535d5c",
+            "9528ca13a665802ac2ca987aa52e76a19000b9d003cfaf8fa7cf6b899bf97d67",
+            "2ec589a7c5c79872c9257f23e3ee087765b4773203dd0af77e8855c94bc85ebb",
         ),
     ];
     let mut failures = Vec::new();
