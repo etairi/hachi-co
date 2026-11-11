@@ -26,7 +26,10 @@ use common::net::run_with;
 use common::{
     K, additive_shares, assert_claims_match, clear_pcs, clear_words, random_instance, seed,
 };
-use hachi_co::{EVAL_DOMAIN, EvalOutput, EvalProof, commit, eval_with, verify_claims_with};
+use hachi_co::{
+    EVAL_DOMAIN, EvalOutput, EvalProof, VerifyError, commit, eval_with, verify_claims_with,
+    verify_value,
+};
 use hachi_co_commit::{LABEL_FAH_B, LABEL_RESHARE, open};
 use hachi_co_conv::LABEL_FAH_E;
 use hachi_co_core::{Context, Ext, FsChallenger, PartyState, Poly, PrgRandomness};
@@ -98,23 +101,12 @@ fn prove(
     i: u64,
     f_p: &[Ext<K>],
     x: &[Ext<K>],
-    y: &Ext<K>,
 ) -> Result<PartyOutput, hachi_co::Error> {
     let (n, p) = (comm.n() as u64, comm.id() as u64);
     let mut rng = PrgRandomness::new(seed("party/collaborative", &[n, i, p]));
     let (u, state) = commit(ctx, comm, &mut rng, f_p)?;
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
-    let out = eval_with(
-        ctx,
-        &clear_pcs(ctx),
-        comm,
-        &mut rng,
-        &mut ch,
-        &state,
-        &u,
-        x,
-        y,
-    )?;
+    let out = eval_with(ctx, &clear_pcs(ctx), comm, &mut rng, &mut ch, &state, &u, x)?;
     Ok(PartyOutput {
         u,
         state,
@@ -126,7 +118,7 @@ fn prove(
 /// Every party of `inst` (run `i`) on `config`; every party must succeed.
 fn run_honest(inst: &Instance, i: u64, config: &MemoryConfig) -> (Vec<PartyOutput>, Vec<Stats>) {
     run_with(config, |p, comm| {
-        prove(&inst.ctx, comm, i, &inst.shares[p - 1], &inst.x, &inst.y)
+        prove(&inst.ctx, comm, i, &inst.shares[p - 1], &inst.x)
     })
     .into_iter()
     .map(|run| {
@@ -152,16 +144,16 @@ fn check_honest(inst: &Instance, outs: &[PartyOutput], what: &str) {
     let report = open(&inst.ctx, &states, &first.u, &inst.f, None).unwrap();
     assert!(report.bit, "{what}: Open: {:?}", report.checks.failing());
     let mut vch = FsChallenger::new(EVAL_DOMAIN);
-    let claims = verify_claims_with(
+    let (value, claims) = verify_claims_with(
         &inst.ctx,
         &clear_pcs(&inst.ctx),
         &mut vch,
         &first.u,
         &inst.x,
-        &inst.y,
         &first.out.proof,
     )
     .unwrap();
+    assert_eq!(value, inst.y, "{what}: the verifier outputs f(x)");
     assert_eq!(
         vch.transcript().digest(),
         first.digest,
@@ -230,37 +222,50 @@ fn n_parties_and_one_party_prove_the_same_statements() {
         let (outs, _) = run_honest(&inst, 0, &network(&inst, 0, ZeroSharing::PairwiseSeeds));
         check_honest(&inst, &outs, &format!("n = {n}"));
         let mut comm = Loopback::new(q).unwrap();
-        let single = prove(&ctx1, &mut comm, 0, &inst.f, &inst.x, &inst.y).unwrap();
+        let single = prove(&ctx1, &mut comm, 0, &inst.f, &inst.x).unwrap();
         let mut vch = FsChallenger::new(EVAL_DOMAIN);
-        verify_claims_with(
+        let (value, _) = verify_claims_with(
             &ctx1,
             &clear_pcs(&ctx1),
             &mut vch,
             &single.u,
             &inst.x,
-            &inst.y,
             &single.out.proof,
         )
         .expect("the single party's proof of the same statement");
-        // A false claim is refused by every prover, in both settings.
+        assert_eq!(
+            value, inst.y,
+            "n = {n}: the single party's proof gives f(x)"
+        );
+        // The verifier outputs the value, so an expected value other than f(x) is refused, in
+        // both settings (the provers take no claimed value since the draft's commit c071784).
         let field = inst.ctx.field();
         let wrong = field.add(&inst.y, &field.one());
-        let runs = run_with(&network(&inst, 0, ZeroSharing::PairwiseSeeds), |p, comm| {
-            prove(&inst.ctx, comm, 0, &inst.shares[p - 1], &inst.x, &wrong).err()
-        });
-        for (i, run) in runs.into_iter().enumerate() {
-            let err = run.unwrap().output;
-            assert!(
-                matches!(err, Some(hachi_co::Error::ClaimMismatch(_))),
-                "n = {n}, party {}: {err:?}",
-                i + 1
-            );
-        }
-        let mut comm = Loopback::new(q).unwrap();
-        assert!(matches!(
-            prove(&ctx1, &mut comm, 0, &inst.f, &inst.x, &wrong),
-            Err(hachi_co::Error::ClaimMismatch(_))
-        ));
+        let (outs, _) = run_honest(&inst, 0, &network(&inst, 0, ZeroSharing::PairwiseSeeds));
+        let pcs = clear_pcs(&inst.ctx);
+        assert_eq!(
+            verify_value(
+                &inst.ctx,
+                &pcs,
+                &outs[0].u,
+                &inst.x,
+                &wrong,
+                &outs[0].out.proof
+            ),
+            Err(VerifyError::ValueMismatch),
+            "n = {n}"
+        );
+        assert_eq!(
+            verify_value(
+                &ctx1,
+                &clear_pcs(&ctx1),
+                &single.u,
+                &inst.x,
+                &wrong,
+                &single.out.proof
+            ),
+            Err(VerifyError::ValueMismatch)
+        );
     }
 }
 
@@ -282,8 +287,7 @@ fn a_party_that_leaves_ends_the_run_at_once() {
             let config = base.clone().fault(faulty, Fault::Leave { after_frames: k });
             let start = Instant::now();
             let results = run_with(&config, |p, comm| {
-                prove(&inst.ctx, comm, 0, &inst.shares[p - 1], &inst.x, &inst.y)
-                    .map(|o| o.out.proof)
+                prove(&inst.ctx, comm, 0, &inst.shares[p - 1], &inst.x).map(|o| o.out.proof)
             });
             let elapsed = start.elapsed();
             assert!(
@@ -313,7 +317,9 @@ fn a_party_that_leaves_ends_the_run_at_once() {
 /// broadcast $n\_B d$, $d$, $n\_D d$ and $(d\_0 + d\_1 + 2) K$ words (twice with fresh zero
 /// sharings); the abort and prover-1 flags are one word; the responses go to prover 1; the
 /// all-gathers broadcast $2K$ and $3K$ words, and the three base-PCS commitments and the three
-/// opening proofs of `ClearPcs`, each with its length word.
+/// opening proofs of `ClearPcs`, each with its length word. Every public broadcast (the F_AH
+/// calls, the flags and the all-gathers, not the resharing) ends with the agreement round of
+/// `hachi-co-mpc`: a digest of 4 words to every other party.
 fn expected_bytes_sent(
     ctx: &Context<K>,
     n: usize,
@@ -333,23 +339,30 @@ fn expected_bytes_sent(
     } else {
         0
     };
+    let digest = 32 * peers;
     vec![
         (LABEL_SETUP, 8 * (3 * peers + seeds)),
         (LABEL_RESHARE, 8 * peers * k * (1u64 << l.ell)),
-        (LABEL_FAH_B, 8 * peers * fah * l.n_b as u64 * d),
-        (LABEL_FAH_E, 8 * peers * fah * d),
-        (COMM_FAH_D, 8 * peers * fah * l.n_d as u64 * d * attempts),
-        (COMM_ABORT, 8 * peers * attempts),
-        (COMM_FAH_Z, 8 * peers * fah * response_len(ctx) as u64),
-        (COMM_PROVER1, 8 * peers),
-        (ALL_GATHER_SUMS, 8 * peers * 2 * k),
-        (ALL_GATHER_COMMITMENTS, 8 * peers * commitments),
+        (LABEL_FAH_B, 8 * peers * fah * l.n_b as u64 * d + digest),
+        (LABEL_FAH_E, 8 * peers * fah * d + digest),
+        (
+            COMM_FAH_D,
+            (8 * peers * fah * l.n_d as u64 * d + digest) * attempts,
+        ),
+        (COMM_ABORT, (8 * peers + digest) * attempts),
+        (
+            COMM_FAH_Z,
+            8 * peers * fah * response_len(ctx) as u64 + digest,
+        ),
+        (COMM_PROVER1, 8 * peers + digest),
+        (ALL_GATHER_SUMS, 8 * peers * 2 * k + digest),
+        (ALL_GATHER_COMMITMENTS, 8 * peers * commitments + digest),
         (
             FAH_ROUND,
-            8 * peers * fah * (l.d0 + l.d1 + 2) as u64 * k * l.ell_pp as u64,
+            (8 * peers * fah * (l.d0 + l.d1 + 2) as u64 * k + digest) * l.ell_pp as u64,
         ),
-        (ALL_GATHER_FINAL, 8 * peers * 3 * k),
-        (ALL_GATHER_OPENINGS, 8 * peers * openings),
+        (ALL_GATHER_FINAL, 8 * peers * 3 * k + digest),
+        (ALL_GATHER_OPENINGS, 8 * peers * openings + digest),
     ]
 }
 

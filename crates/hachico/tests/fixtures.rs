@@ -120,7 +120,7 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     let (u_fx, x, y) = fixture_statement(&fx);
     assert_eq!(u, u_fx);
     let mut ch = ReplayChallenger::new(&fx).unwrap();
-    let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+    let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
     compare_proof(&fx, &want, &out.proof, "toy-n1");
     compare_attempts(&fx, &out, 1, "toy-n1");
     assert_eq!(
@@ -134,7 +134,8 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     );
     // The composed verifier, with the replayed coins.
     let mut vch = ReplayChallenger::new(&fx).unwrap();
-    let claims = verify_claims_with(&ctx, &pcs, &mut vch, &u, &x, &y, &out.proof).unwrap();
+    let (value, claims) = verify_claims_with(&ctx, &pcs, &mut vch, &u, &x, &out.proof).unwrap();
+    assert_eq!(&value, &y);
     assert_eq!(claims, fixture_claims(&fx));
     assert_claims_match(ctx.field(), &claims, &[&out.sumcheck], "toy-n1");
     // The encoding of the replayed proof.
@@ -169,8 +170,7 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
                     .unwrap();
                 let (u, state) = commit(&ctx, comm, &mut rng, &f_init).unwrap();
                 let mut ch = ReplayChallenger::new(&fx).unwrap();
-                let out =
-                    eval_with(&ctx, &pcs, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+                let out = eval_with(&ctx, &pcs, comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
                 (u, state, out)
             })
             .into_iter()
@@ -187,9 +187,9 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
             let f = fx.exts::<K>("/input/f").unwrap();
             assert!(open(&ctx, &states, &u_fx, &f, None).unwrap().bit, "{name}");
             let mut vch = ReplayChallenger::new(&fx).unwrap();
-            let claims =
-                verify_claims_with(&ctx, &pcs, &mut vch, &u_fx, &x, &y, &outputs[0].2.proof)
-                    .unwrap();
+            let (value, claims) =
+                verify_claims_with(&ctx, &pcs, &mut vch, &u_fx, &x, &outputs[0].2.proof).unwrap();
+            assert_eq!(value, y, "{name}: the verifier outputs the recorded value");
             assert_eq!(claims, fixture_claims(&fx), "{name}");
             let privates: Vec<_> = outputs.iter().map(|(_, _, out)| &out.sumcheck).collect();
             assert_claims_match(ctx.field(), &claims, &privates, name);
@@ -210,7 +210,8 @@ fn composed_verifier_accepts_the_fixture_transcripts() {
         proof.validate(&ctx).unwrap();
         let (u, x, y) = fixture_statement(&fx);
         let mut ch = ReplayChallenger::new(&fx).unwrap();
-        let claims = verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &y, &proof).unwrap();
+        let (value, claims) = verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &proof).unwrap();
+        assert_eq!(&value, &y);
         assert_eq!(claims, fixture_claims(&fx), "{name}");
         assert_eq!(claims.claims.len(), 3 * fx.n(), "{name}");
         assert!(fx.bool("/verifier/accept").unwrap());
@@ -218,21 +219,13 @@ fn composed_verifier_accepts_the_fixture_transcripts() {
         let decoded = EvalProof::from_bytes(&ctx, &proof.to_bytes()).unwrap();
         let mut ch = ReplayChallenger::new(&fx).unwrap();
         assert_eq!(
-            verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &y, &decoded).unwrap(),
-            claims
+            verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &decoded).unwrap(),
+            (value, claims)
         );
         // Without the base PCS's words the proof does not fit the context.
         let mut ch = ReplayChallenger::new(&fx).unwrap();
         assert!(matches!(
-            verify_claims_with(
-                &ctx,
-                &pcs,
-                &mut ch,
-                &u,
-                &x,
-                &y,
-                &fixture_proof_without_pcs(&fx)
-            ),
+            verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &fixture_proof_without_pcs(&fx),),
             Err(VerifyError::Proof(ProofError::Shape { .. }))
         ));
     }

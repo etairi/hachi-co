@@ -284,8 +284,8 @@ fn open_negative_tests_fail_exactly_as_recorded() {
         let recorded = fx.get("/negative_tests/open").unwrap().as_object().unwrap();
         assert_eq!(
             recorded.len(),
-            4,
-            "{name}: the oracle records four Open tests"
+            6,
+            "{name}: the oracle records six Open tests"
         );
         for key in recorded.keys() {
             let report = match key.as_str() {
@@ -300,6 +300,18 @@ fn open_negative_tests_fail_exactly_as_recorded() {
                     let mut st = states.clone();
                     let c = &mut st[0].rho_u[0].0[0];
                     *c = (*c + 1) % q;
+                    open(&ctx, &st, &u, &f, None).unwrap()
+                }
+                "open: one coefficient of f' changed" => {
+                    // Prover 1's first block, entry 0, coefficient 0, plus 1.
+                    let mut st = states.clone();
+                    let c = &mut st[0].blocks[0].f_prime[0].0[0];
+                    *c = (*c + 1) % q;
+                    open(&ctx, &st, &u, &f, None).unwrap()
+                }
+                "open: a block missing from its prover's state" => {
+                    let mut st = states.clone();
+                    st[0].blocks.remove(0);
                     open(&ctx, &st, &u, &f, None).unwrap()
                 }
                 "open: f changed in one coordinate" => {

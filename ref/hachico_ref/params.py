@@ -168,7 +168,7 @@ def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau
         tau = draft_tau(beta, b)
     else:
         raise ValueError(tau_rule)
-    beta_bar, omega_bar, gamma_bar = 2 * b ** tau, 2 * omega, b
+    beta_bar, omega_bar, gamma_bar = 2 * b ** tau, 2 * omega, b - 1   # gamma_bar = b - 1 since the draft's 28721d6
     mu = (2 ** r * delta + n * delta + 2 ** r * n_A * delta + n * n_A * delta + n * m_u + n * m_v
           + 2 ** m * delta * tau + 2)
     n_prime = n_A + n_B + n_D + 2

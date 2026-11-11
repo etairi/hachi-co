@@ -12,8 +12,8 @@ use hachi_co_core::{
 };
 use hachi_co_mpc::{Comm, Loopback, PartyId};
 use hachi_co_r2l::{
-    COMM_FAH_D, COMM_FAH_Z, Error, MAX_ATTEMPTS, R2lOutput, linear_relation, relation_holds, run,
-    run_with_cap, sum_shares, verifier_challenges,
+    COMM_FAH_D, COMM_FAH_Z, Error, MAX_ATTEMPTS, R2lOutput, linear_relation, r3_conditions,
+    relation_holds, run, run_with_cap, sum_shares, verifier_challenges,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -206,6 +206,9 @@ fn threaded_replay_reproduces_every_fixture() {
         assert_eq!(sum.y, fx.polys("/ring_to_linear/y").unwrap(), "{name}");
         let rel = linear_relation(&ctx, &pv, &outs[0].v, &outs[0].c, &u_com(&fx)).unwrap();
         assert!(relation_holds(&ctx, &rel, &sum.z_prime).unwrap(), "{name}");
+        // The relation R_3 of the draft since c071784: M z' = y, short entries, slices of S.
+        let r3 = r3_conditions(&ctx, &rel, &shares).unwrap();
+        assert!(r3.hold(), "{name}: {r3:?}");
     }
 }
 
@@ -344,6 +347,8 @@ fn honest_fiat_shamir_runs_with_threads_agree_and_satisfy_the_relation() {
                 relation_holds(&ctx, &rel, &sum.z_prime).unwrap(),
                 "{name} run {i}"
             );
+            let r3 = r3_conditions(&ctx, &rel, &shares).unwrap();
+            assert!(r3.hold(), "{name} run {i}: {r3:?}");
             let c = verifier_challenges(
                 &ctx,
                 &mut FsChallenger::new(DOMAIN),

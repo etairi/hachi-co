@@ -2,9 +2,17 @@
 
 A SageMath/numpy reference implementation of the Hachi-Co protocol at the toy presets of `docs/m0-spec.md`, for
 n ∈ {1, 2, 3}, extended to n ∈ {4, 8} (see "Party counts 4 and 8" below). It is a test oracle and fixture generator for the Rust code. It is not secure and not optimized.
-Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`). One change since: Setup's
-$\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (6_CH:279 as the draft's commit `2ee6507` revises it, the bound of 5_BB:141), in
-place of $\omega b$, so $\gamma$ and $\beta$ halve and `toy-n3` moves to $q = 33554501$.
+Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`). Changes since:
+- Setup's $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (6_CH:279 as the draft's commit `2ee6507` revises it, the bound of
+  5_BB:141), in place of $\omega b$, so $\gamma$ and $\beta$ halve and `toy-n3` moves to $q = 33554501$.
+- $\bar\gamma = b - 1$ (the draft's commit `28721d6`), in place of $b$.
+- Open as the draft states it since `28721d6` (`commit.open_check`): each prover's state supplies the blocks of its part
+  $T_i$ of the partition in pp, other entries are ignored and the blocks of $T_0$ are zero, f′ is read from the states
+  and checked against $G s$, and the conditions are named `c_in_slack_space`, `states_hold_their_blocks`,
+  `f_eq_f_bar`, `f_prime_eq_G_s`, `A_s_eq_G_that`, `norm_c_s_le_beta_bar`, `B_that_eq_u`, `norm_that_le_gamma_bar` and
+  `unheld_blocks_zero` (which holds by the assembly). The check `no_block_in_several_states` is gone.
+- Since `c071784` the verifier of Π_A reads y from E(u) and Eval outputs it. The oracle still records the input's y and
+  checks y = E(u) (`conv.verify_conv`), which is the comparison with an expected value.
 Line references use the short names `4_P` (4_preliminaries.tex), `5_BB` (5_Building_Blocks.tex),
 `6_CH` (6_Collaborative_Hachi.tex), `F2R` (field-to-ring-rok.tex) and `tH` (t-hiding.tex).
 
@@ -281,7 +289,8 @@ seeds (`--sweep`).
   - Prover 2 writes outside its slice with the sum unchanged: only H₀ fails.
   - A quotient whose sum has a nonzero coefficient of X^{d+1}: only H₁ fails.
   - Compensated changes to the ⟨u⟩ shares or to the quotient shares, and any pad: accepted.
-- **Open.** A changed digit of s, a changed coefficient of ρᵘ, a changed f, or c outside Z each gives 0.
+- **Open.** A changed digit of s, a changed coefficient of ρᵘ, a changed coefficient of f′, a block missing from its
+  prover's state, a changed f, or c outside Z each gives 0.
 - **Rej.** Exhaustively at (N, γ, β₁) = (2, 4, 2), with the oracle's own Rej: for every v with ‖v‖∞ ≤ β₁ each
   z of the box is output by exactly one mask; for all 24 v with ‖v‖∞ = β₁+1 the accepted set differs. At the
   toy parameters, exactly: with v₁ = β₁+1 the first coordinate reaches 2γ−2β₁ of the 2γ−2β₁+1 box values, so

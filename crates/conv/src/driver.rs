@@ -38,7 +38,8 @@ pub struct ConvOutput<const K: usize> {
 /// 3. [`fah_e_input`] and [`Comm::fah`] with [`LABEL_FAH_E`]: every party receives
 ///    $E(u)$ (steps 5-6, lines 161-193).
 ///
-/// The verifier then checks $y = E(u)$ ([`crate::verify`]). With [`hachi_co_mpc::Loopback`]
+/// The verifier then reads $E(u)$ as the value $y$ ([`crate::read_value`]). With
+/// [`hachi_co_mpc::Loopback`]
 /// ($n = 1$) the collective call is the identity.
 ///
 /// # Errors

@@ -40,7 +40,8 @@ use common::{
 
 use hachi_co::{
     BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalOutput, EvalProof, HachiBase, HachiChoices,
-    Hiding, PcsWords, VerifyError, commit, encoded_len, eval_with, verify, verify_claims_with,
+    Hiding, PcsWords, VerifyError, commit, encoded_len, eval_with, verify_claims_with,
+    verify_value,
 };
 use hachi_co_core::base_pcs::mobius_ext;
 use hachi_co_core::{Ext, FsChallenger, PartyRandomness, Poly, PrgRandomness};
@@ -68,7 +69,7 @@ impl Run {
     }
 
     fn verify_with(&self, pcs: &impl BasePcs<K>, proof: &EvalProof<K>) -> Result<(), VerifyError> {
-        verify(&self.ctx, pcs, &self.u, &self.x, &self.y, proof)
+        verify_value(&self.ctx, pcs, &self.u, &self.x, &self.y, proof)
     }
 
     fn check(&self, proof: &EvalProof<K>) -> Result<(), VerifyError> {
@@ -107,7 +108,7 @@ fn run_with(
         let mut rng = PrgRandomness::new(seed("party/hachi-base", &[n as u64, index, p as u64]));
         let (u, state) = commit(&ctx, comm, &mut rng, &shares[p - 1]).unwrap();
         let mut ch = FsChallenger::new(EVAL_DOMAIN);
-        let out = eval_with(&ctx, &pcs, comm, &mut rng, &mut ch, &state, &u, &x, &y)
+        let out = eval_with(&ctx, &pcs, comm, &mut rng, &mut ch, &state, &u, &x)
             .unwrap_or_else(|e| panic!("{name}, party {p}: {e}"));
         (u, out)
     });
@@ -149,23 +150,24 @@ fn check_honest(r: &Run) -> [usize; 3] {
         "{name}: one proof"
     );
     let start = Instant::now();
-    let claims = verify_claims_with(
+    let (value, claims) = verify_claims_with(
         ctx,
         pcs,
         &mut FsChallenger::new(EVAL_DOMAIN),
         &r.u,
         &r.x,
-        &r.y,
         proof,
     )
     .unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(value, r.y, "{name}: the verifier outputs f(x)");
     let verify_time = start.elapsed();
     let privates: Vec<_> = r.outs.iter().map(|o| &o.sumcheck).collect();
     assert_claims_match(ctx.field(), &claims, &privates, name);
     // A false evaluation is rejected with this proof.
     let y_false = ctx.field().add(&r.y, &ctx.field().one());
-    assert!(
-        verify(ctx, pcs, &r.u, &r.x, &y_false, proof).is_err(),
+    assert_eq!(
+        verify_value(ctx, pcs, &r.u, &r.x, &y_false, proof),
+        Err(VerifyError::ValueMismatch),
         "{name}"
     );
 
@@ -497,21 +499,22 @@ fn check_merged(r: &Run) -> usize {
         r.outs.iter().all(|o| o.proof == *proof),
         "{name}: one proof"
     );
-    let claims = verify_claims_with(
+    let (value, claims) = verify_claims_with(
         ctx,
         pcs,
         &mut FsChallenger::new(EVAL_DOMAIN),
         &r.u,
         &r.x,
-        &r.y,
         proof,
     )
     .unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(value, r.y, "{name}: the verifier outputs f(x)");
     let privates: Vec<_> = r.outs.iter().map(|o| &o.sumcheck).collect();
     assert_claims_match(ctx.field(), &claims, &privates, name);
     let y_false = ctx.field().add(&r.y, &ctx.field().one());
-    assert!(
-        verify(ctx, pcs, &r.u, &r.x, &y_false, proof).is_err(),
+    assert_eq!(
+        verify_value(ctx, pcs, &r.u, &r.x, &y_false, proof),
+        Err(VerifyError::ValueMismatch),
         "{name}"
     );
     // One commitment and one opening per party, in the share polynomial's items.

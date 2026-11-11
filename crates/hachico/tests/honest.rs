@@ -23,7 +23,7 @@ use common::{
 };
 use hachi_co::{
     BasePcs, ClaimedPoly, EVAL_DOMAIN, EvalProof, LABEL_PP_A, LABEL_PP_BASE, LABELS_PARAMS, commit,
-    encoded_len, eval, eval_with, verify, verify_claims_with, verify_with,
+    encoded_len, eval, eval_with, verify_claims_with, verify_value, verify_with,
 };
 use hachi_co_commit::open;
 use hachi_co_core::{FsChallenger, PrgRandomness};
@@ -55,11 +55,12 @@ fn honest_loopback_run(preset: &str, i: u64, instance: u64, repeat: bool) {
     assert!(report.bit, "{preset}: Open: {:?}", report.checks.failing());
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
     let start = Instant::now();
-    let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+    let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
     let prove_time = start.elapsed();
     let mut vch = FsChallenger::new(EVAL_DOMAIN);
     let start = Instant::now();
-    let claims = verify_claims_with(&ctx, &pcs, &mut vch, &u, &x, &y, &out.proof).unwrap();
+    let (value, claims) = verify_claims_with(&ctx, &pcs, &mut vch, &u, &x, &out.proof).unwrap();
+    assert_eq!(&value, &y);
     let verify_time = start.elapsed();
     assert_eq!(
         vch.transcript().digest(),
@@ -74,11 +75,11 @@ fn honest_loopback_run(preset: &str, i: u64, instance: u64, repeat: bool) {
         // same seed), and verify and verify_with accept it.
         let mut rng2 = PrgRandomness::new(party_seed);
         let mut comm = Loopback::new(ctx.q()).unwrap();
-        let proof = eval(&ctx, &pcs, &mut comm, &mut rng2, &state, &u, &x, &y).unwrap();
+        let proof = eval(&ctx, &pcs, &mut comm, &mut rng2, &state, &u, &x).unwrap();
         assert_eq!(proof, out.proof, "{preset}: eval = eval_with");
-        verify(&ctx, &pcs, &u, &x, &y, &proof).unwrap();
+        verify_value(&ctx, &pcs, &u, &x, &y, &proof).unwrap();
         let mut vch = FsChallenger::new(EVAL_DOMAIN);
-        verify_with(&ctx, &pcs, &mut vch, &u, &x, &y, &proof).unwrap();
+        verify_with(&ctx, &pcs, &mut vch, &u, &x, &proof).unwrap();
     }
     // The encoding, with the sizes of ClearPcs's items.
     let bytes = out.proof.to_bytes();
@@ -146,8 +147,7 @@ fn honest_multi_party_runs_on_the_network() {
                 let mut prg = PrgRandomness::new(seed(&format!("party/{preset}"), &[i, p as u64]));
                 let (u, state) = commit(&ctx, comm, &mut prg, &f_init[p - 1]).unwrap();
                 let mut ch = FsChallenger::new(EVAL_DOMAIN);
-                let out =
-                    eval_with(&ctx, &pcs, comm, &mut prg, &mut ch, &state, &u, &x, &y).unwrap();
+                let out = eval_with(&ctx, &pcs, comm, &mut prg, &mut ch, &state, &u, &x).unwrap();
                 (u, state, out, ch.transcript().digest())
             });
             let (u, _, first, digest) = &outputs[0];
@@ -162,7 +162,9 @@ fn honest_multi_party_runs_on_the_network() {
             let states: Vec<_> = outputs.iter().map(|(_, st, _, _)| st.clone()).collect();
             assert!(open(&ctx, &states, u, &f, None).unwrap().bit, "{preset}");
             let mut vch = FsChallenger::new(EVAL_DOMAIN);
-            let claims = verify_claims_with(&ctx, &pcs, &mut vch, u, &x, &y, &first.proof).unwrap();
+            let (value, claims) =
+                verify_claims_with(&ctx, &pcs, &mut vch, u, &x, &first.proof).unwrap();
+            assert_eq!(&value, &y);
             assert_eq!(&vch.transcript().digest(), digest, "{preset}");
             let privates: Vec<_> = outputs.iter().map(|(_, _, out, _)| &out.sumcheck).collect();
             assert_claims_match(ctx.field(), &claims, &privates, preset);
@@ -228,12 +230,13 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
         let mut rng = PrgRandomness::new(seed("party/toy-n1/calls", &[j]));
         let (u, state) = commit(&ctx, &mut comm, &mut rng, &f).unwrap();
         let mut ch = Recorder::new(FsChallenger::new(EVAL_DOMAIN));
-        let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+        let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
         if out.proof.attempt == 0 {
             continue;
         }
         let mut vch = Recorder::new(FsChallenger::new(EVAL_DOMAIN));
-        verify_with(&ctx, &pcs, &mut vch, &u, &x, &y, &out.proof).unwrap();
+        let value = verify_with(&ctx, &pcs, &mut vch, &u, &x, &out.proof).unwrap();
+        assert_eq!(value, y, "the verifier outputs f(x)");
         assert_eq!(
             vch.log,
             without_aborted_attempts(&ch.log, out.proof.attempt)
@@ -253,9 +256,10 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
             .collect();
         assert_eq!(begins, (0..=out.proof.attempt).collect::<Vec<_>>());
         // The documented order: 17 parameter words, A, B, D, the digest of the base PCS's
-        // parameters, u, x, y, E(u), then the step.
+        // parameters, u, x, E(u), then the step (y is not absorbed: the verifier reads it from
+        // E(u)).
         let l = &ctx.layout;
-        let head: Vec<String> = vch.log.iter().take(25).map(|c| format!("{c:?}")).collect();
+        let head: Vec<String> = vch.log.iter().take(24).map(|c| format!("{c:?}")).collect();
         for (k, label) in LABELS_PARAMS.iter().enumerate() {
             assert!(
                 matches!(&vch.log[k], Call::U64(lab, _) if lab == label),
@@ -271,19 +275,19 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
             .fold(0u64, |acc, b| acc.wrapping_add(u64::from_le_bytes(*b)));
         assert_eq!(vch.log[20], Call::Words(LABEL_PP_BASE, 1, digest));
         assert!(is_polys(&vch.log[21], hachi_co_commit::LABEL_U, l.n_b));
-        assert!(is_polys(&vch.log[24], hachi_co_conv::LABEL_E_U, 1));
-        assert_eq!(vch.log[25], Call::Begin(out.proof.attempt));
-        assert!(is_polys(&vch.log[26], hachi_co_r2l::LABEL_V, l.n_d));
-        assert!(matches!(vch.log[27], Call::R2l(a, ..) if a == out.proof.attempt));
+        assert!(is_polys(&vch.log[23], hachi_co_conv::LABEL_E_U, 1));
+        assert_eq!(vch.log[24], Call::Begin(out.proof.attempt));
+        assert!(is_polys(&vch.log[25], hachi_co_r2l::LABEL_V, l.n_d));
+        assert!(matches!(vch.log[26], Call::R2l(a, ..) if a == out.proof.attempt));
         // G0, G1, the three commitments, coins, l'' x (H0, H1, a_r), three final absorbs, three
         // contexts.
-        assert_eq!(vch.log.len(), 28 + 6 + 3 * l.ell_pp + 3 + 3);
+        assert_eq!(vch.log.len(), 27 + 6 + 3 * l.ell_pp + 3 + 3);
         let words =
             |k: usize, label: &str| matches!(&vch.log[k], Call::Words(lab, 1, _) if *lab == label);
-        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_W));
-        assert!(words(31, hachi_co_sumcheck::LABEL_COMMIT_G0));
-        assert!(words(32, hachi_co_sumcheck::LABEL_COMMIT_G1));
-        assert!(matches!(vch.log[33], Call::Coins(..)));
+        assert!(words(29, hachi_co_sumcheck::LABEL_COMMIT_W));
+        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_G0));
+        assert!(words(31, hachi_co_sumcheck::LABEL_COMMIT_G1));
+        assert!(matches!(vch.log[32], Call::Coins(..)));
         let tail = &vch.log[vch.log.len() - 3..];
         for (call, poly) in tail.iter().zip(ClaimedPoly::ORDER) {
             assert!(

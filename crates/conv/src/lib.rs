@@ -11,10 +11,12 @@
 //! | 3-4. $\langle u \rangle\_p = \mathbf d^T \lbrace \mathbf f' \rbrace\_p$ (124-131) | [`u_share`] | |
 //! | 5. $E$ and its matrix $\mathbf E$ (132-158) | [`e_map`], [`e_matrix`] | |
 //! | 6. $E(u)$ by $\mathcal F\_{\mathsf{AH}}(E)$ (160-162) | [`fah_e_input`], [`pi_conv`] | `fah` ([`LABEL_FAH_E`]) |
-//! | 6. V checks $y = E(u)$ (164) | [`verify`], [`check`] | |
+//! | 6. V reads $E(u)$ as $y$ ($\Pi\_A$ at the draft's `c071784`; it checked $y = E(u)$ before) | [`read_value`]; [`check`], [`verify`] compare with an expected $y$ | |
 //!
 //! [`check_relation`] checks the reduction itself on reconstructed witnesses: the input relation
-//! $f(\mathbf x) = y$, the output relation $u = f'(\mathbf x')$ and the link $E(u) = f(\mathbf x)$.
+//! $f(\mathbf x) = y$, the output relation $u = f'(\mathbf x')$, the link $E(u) = f(\mathbf x)$, and
+//! the digit bound $\Vert \mathbf s\_{i'} \Vert\_\infty \le \lfloor b/2 \rfloor$ that $\mathcal R\_1$
+//! and $\mathcal R\_2$ state since the draft's commit `c071784`.
 //!
 //! **Conventions** (`ref/README.md`, "Πconv"): $\mathbf x' = \mathbf 1^{\lceil \log n \rceil}
 //! \Vert \mathbf x\[0 : \ell - \alpha + \kappa\]$, monomials ordered by the MSB-first
@@ -43,4 +45,4 @@ pub use error::{Error, Result, VerifyError};
 pub use public::public_vectors;
 pub use relation::{ConvRelation, check_relation, evaluate, f_prime_of_states};
 pub use share::{e_map, e_matrix, fah_e_input, u_share};
-pub use verifier::{check, verify};
+pub use verifier::{check, read_value, verify};

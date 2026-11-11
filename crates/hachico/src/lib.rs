@@ -82,7 +82,7 @@
 //! | 2 | `absorb_polys` × 3 | [`LABEL_PP_A`], [`LABEL_PP_B`], [`LABEL_PP_D`] | $\mathbf A$, $\mathbf B$, $\mathbf D$, row-major |
 //! | 3 | `absorb_words` | [`LABEL_PP_BASE`] | the digest of the base PCS's parameters ([`BasePcs::params_digest`]), as four little-endian words |
 //! | 4 | `absorb_polys` | [`hachi_co_commit::LABEL_U`] | $\mathbf u$ |
-//! | 5 | `absorb_exts` × 2 | [`LABEL_X`], [`LABEL_Y`] | $\mathbf x$; $y$ |
+//! | 5 | `absorb_exts` | [`LABEL_X`] | $\mathbf x$ |
 //! | 6 | `absorb_polys` | [`hachi_co_conv::LABEL_E_U`] | $E(u)$ |
 //! | 7 | per attempt $a$ (provers: $0, \dots, a^\ast$; verifier: $a^\ast$): `begin_attempt(a)`, `absorb_polys`, `r2l_challenges(a, 2^r, d, ω)` | [`hachi_co_r2l::LABEL_V`] | $\mathbf v$ of attempt $a$ |
 //! | 8 | `absorb_exts` × 2, `absorb_words` × 3, `sumcheck_coins` | [`hachi_co_sumcheck::LABEL_G0`], [`hachi_co_sumcheck::LABEL_G1`], [`hachi_co_sumcheck::LABEL_COMMIT_W`], `..._G0`, `..._G1` | $G\_{0,1..n}$; $G\_{1,1..n}$; the base-PCS commitments to $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$, one word vector per party each |
@@ -121,7 +121,7 @@
 //!
 //! Each is documented at its item.
 //! - The domain [`EVAL_DOMAIN`] and the labels of this crate ([`LABELS_PARAMS`], [`LABEL_PP_A`],
-//!   [`LABEL_PP_B`], [`LABEL_PP_D`], [`LABEL_PP_BASE`], [`LABEL_X`], [`LABEL_Y`]); $\mathbf u$
+//!   [`LABEL_PP_B`], [`LABEL_PP_D`], [`LABEL_PP_BASE`], [`LABEL_X`]); $\mathbf u$
 //!   uses the label of `hachi-co-commit`.
 //! - The base PCS enters the statement through its parameter digest, not its parameters
 //!   ([`BasePcs::params_digest`]); Hachi's digest is a transcript hash of its choices
@@ -135,8 +135,10 @@
 //!   absorbed in full rather than as a digest.
 //! - Statements and proofs with non-canonical residues are rejected, on both sides
 //!   ([`check_statement`], [`EvalProof::validate`]).
-//! - The provers check $y = E(u)$ after $\Pi\_{\mathsf{conv}}$ and refuse to prove a false claim
-//!   ([`Error::ClaimMismatch`]).
+//! - $\mathsf{Eval}$ outputs the value: the provers compute $E(u)$ through
+//!   $\mathcal F\_{\mathsf{AH}}(E)$ and the verifier reads it as $y \in \mathbb F\_{q^k}$
+//!   ([`verify`] returns it), as $\Pi\_A$ does since the draft's commit `c071784`. No claimed
+//!   value enters the statement; [`verify_value`] compares the output with an expected one.
 //! - The proof format: the order of the components, the 64-bit words, the header and the table
 //!   of the base-PCS lengths ([`EvalProof::to_bytes`]); an index $a^\ast$ at or beyond the
 //!   attempt cap of `hachi-co-r2l` is malformed.
@@ -162,10 +164,10 @@ pub use error::{DecodeError, Error, ProofError, StatementError, VerifyError};
 pub use proof::{EvalProof, HEADER_LEN, MAGIC, VERSION, encoded_len};
 pub use prover::{EvalOutput, commit, commit_streaming, eval, eval_with, setup};
 pub use statement::{
-    EVAL_DOMAIN, LABEL_PP_A, LABEL_PP_B, LABEL_PP_BASE, LABEL_PP_D, LABEL_X, LABEL_Y,
-    LABELS_PARAMS, absorb_statement, check_statement, statement_words,
+    EVAL_DOMAIN, LABEL_PP_A, LABEL_PP_B, LABEL_PP_BASE, LABEL_PP_D, LABEL_X, LABELS_PARAMS,
+    absorb_statement, check_statement, statement_words,
 };
-pub use verifier::{verify, verify_claims_with, verify_with};
+pub use verifier::{verify, verify_claims_with, verify_value, verify_with};
 
 pub use hachi::{HachiChoices, Hiding};
 pub use hachi_co_core::{BasePcs, Context, PartyState};

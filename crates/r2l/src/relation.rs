@@ -78,6 +78,66 @@ pub fn relation_holds<const K: usize>(
         .all(|p| p.0.iter().all(|x| *x == 0)))
 }
 
+/// The conditions of $\mathcal R\_3$ on the parties' shares, as the draft states the relation since
+/// commit `c071784` (`5_Building_Blocks.tex`, $\mathcal R\_3$), for tests. With $\mu' = \mu - 1$
+/// entries in $\mathbf z'$, the last of which, $\mathbf z'\_{\mu'}$, holds $u$:
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct R3Conditions {
+    /// $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ for $\mathbf z' = \sum\_p \langle
+    /// \mathbf z' \rangle\_p$ ([`relation_holds`]).
+    pub linear: bool,
+    /// $\Vert \mathbf z'\_u \Vert\_\infty \le b - 1$ for every $u \in [\mu' - 1]$, that is, every
+    /// entry but $\mathbf z'\_{\mu'}$.
+    pub short: bool,
+    /// $\langle \mathbf z'\_u \rangle\_i = 0$ for every prover $i$ and every $u \in [\mu' - 1]
+    /// \setminus S\_i$ ([`Layout::in_s`](hachi_co_core::Layout::in_s)): the shares are slices of the
+    /// partition $S$.
+    pub slices: bool,
+}
+
+impl R3Conditions {
+    /// Whether all three conditions hold.
+    pub fn hold(&self) -> bool {
+        self.linear && self.short && self.slices
+    }
+}
+
+/// The conditions of [`R3Conditions`] on the parties' shares `shares` (`shares[p - 1]` of party
+/// $p$). The relation's other conditions hold by construction here: $S$ partitions $[\mu' - 1]$
+/// ([`Layout::new`](hachi_co_core::Layout::new) checks it), $E$ is $\mathbb F\_q$-linear (the map
+/// of `hachi-co-conv`), and $y = E(\mathbf z'\_{\mu'})$ is the link of the conversion's relation and
+/// the sumcheck's final check.
+///
+/// # Errors
+/// As [`sum_shares`] and [`residual`]; [`Error::Shape`](crate::Error::Shape) unless there is one
+/// share per party.
+pub fn r3_conditions<const K: usize>(
+    ctx: &Context<K>,
+    rel: &LinearRelation,
+    shares: &[LinearShare],
+) -> Result<R3Conditions> {
+    let l = &ctx.layout;
+    check_len("shares (one per party)", l.n, shares.len())?;
+    let sum = sum_shares(ctx, shares)?;
+    let linear = relation_holds(ctx, rel, &sum.z_prime)?;
+    let last = l.len_z - 1;
+    let mut short = true;
+    for entry in &sum.z_prime[..last] {
+        short &= ctx.ring.inf_norm(entry)? < ctx.b();
+    }
+    let slices = shares.iter().enumerate().all(|(p0, share)| {
+        share.z_prime[..last]
+            .iter()
+            .enumerate()
+            .all(|(pos, x)| l.in_s(p0 + 1, pos) || x.0.iter().all(|c| *c == 0))
+    });
+    Ok(R3Conditions {
+        linear,
+        short,
+        slices,
+    })
+}
+
 /// The values the row blocks of $\mathbf M$ speak about, before decomposition
 /// (`5_Building_Blocks.tex`:115-146), for [`row_block_checks`].
 #[derive(Clone, Debug, PartialEq, Eq)]

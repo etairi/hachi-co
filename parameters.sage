@@ -259,14 +259,14 @@ if RUN_SINGLE_PROVER:
 #   r = max(ceil(l'/2), ceil(log n)), m = l' - r,
 #   beta_1 = 2^(r - ceil(log n)) omega floor(b/2), N = d delta 2^m, gamma = 2 n N beta_1,
 #   M = ((2 gamma + 1)/(2 gamma - 2 beta_1 + 1))^N, beta = n gamma,
-#   tau (rule below), (beta_bar, omega_bar, gamma_bar) = (2 b^tau, 2 omega, b),
+#   tau (rule below), (beta_bar, omega_bar, gamma_bar) = (2 b^tau, 2 omega, b - 1),
 #   mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_u + n m_v + 2^m delta tau + 2,
 #   n' = n_A + n_B + n_D + 2, l'' = ceil(log(mu + n')) + log 2d, d_0 = 2b + n' + 1, d_1 = 3,
 #   nu = n' + d + (mu + n') d; widths: A delta 2^m, B n_A delta 2^r + n m_u, D delta (2^r + n + n n_A) + n m_v.
 # RULES (docs/m0-spec.md):
-#   tau ("Tight", the user's decision of 2026-10-17): the least tau with
+#   tau ("Tight", the Setup's rule as the draft states it since 2026-11-10): the least tau with
 #       (ceil(b/2) - 1) (b^tau - 1)/(b - 1) >= beta, so that balanced digits represent every |z| <= beta;
-#       "Draft" is the draft's ceil(log_b beta) + 1 (6_CH:280), "Ceil" is ceil(log_b beta).
+#       "Draft" is the earlier ceil(log_b beta) + 1 (6_CH:280 at 8834c9f), "Ceil" is ceil(log_b beta).
 #   q ("Smallest"): the smallest prime p = 5 mod 8 with p > max(16 omega b^tau, 1 + 2^(l+3) n omega^2 b,
 #       2 beta + 1), tau and beta computed with delta = ceil(log_b p). 16 omega b^tau = 4 omega_bar beta_bar
 #       is the binding guard of 6_CH:274. Since the bounds depend on p only through delta, the candidates
@@ -282,7 +282,7 @@ if RUN_SINGLE_PROVER:
 #       coordinates in [-B, B] and solve for the rank dependent ones, each of which lands in [-B, B] with
 #       probability (2B + 1)/q; require rank log2(q/(2B + 1)) >= lambda (the same check as is_SIS_secure
 #       above). Then SIS.lattice (infinity norm).
-#   MSIS for B (6_CH:581): rank n_B d, width n_A delta 2^r + n m_u, infinity bound 2 gamma_bar = 2b.
+#   MSIS for B (6_CH:581): rank n_B d, width n_A delta 2^r + n m_u, infinity bound 2 gamma_bar = 2(b - 1).
 #   MLWE for the hiding of the commitment u and of the first message v (t-hiding.tex:20-26;
 #       5_Building_Blocks.tex:207): MLWE_{q, d, n, m - n, b} with (n, m) = (n_B, m_u) and (n_D, m_v),
 #       i.e. LWE with secret dimension (m - n) d, n d samples, secret and error uniform on the
@@ -470,13 +470,13 @@ def hco_derive(ch):
         "choices": ch, "omega": omega, "q": q, "d": d, "k": st["k"], "delta": delta, "log_n": st["log_n"],
         "ell_prime": st["ell_prime"], "r": r, "m": m, "beta1": dd["beta1"], "big_n": dd["big_n"],
         "gamma": dd["gamma"], "rejection_m": float(exp(ln_m)), "log2_rejection_m": float(ln_m / log(R(2))),
-        "beta": dd["beta"], "tau": tau, "beta_bar": 2 * b^tau, "omega_bar": 2 * omega, "gamma_bar": b,
+        "beta": dd["beta"], "tau": tau, "beta_bar": 2 * b^tau, "omega_bar": 2 * omega, "gamma_bar": b - 1,
         "mu": mu, "n_prime": n_prime, "ell_dprime": hco_ceil_log2(mu + n_prime) + ch["alpha"] + 1,
         "d0": 2 * b + n_prime + 1, "d1": 3, "nu": n_prime + d + (mu + n_prime) * d,
         "width_a": delta * 2^m, "width_b": n_a * delta * 2^r + n * ch["m_u"],
         "width_d": delta * (2^r + n + n * n_a) + n * ch["m_v"],
         "binding_guard": dd["binding_guard"], "range_guard": rg, "msis_bound_a": 8 * omega * b^tau,
-        "msis_bound_b": 2 * b, "j_inv_capacity": hco_j_capacity(b, tau),
+        "msis_bound_b": 2 * (b - 1), "j_inv_capacity": hco_j_capacity(b, tau),
     }
     size = hco_challenge_set_size(ch["challenge_set"], d, omega)
     amk = ch["alpha"] - ch["kappa"]
@@ -760,8 +760,8 @@ def hco_find_na_q(ch, st, omega, say):
 
 def hco_find_nb(q, d, width_b, b):
     for n_b in range(1, max(1, HCO_MAX_RANK // d) + 1):
-        if hco_msis_secure(n_b * d, q, 2 * b, width_b * d):
-            return n_b, hco_msis(n_b * d, q, 2 * b, width_b * d)
+        if hco_msis_secure(n_b * d, q, 2 * (b - 1), width_b * d):
+            return n_b, hco_msis(n_b * d, q, 2 * (b - 1), width_b * d)
     return None, None
 
 
@@ -951,7 +951,7 @@ if RUN_COLLABORATIVE:
         assert all(_rep.values()), (_name, _rep)
         _est_a = hco_msis(_n_a * _P["d"], _q, _P["msis_bound_a"], _P["width_a"] * _P["d"])
         # The width of B depends on m_u, so MSIS for B is estimated again at the final width.
-        _est_b = hco_msis(_n_b * _P["d"], _q, 2 * HCO_B, _P["width_b"] * _P["d"])
+        _est_b = hco_msis(_n_b * _P["d"], _q, _P["msis_bound_b"], _P["width_b"] * _P["d"])
         assert _est_a["secure"] and _est_b["secure"] and hco_mlwe_secure(_mlwe_bits) and hco_mlwe_secure(_mlwe_u_bits)
         _security = {
             "lambda": HCO_LAMBDA,
@@ -995,9 +995,9 @@ if RUN_COLLABORATIVE:
         "",
         "- Command: `%s` (run from the repository root; %s, started %s)." % (_cmd.strip(), _sage_version, _hco_started.strftime("%Y-%m-%d %H:%M")),
         "- Lattice estimator: %s, revision `%s` (%s)." % (ESTIMATOR_REPO, _estimator_rev, "cloned into a temporary directory and removed at exit" if _estimator_tmp is not None else "an existing checkout given by LATTICE_ESTIMATOR_DIR"),
-        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), the tight tau and the rules of `docs/m0-spec.md`.",
+        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10) and the rules of `docs/m0-spec.md`.",
         "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, n_D = %d, t = floor((n - 1)/2)." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
-        "- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/%d bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2b); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207)." % HCO_Q_STEPS,
+        "- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/%d bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2(b - 1)); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207)." % HCO_Q_STEPS,
         "- MSIS: first the trivial linear-algebra attack, rank log2(q/(2B + 1)) >= lambda, then `SIS.lattice` (infinity norm) with zeta = 0 on m' columns, minimised over m' (a grid of 1.25 to 64 times the rank, refined by ternary search), because the estimator's own search over ignored columns misses interior optima and returns infinite costs for wide matrices. MLWE: `LWE.estimate` without arora-gb and bkw (only n_D d samples per secret), and also without dual_hybrid when n d < (m - n) d, because its MATZOV cost model assumes n samples and uses m only to cap the block size; secret and error uniform on [-8, 7].",
         "- Bits are log2 of the estimated cost; 'inf' means that no number of columns gave a finite cost (every evaluation infinite or beyond 2^1000). Estimates, not proofs; see the notes in `parameters.sage`.",
         "",

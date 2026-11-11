@@ -48,7 +48,7 @@ mod common;
 use common::{K, clear_pcs, fresh_context, hachi_base, random_instance, seed, without_pcs};
 use hachi_co::{
     BasePcs, ClaimedPoly, Context, EVAL_DOMAIN, EvalProof, HachiBase, HachiChoices, PcsWords,
-    ProofError, VerifyError, absorb_statement, commit, verify,
+    ProofError, VerifyError, absorb_statement, commit, verify_value,
 };
 use hachi_co_core::{Challenger, Ext, FsChallenger, Poly, PrgRandomness};
 use hachi_co_mpc::Loopback;
@@ -85,7 +85,7 @@ fn forge<P: BasePcs<K>>(
 ) -> Forged {
     let (l, field) = (&ctx.layout, ctx.field());
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
-    absorb_statement(&mut ch, ctx, &pcs.params_digest(), u, x, y_false);
+    absorb_statement(&mut ch, ctx, &pcs.params_digest(), u, x);
     let e_u = ctx.sub.embed(y_false);
     Challenger::<K>::absorb_polys(
         &mut ch,
@@ -232,7 +232,7 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
     let mut rng = PrgRandomness::new(seed("party/forgery", &[9]));
     let (u, _state) = commit(ctx, &mut comm, &mut rng, &f).unwrap();
     let y_false = field.add(&y, &field.one());
-    let check = |proof: &EvalProof<K>| verify(ctx, pcs, &u, &x, &y_false, proof);
+    let check = |proof: &EvalProof<K>| verify_value(ctx, pcs, &u, &x, &y_false, proof);
     let zero = field.zero();
     let (len0, len1) = (1 + l.ell_pp * l.d0, 1 + l.ell_pp * l.d1);
 
@@ -260,11 +260,12 @@ fn forgery_is_rejected<P: BasePcs<K>>(ctx: &Context<K>, pcs: &P, reasons: &Reaso
         check(&without_pcs(&forged.proof)),
         Err(VerifyError::Proof(ProofError::Shape { .. }))
     ));
-    // The honest claim y is rejected with this proof (Pi_conv's check).
-    assert!(matches!(
-        verify(ctx, pcs, &u, &x, &y, &forged.proof),
-        Err(VerifyError::Conv(_))
-    ));
+    // The forged proof is rejected before any value is compared, so the expected value does not
+    // matter: the verdict with the honest y is the one with y'.
+    assert_eq!(
+        verify_value(ctx, pcs, &u, &x, &y, &forged.proof),
+        check(&forged.proof)
+    );
 
     // Variant 2: open, under the same commitment, a vector that takes the solved value at a
     // (s_0 = the value, every other coefficient 0).

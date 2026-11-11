@@ -80,7 +80,7 @@ fn the_layout_of_the_bytes_is_the_documented_one() {
     let bytes = proof.to_bytes();
     assert_eq!(&bytes[..8], &MAGIC);
     assert_eq!(&bytes[8..16], &VERSION.to_le_bytes());
-    assert_eq!(VERSION, 2);
+    assert_eq!(VERSION, 3);
     let (chunks, rest) = bytes[HEADER_LEN..].as_chunks::<8>();
     assert!(rest.is_empty());
     let words: Vec<u64> = chunks.iter().map(|c| u64::from_le_bytes(*c)).collect();

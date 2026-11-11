@@ -67,25 +67,35 @@ fn each_tampering_breaks_exactly_its_condition() {
         let (states, u, f) = honest(&fx, &ctx);
         let none: Vec<&str> = Vec::new();
         assert_eq!(failing(&ctx, &states, &u, &f, None), none, "{name}: honest");
-        let several = vec!["no_block_in_several_states"];
-
-        // The same block twice in one state, and in another state.
+        // Each prover's state supplies the blocks of its part T_i of the partition, and Open reads
+        // nothing else (the draft since commit 28721d6): the same block twice in one state (the
+        // first entry is read), a copy in another prover's state, and a different entry for
+        // block 0 in the last state change nothing.
         let mut st = states.clone();
         st[0].blocks.push(states[0].blocks[0].clone());
-        assert_eq!(failing(&ctx, &st, &u, &f, None), several, "{name}");
+        assert_eq!(failing(&ctx, &st, &u, &f, None), none, "{name}");
         if l.n > 1 {
             let mut st = states.clone();
             st[l.n - 1].blocks.push(states[0].blocks[0].clone());
-            assert_eq!(failing(&ctx, &st, &u, &f, None), several, "{name}");
+            assert_eq!(failing(&ctx, &st, &u, &f, None), none, "{name}");
+            let mut other_f_prime = states[0].blocks[0].f_prime.clone();
+            other_f_prime[0].0[0] = (other_f_prime[0].0[0] + 1) % q;
+            let mut st = states.clone();
+            st[l.n - 1]
+                .blocks
+                .push(block_state(&ctx, 0, other_f_prime).unwrap());
+            assert_eq!(failing(&ctx, &st, &u, &f, None), none, "{name}");
         }
-        // A different later entry for block 0: the first one is used.
-        let mut other_f_prime = states[0].blocks[0].f_prime.clone();
-        other_f_prime[0].0[0] = (other_f_prime[0].0[0] + 1) % q;
+
+        // f' changed in one coefficient: the decoded polynomial (a) and f' = G s (b) fail.
         let mut st = states.clone();
-        st[l.n - 1]
-            .blocks
-            .push(block_state(&ctx, 0, other_f_prime).unwrap());
-        assert_eq!(failing(&ctx, &st, &u, &f, None), several, "{name}");
+        let c = &mut st[0].blocks[0].f_prime[0].0[0];
+        *c = (*c + 1) % q;
+        assert_eq!(
+            failing(&ctx, &st, &u, &f, None),
+            vec!["f_eq_f_bar", "f_prime_eq_G_s"],
+            "{name}"
+        );
 
         // u changed, and u with a non-canonical residue (compared as given).
         let mut u_bad = u.clone();
@@ -118,12 +128,12 @@ fn each_tampering_breaks_exactly_its_condition() {
         let u2 = commitment(&ctx, &st);
         assert_eq!(failing(&ctx, &st, &u2, &f, None), vec!["A_s_eq_G_that"]);
 
-        // A missing block is assembled as zero.
+        // A missing block fails the assembly and is assembled as zero, so (a) and (d) fail too.
         let mut st = states.clone();
         st[0].blocks.remove(0);
         assert_eq!(
             failing(&ctx, &st, &u, &f, None),
-            vec!["B_that_eq_u", "f_eq_f_bar"],
+            vec!["states_hold_their_blocks", "f_eq_f_bar", "B_that_eq_u"],
             "{name}"
         );
     }
@@ -248,11 +258,11 @@ fn the_norm_conditions_at_their_bounds() {
     }
 }
 
-/// For $n = 3$ the slot $\mathbf p = 11$ is empty: blocks 6 and 7 are held by nobody and decode
-/// as zero. A state that adds block 6 changes $\bar f$, because $\bar f\_{\mathbf q}$ sums all
-/// $2^{\lceil \log n \rceil}$ slots (`6_Collaborative_Hachi.tex`:410).
+/// For $n = 3$ the slot $\mathbf p = 11$ is empty: blocks 6 and 7 form $T\_0$, held by nobody.
+/// Open assembles them as zero and reads no state for them (the draft since commit `28721d6`), so
+/// an entry for block 6 in a state is ignored, whatever it holds.
 #[test]
-fn a_block_of_the_empty_slot_is_decoded_into_f_bar() {
+fn an_entry_for_a_block_of_the_empty_slot_is_ignored() {
     let (fx, ctx) = load("toy-n3");
     let l = &ctx.layout;
     let (states, u, f) = honest(&fx, &ctx);
@@ -261,13 +271,9 @@ fn a_block_of_the_empty_slot_is_decoded_into_f_bar() {
     st[2]
         .blocks
         .push(block_state(&ctx, 6, states[0].blocks[0].f_prime.clone()).unwrap());
-    assert_eq!(
-        failing(&ctx, &st, &u, &f, None),
-        vec!["B_that_eq_u", "f_eq_f_bar"]
-    );
-    let u2 = commitment(&ctx, &st);
-    assert_eq!(failing(&ctx, &st, &u2, &f, None), vec!["f_eq_f_bar"]);
-    // An all-zero block 6 changes nothing.
+    let none: Vec<&str> = Vec::new();
+    assert_eq!(failing(&ctx, &st, &u, &f, None), none);
+    // An all-zero block 6 changes nothing either.
     let mut st = states.clone();
     st[2]
         .blocks

@@ -156,5 +156,9 @@ fn verify(dir: &Path) -> Result<(), HarnessError> {
         r.statement.n,
         r.verify_time
     );
+    println!(
+        "value: y = {:?} (the verifier's output, equal to the statement's y)",
+        r.value.0
+    );
     Ok(())
 }

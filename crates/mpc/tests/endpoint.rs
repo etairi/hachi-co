@@ -255,11 +255,12 @@ fn masked_broadcasts_are_uniform_whatever_the_input() {
                 .unwrap();
                 assert!(runs.iter().all(Result::is_ok));
                 let mut counts = [0u64; SMALL_Q as usize];
-                let rounds_per_call = if mode == ZeroSharing::Fresh { 2 } else { 1 };
+                let rounds_per_call = if mode == ZeroSharing::Fresh { 3 } else { 2 };
                 for r in tap.records() {
-                    // The broadcast is the last round of each call; with Fresh the first round
-                    // carries the zero shares, which are uniform by construction.
-                    let broadcast = r.frame.round % rounds_per_call == 0;
+                    // The broadcast is the second-to-last round of each call, before the
+                    // agreement on its digest; with Fresh the first round carries the zero
+                    // shares, which are uniform by construction.
+                    let broadcast = r.frame.round % rounds_per_call == rounds_per_call - 1;
                     if r.from == 1 && r.to == 2 && r.frame.label == "uniform" && broadcast {
                         for &m in &r.frame.payload {
                             counts[m as usize] += 1;
@@ -318,8 +319,9 @@ fn the_set_up_checks_q_mode_and_n() {
 fn accounting_matches_the_formulas() {
     // Per party and call: fah (n-1)*8*len bytes each way (twice with Fresh, in two rounds);
     // all_gather the same; gather 8*len from every party but `to`; any (n-1)*8; exchange
-    // 8 * sum_{j != p} len_{p,j}. The set-up sends 3 words to every party, plus 4 to every
-    // higher-numbered party with pairwise seeds.
+    // 8 * sum_{j != p} len_{p,j}. The public broadcasts (fah, all_gather, any) end with the
+    // agreement round: a digest of 4 words to every other party. The set-up sends 3 words to
+    // every party, plus 4 to every higher-numbered party with pairwise seeds.
     for n in PARTIES {
         for mode in MODES {
             let to = 1;
@@ -343,14 +345,15 @@ fn accounting_matches_the_formulas() {
                     );
                 };
                 let r = u64::from(n > 1);
+                let digest = n1 * 32;
                 check(
                     "fah",
-                    r * (1 + fresh),
-                    n1 * 8 * 3 * (1 + fresh),
-                    n1 * 8 * 3 * (1 + fresh),
+                    r * (2 + fresh),
+                    n1 * 8 * 3 * (1 + fresh) + digest,
+                    n1 * 8 * 3 * (1 + fresh) + digest,
                 );
-                check("all", r, n1 * 16, n1 * 16);
-                check("any/false", r, n1 * 8, n1 * 8);
+                check("all", 2 * r, n1 * 16 + digest, n1 * 16 + digest);
+                check("any/false", 2 * r, n1 * 8 + digest, n1 * 8 + digest);
                 let gathered = if p == to { 0 } else { 32 };
                 check("gather", r, gathered, if p == to { n1 * 32 } else { 0 });
                 let ex_sent: u64 = (1..=n)
@@ -479,7 +482,8 @@ fn altered_frames_are_detected_where_the_layer_can_see_them() {
     let n = 3;
     let mode = ZeroSharing::PairwiseSeeds;
     let setup_frames = n - 1;
-    // Faults on the first frame of `fah` (the last call of a session): the broadcast of party 2.
+    // Faults on the first frame of `fah` (the last call of a session): the broadcast of party 2,
+    // which its n - 1 frames of the agreement round follow.
     let session_frames = {
         let runs = run_in_memory(&config(n, Q, mode, "alter"), |ep| {
             session(ep, 1).map(|_| ())
@@ -487,7 +491,7 @@ fn altered_frames_are_detected_where_the_layer_can_see_them() {
         .unwrap();
         runs[1].as_ref().unwrap().stats.total().frames_sent as usize
     };
-    let fah_frame = session_frames - (n - 1);
+    let fah_frame = session_frames - 2 * (n - 1);
     let gather_frame = setup_frames;
     let cases: [(Fault, &str); 5] = [
         (Fault::Truncate { frame: fah_frame }, "length"),
@@ -527,9 +531,9 @@ fn altered_frames_are_detected_where_the_layer_can_see_them() {
         });
         assert!(seen, "{fault:?}: expected a {kind} error, got {errors:?}");
     }
-    // A flipped bit in a masked broadcast is not detectable by the layer (the model is
-    // semi-honest): the receiving party ends with another sum, the others are unaffected.
-    let reference = reference(n, mode);
+    // A flipped bit in one copy of a masked broadcast is an equivocation: party 1 received
+    // another message from party 2 than party 3 did. The agreement round detects it at every
+    // party before the output is used.
     let cfg = config(n, Q, mode, "faults").fault(
         2,
         Fault::FlipBit {
@@ -537,16 +541,30 @@ fn altered_frames_are_detected_where_the_layer_can_see_them() {
             word: 1,
         },
     );
-    let out: Vec<Session> = outputs(run_in_memory(&cfg, |ep| session(ep, 1)).unwrap())
+    let errors: Vec<Option<Error>> = outputs(run_in_memory(&cfg, |ep| session(ep, 1)).unwrap())
         .into_iter()
-        .map(Result::unwrap)
+        .map(Result::err)
         .collect();
-    assert_ne!(
-        out[0].sum, reference[0].sum,
-        "party 1 received the flipped frame"
+    // No party gets an output: each either detects the mismatch itself or sees a party that
+    // detected it leave.
+    for (i, e) in errors.iter().enumerate() {
+        assert!(
+            matches!(
+                e,
+                Some(
+                    Error::Inconsistent { label: "fah", .. } | Error::PeerLeft { label: "fah", .. }
+                )
+            ),
+            "party {}: {e:?}",
+            i + 1
+        );
+    }
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, Some(Error::Inconsistent { label: "fah", .. }))),
+        "{errors:?}"
     );
-    assert_eq!(out[1], reference[1]);
-    assert_eq!(out[2], reference[2]);
 }
 
 #[test]

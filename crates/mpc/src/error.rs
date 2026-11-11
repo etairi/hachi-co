@@ -68,6 +68,16 @@ pub enum Error {
         /// The timeout in milliseconds.
         millis: u64,
     },
+    /// The digests of a public broadcast differ (see [`Endpoint`](crate::Endpoint),
+    /// "Agreement"): `party` received other messages than this party, so some sender sent
+    /// different values to different parties. The run stops before the output is used.
+    #[error("{label}: party {party} received other broadcast messages than this party")]
+    Inconsistent {
+        /// The label of the call.
+        label: &'static str,
+        /// The party whose digest differs.
+        party: PartyId,
+    },
     /// A message of another collective call arrived (another label or call index): the parties
     /// are out of step.
     #[error("{label} (round {round}): party {party} sent a message of {got}")]

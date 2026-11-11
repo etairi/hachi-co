@@ -213,6 +213,18 @@ def open_tests(res):
     bit, info = open_check(ctx, res["pp"], res["states"], rho_u, res["u_com"], f_bad)
     out["open: f changed in one coordinate"] = dict(passed=not bit,
                                                    failing=[k for k, v in info["checks"].items() if not v])
+    st = copy.deepcopy(res["states"])
+    fp = st[p0][i0]["f_prime"].copy()
+    fp[0, 0] = (fp[0, 0] + 1) % P.q
+    st[p0][i0]["f_prime"] = fp
+    bit, info = open_check(ctx, res["pp"], st, rho_u, res["u_com"], res["inp"]["f"])
+    out["open: one coefficient of f' changed"] = dict(passed=not bit,
+                                                    failing=[k for k, v in info["checks"].items() if not v])
+    st = copy.deepcopy(res["states"])
+    del st[p0][i0]
+    bit, info = open_check(ctx, res["pp"], st, rho_u, res["u_com"], res["inp"]["f"])
+    out["open: a block missing from its prover's state"] = dict(
+        passed=not bit, failing=[k for k, v in info["checks"].items() if not v])
     c = np.zeros((P.n_blocks, P.d), dtype=np.int64)
     c[:, 0] = 1
     c[0, 1] = P.omega_bar          # ||c_0||_1 = omega_bar + 1

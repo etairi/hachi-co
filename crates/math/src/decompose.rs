@@ -95,7 +95,8 @@ pub fn num_digits(q: u64, b: u64) -> Result<usize> {
 
 /// The tight $\tau$: the least $\tau$ with $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$,
 /// so that every integer of $[-\beta, \beta]$ has $\tau$ balanced digits (`docs/m0-spec.md`,
-/// "τ rule", the user's decision of 2026-10-17). For $\beta = 0$ this is $\tau = 0$.
+/// "τ rule", the user's decision of 2026-10-17, and the draft's Setup since its commit `21f2b41`).
+/// For $\beta = 0$ this is $\tau = 0$.
 ///
 /// # Errors
 /// [`Error::Parameter`] for $b < 2$, and for $b = 2$ with $\beta > 0$ (the digit set
@@ -118,8 +119,8 @@ pub fn tight_tau(beta: u128, b: u64) -> Result<usize> {
     }
 }
 
-/// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (`6_Collaborative_Hachi.tex`:280,
-/// `4_preliminaries.tex`:65), kept as an option (`docs/m0-spec.md`, "τ rule").
+/// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ until its commit `21f2b41`
+/// (`6_Collaborative_Hachi.tex`:280 at `8834c9f`), kept as an option (`docs/m0-spec.md`, "τ rule").
 ///
 /// # Errors
 /// [`Error::Parameter`] for $b < 2$ or $\beta = 0$ (where $\log_b \beta$ is undefined).

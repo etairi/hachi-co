@@ -284,6 +284,7 @@ version = "0.1.0"
 dependencies = [
  "hachi-co-sampling",
  "rand",
+ "sha2",
  "thiserror",
 ]
 

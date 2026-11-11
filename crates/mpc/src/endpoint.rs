@@ -4,10 +4,14 @@ use crate::{Comm, Error, Frame, PartyId, Result, Stats, Transport};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
 use rand::Rng;
+use sha2::{Digest, Sha256};
 
 /// The label of the set-up round of [`Endpoint::connect`].
 pub const LABEL_SETUP: &str = "hachi-co/mpc/setup";
 
+/// Hash domain of the agreement step that follows every public broadcast
+/// ([`Endpoint`], "Agreement").
+const DOMAIN_AGREEMENT: &[u8] = b"hachi-co/mpc/agreement";
 /// PRG domain of the pairwise seeds (index: the receiving party).
 const DOMAIN_PAIRWISE: &[u8] = b"hachi-co/mpc/pairwise-seed";
 /// PRG domain of the pairwise masks of [`ZeroSharing::PairwiseSeeds`] (index: the round).
@@ -64,6 +68,15 @@ impl ZeroSharing {
 ///   already determines the honest input.
 /// - **The other calls** send their vectors as they are: [`Comm::gather`] to one party,
 ///   [`Comm::any`] and [`Comm::all_gather`] to everyone, [`Comm::exchange`] pairwise.
+/// - **Agreement.** The draft publishes the masked shares of $\pi\_{\mathsf{AH}}$
+///   (`4_preliminaries.tex`, Figure 2), and its $t$-hiding argument assumes consistent public
+///   broadcasts (`t-hiding.tex`:30). Over point-to-point channels a party could send different
+///   values to different parties, which would then continue from different outputs. So every
+///   public broadcast ([`Comm::fah`], [`Comm::any`], [`Comm::all_gather`]) ends with one more
+///   round: each party sends the SHA-256 digest of the label, the round and every message of the
+///   broadcast (its own included, in party order) to every other party, and stops with
+///   [`Error::Inconsistent`] if a digest differs from its own, before any party uses the
+///   output. With semi-honest parties the digests always agree.
 /// - **Accounting**: [`Endpoint::stats`], per label.
 ///
 /// An `Endpoint` never panics on what it receives. After an error the run is broken: the
@@ -251,6 +264,25 @@ impl<T: Transport> Endpoint<T> {
         Ok(frame.payload)
     }
 
+    /// The agreement step after a public broadcast in round `round - 1` (see [`Endpoint`],
+    /// "Agreement"): sends the digest of `messages` (one per party, in party order, this party's
+    /// own included) in round `round`, and compares it with every other party's digest.
+    ///
+    /// # Errors
+    /// [`Error::Inconsistent`] for the first party whose digest differs; the errors of the
+    /// transport.
+    fn agree(&mut self, label: &'static str, round: u64, messages: &[Vec<u64>]) -> Result<()> {
+        let (n, id) = (self.transport.n(), self.transport.id());
+        let digest = agreement_digest(label, round, messages);
+        self.broadcast(label, round, &digest)?;
+        for j in (1..=n).filter(|&j| j != id) {
+            if self.recv(label, j, round)? != digest {
+                return Err(Error::Inconsistent { label, party: j });
+            }
+        }
+        Ok(())
+    }
+
     /// Sends `payload` to every other party.
     fn broadcast(&mut self, label: &'static str, round: u64, payload: &[u64]) -> Result<()> {
         let id = self.transport.id();
@@ -372,10 +404,11 @@ impl<T: Transport> Comm for Endpoint<T> {
     fn fah(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<u64>> {
         let (n, id, q) = (self.transport.n(), self.transport.id(), self.q);
         let len = local.len();
+        // The zero sharing (one round more for Fresh), the broadcast, and the agreement.
         let rounds = if n > 1 && self.mode == ZeroSharing::Fresh {
-            2
+            3
         } else {
-            1
+            2
         };
         let first = self.begin(label, rounds);
         let mut sum: Vec<u64> = local.iter().map(|x| x % q).collect();
@@ -389,14 +422,18 @@ impl<T: Transport> Comm for Endpoint<T> {
         for (s, zi) in sum.iter_mut().zip(z) {
             *s = (*s + zi) % q;
         }
-        let round = first + rounds - 1;
+        let round = first + rounds - 2;
         self.broadcast(label, round, &sum)?;
+        let mut messages = vec![Vec::new(); n];
+        messages[id - 1] = sum.clone();
         for j in (1..=n).filter(|&j| j != id) {
             let m = self.recv_residues(label, j, round, len)?;
-            for (s, mj) in sum.iter_mut().zip(m) {
+            for (s, mj) in sum.iter_mut().zip(&m) {
                 *s = (*s + mj) % q;
             }
+            messages[j - 1] = m;
         }
+        self.agree(label, round + 1, &messages)?;
         Ok(sum)
     }
 
@@ -430,14 +467,17 @@ impl<T: Transport> Comm for Endpoint<T> {
 
     fn any(&mut self, label: &'static str, local: bool) -> Result<bool> {
         let (n, id) = (self.transport.n(), self.transport.id());
-        let round = self.begin(label, 1);
+        let round = self.begin(label, 2);
         if n == 1 {
             return Ok(local);
         }
         self.broadcast(label, round, &[u64::from(local)])?;
         let mut out = local;
+        let mut messages = vec![Vec::new(); n];
+        messages[id - 1] = vec![u64::from(local)];
         for j in (1..=n).filter(|&j| j != id) {
             let v = self.recv(label, j, round)?;
+            messages[j - 1] = v.clone();
             match v.as_slice() {
                 [0] => {}
                 [1] => out = true,
@@ -450,6 +490,7 @@ impl<T: Transport> Comm for Endpoint<T> {
                 }
             }
         }
+        self.agree(label, round + 1, &messages)?;
         Ok(out)
     }
 
@@ -479,7 +520,7 @@ impl<T: Transport> Comm for Endpoint<T> {
 
     fn all_gather(&mut self, label: &'static str, local: &[u64]) -> Result<Vec<Vec<u64>>> {
         let (n, id) = (self.transport.n(), self.transport.id());
-        let round = self.begin(label, 1);
+        let round = self.begin(label, 2);
         if n == 1 {
             return Ok(vec![local.to_vec()]);
         }
@@ -500,6 +541,32 @@ impl<T: Transport> Comm for Endpoint<T> {
                 all.push(v);
             }
         }
+        self.agree(label, round + 1, &all)?;
         Ok(all)
     }
+}
+
+/// The digest that the agreement step compares: SHA-256 of [`DOMAIN_AGREEMENT`], the label (with
+/// its length), the round, the number of messages and every message (its length, then its words),
+/// all as little-endian 64-bit words, returned as four words.
+fn agreement_digest(label: &str, round: u64, messages: &[Vec<u64>]) -> Vec<u64> {
+    let mut h = Sha256::new();
+    h.update(DOMAIN_AGREEMENT);
+    h.update((label.len() as u64).to_le_bytes());
+    h.update(label.as_bytes());
+    h.update(round.to_le_bytes());
+    h.update((messages.len() as u64).to_le_bytes());
+    for m in messages {
+        h.update((m.len() as u64).to_le_bytes());
+        for w in m {
+            h.update(w.to_le_bytes());
+        }
+    }
+    h.finalize()
+        .as_slice()
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|b| u64::from_le_bytes(*b))
+        .collect()
 }

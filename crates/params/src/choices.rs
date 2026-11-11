@@ -35,11 +35,13 @@ pub enum ChallengeSet {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TauRule {
     /// The least $\tau$ with $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$: every
-    /// $z$ with $\lVert z \rVert_\infty \le \beta$ is representable (user decision of 2026-10-17,
-    /// `docs/m0-spec.md`). The default.
+    /// $z$ with $\lVert z \rVert_\infty \le \beta$ is representable. This is the Setup's $\tau$ as
+    /// the draft states it since its commit `21f2b41` (`6_Collaborative_Hachi.tex`, Setup, and
+    /// `4_preliminaries.tex`:65), and the user's choice of 2026-10-17 before that. The default.
     #[default]
     Tight,
-    /// The draft's $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:280).
+    /// $\tau = \lceil \log_b \beta \rceil + 1$, the draft's rule until its commit `21f2b41`
+    /// (6_Collaborative_Hachi.tex:280 at `8834c9f`), never smaller than [`TauRule::Tight`].
     Draft,
     /// $\tau = \lceil \log_b \beta \rceil$, which does not represent $\beta$ in general
     /// (balanced digits cover only about $b^\tau/2$); kept to show the failure in the report.

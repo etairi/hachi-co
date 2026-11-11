@@ -62,7 +62,7 @@
     "tau": 12,
     "beta_bar": 33554432,
     "omega_bar": 4,
-    "gamma_bar": 4,
+    "gamma_bar": 3,
     "mu": 2194,
     "n_prime": 5,
     "ell_U": 12,
@@ -246,12 +246,14 @@
     "bit": true,
     "checks": {
       "c_in_slack_space": true,
-      "no_block_in_several_states": true,
+      "states_hold_their_blocks": true,
+      "f_eq_f_bar": true,
+      "f_prime_eq_G_s": true,
       "A_s_eq_G_that": true,
       "norm_c_s_le_beta_bar": true,
       "B_that_eq_u": true,
       "norm_that_le_gamma_bar": true,
-      "f_eq_f_bar": true
+      "unheld_blocks_zero": true
     },
     "max_norm_c_s": 2,
     "max_norm_t_hat": 2
@@ -832,12 +834,14 @@
   "relations": {
     "open(pp, st, u, f, c*) = 1": true,
     "open.c_in_slack_space": true,
-    "open.no_block_in_several_states": true,
+    "open.states_hold_their_blocks": true,
+    "open.f_eq_f_bar": true,
+    "open.f_prime_eq_G_s": true,
     "open.A_s_eq_G_that": true,
     "open.norm_c_s_le_beta_bar": true,
     "open.B_that_eq_u": true,
     "open.norm_that_le_gamma_bar": true,
-    "open.f_eq_f_bar": true,
+    "open.unheld_blocks_zero": true,
     "conv.E_matrix_times_u_eq_E(u)": true,
     "conv.E(u)_in_R_q^H": true,
     "conv.verifier_y_eq_E(u)": true,
@@ -1242,7 +1246,7 @@
     "open": {
       "open: one digit of s_i changed": {
         "passed": true,
-        "failing": ["A_s_eq_G_that","f_eq_f_bar"]
+        "failing": ["f_prime_eq_G_s","A_s_eq_G_that"]
       },
       "open: one coefficient of rho^u changed": {
         "passed": true,
@@ -1251,6 +1255,14 @@
       "open: f changed in one coordinate": {
         "passed": true,
         "failing": ["f_eq_f_bar"]
+      },
+      "open: one coefficient of f' changed": {
+        "passed": true,
+        "failing": ["f_eq_f_bar","f_prime_eq_G_s"]
+      },
+      "open: a block missing from its prover's state": {
+        "passed": true,
+        "failing": ["states_hold_their_blocks","f_eq_f_bar","B_that_eq_u"]
       },
       "open: c outside the slack space": {
         "passed": true,

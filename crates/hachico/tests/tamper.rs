@@ -32,7 +32,7 @@ use common::{
 use hachi_co::{
     BasePcsWords, ClaimedPoly, DecodeError, EVAL_DOMAIN, Error, EvalProof, HEADER_LEN, MAGIC,
     ProofError, StatementError, VERSION, VerifyError, commit, encoded_len, eval, eval_with, setup,
-    verify, verify_with,
+    verify_value, verify_with,
 };
 use hachi_co_core::{Context, Ext, Fixture, FsChallenger, Poly, PrgRandomness, ReplayChallenger};
 use hachi_co_mpc::Loopback;
@@ -63,8 +63,8 @@ fn honest() -> &'static Honest {
         let mut comm = Loopback::new(ctx.q()).unwrap();
         let mut rng = PrgRandomness::new(seed("party/tamper", &[7]));
         let (u, state) = commit(&ctx, &mut comm, &mut rng, &f).unwrap();
-        let proof = eval(&ctx, &pcs, &mut comm, &mut rng, &state, &u, &x, &y).unwrap();
-        verify(&ctx, &pcs, &u, &x, &y, &proof).unwrap();
+        let proof = eval(&ctx, &pcs, &mut comm, &mut rng, &state, &u, &x).unwrap();
+        verify_value(&ctx, &pcs, &u, &x, &y, &proof).unwrap();
         let bytes = proof.to_bytes();
         Honest {
             ctx,
@@ -114,10 +114,11 @@ fn every_component_change_is_rejected(
         tried += 1;
         assert_ne!(p, proof, "{name}: {what} must change the proof");
         let err = verifier(p, u, x, y).expect_err(&format!("{name}: {what} was accepted"));
-        // A tampered E(u) fails Pi_conv's check before anything else.
+        // A tampered E(u) is either not a value (outside R_q^H: Pi_conv's step) or another value,
+        // which the sumcheck rejects (the verifier reads y from E(u) since the draft's c071784).
         if what.starts_with("E(u)") {
             assert!(
-                matches!(err, VerifyError::Conv(_)),
+                matches!(err, VerifyError::Conv(_) | VerifyError::Sumcheck(_)),
                 "{name}: {what}: {err:?}"
             );
         }
@@ -274,11 +275,10 @@ fn every_component_change_is_rejected(
     for c in 0..K {
         let mut y2 = *y;
         bump(&mut y2.0[c], q);
-        assert!(
-            matches!(
-                verifier(proof, u, x, &y2),
-                Err(VerifyError::Conv(hachi_co_conv::VerifyError::Mismatch))
-            ),
+        // The verifier outputs the value, so an expected value other than it is refused.
+        assert_eq!(
+            verifier(proof, u, x, &y2),
+            Err(VerifyError::ValueMismatch),
             "{name}: y[{c}] + 1"
         );
         statement_changes += 1;
@@ -337,8 +337,9 @@ fn swapped_items_are_rejected(
 fn tampered_fiat_shamir_proofs_are_rejected() {
     let h = honest();
     let ctx = &h.ctx;
-    let verifier =
-        |p: &EvalProof<K>, u: &[Poly], x: &[Ext<K>], y: &Ext<K>| verify(ctx, &h.pcs, u, x, y, p);
+    let verifier = |p: &EvalProof<K>, u: &[Poly], x: &[Ext<K>], y: &Ext<K>| {
+        verify_value(ctx, &h.pcs, u, x, y, p)
+    };
     let tried = every_component_change_is_rejected(
         ctx,
         (&h.u, &h.x, &h.y),
@@ -355,9 +356,16 @@ fn tampered_fixture_proofs_are_rejected_with_replayed_coins() {
     let pcs = clear_pcs(&ctx);
     let (u, x, y) = fixture_statement(&fx);
     let proof = fixture_proof(&fx);
+    // The verifier outputs the value, compared with the statement's y (so a tampered y is
+    // refused with ValueMismatch).
     let verifier = |p: &EvalProof<K>, u: &[Poly], x: &[Ext<K>], y: &Ext<K>| {
         let mut ch = ReplayChallenger::new(&fx).unwrap();
-        verify_with(&ctx, &pcs, &mut ch, u, x, y, p)
+        let value = verify_with(&ctx, &pcs, &mut ch, u, x, p)?;
+        if value == ctx.field().reduce(y) {
+            Ok(())
+        } else {
+            Err(VerifyError::ValueMismatch)
+        }
     };
     let tried = every_component_change_is_rejected(
         &ctx,
@@ -415,12 +423,13 @@ fn swapped_openings_between_parties_are_rejected() {
         let mut prg = PrgRandomness::new(seed("party/tamper/n3", &[p as u64]));
         let (u, state) = commit(&ctx, comm, &mut prg, &f_init[p - 1]).unwrap();
         let mut ch = FsChallenger::new(EVAL_DOMAIN);
-        let out = eval_with(&ctx, &pcs, comm, &mut prg, &mut ch, &state, &u, &x, &y).unwrap();
+        let out = eval_with(&ctx, &pcs, comm, &mut prg, &mut ch, &state, &u, &x).unwrap();
         (u, out.proof)
     });
     let (u, proof) = &outputs[0];
-    let verifier =
-        |p: &EvalProof<K>, u: &[Poly], x: &[Ext<K>], y: &Ext<K>| verify(&ctx, &pcs, u, x, y, p);
+    let verifier = |p: &EvalProof<K>, u: &[Poly], x: &[Ext<K>], y: &Ext<K>| {
+        verify_value(&ctx, &pcs, u, x, y, p)
+    };
     assert!(verifier(proof, u, &x, &y).is_ok());
     let swapped = swapped_items_are_rejected(proof, 3, &verifier, (u, &x, &y), "toy-n3 (FS)");
     assert_eq!(swapped, 18);
@@ -431,7 +440,7 @@ fn malformed_structs_and_statements_are_errors() {
     let h = honest();
     let (ctx, q) = (&h.ctx, h.ctx.q());
     let l = &ctx.layout;
-    let check = |p: &EvalProof<K>| verify(ctx, &h.pcs, &h.u, &h.x, &h.y, p);
+    let check = |p: &EvalProof<K>| verify_value(ctx, &h.pcs, &h.u, &h.x, &h.y, p);
     let non_canonical = |r: Result<_, VerifyError>| {
         matches!(r, Err(VerifyError::Proof(ProofError::NonCanonical { .. })))
     };
@@ -508,7 +517,8 @@ fn malformed_structs_and_statements_are_errors() {
         assert!(is_opening(&err, 1, poly), "{err:?}");
     }
     // Malformed statements.
-    let statement = |u: &[Poly], x: &[Ext<K>], y: &Ext<K>| verify(ctx, &h.pcs, u, x, y, &h.proof);
+    let statement =
+        |u: &[Poly], x: &[Ext<K>], y: &Ext<K>| verify_value(ctx, &h.pcs, u, x, y, &h.proof);
     assert!(matches!(
         statement(&h.u, &h.x[1..], &h.y),
         Err(VerifyError::Statement(StatementError::Shape { .. }))
@@ -533,15 +543,11 @@ fn malformed_structs_and_statements_are_errors() {
             q
         }))
     );
+    // y is not part of the statement: the verifier outputs it, and an expected value is
+    // compared as an element of the field, whatever its encoding.
     let mut y = h.y;
-    y.0[0] = q;
-    assert!(matches!(
-        statement(&h.u, &h.x, &y),
-        Err(VerifyError::Statement(StatementError::NonCanonical {
-            what: "y",
-            ..
-        }))
-    ));
+    y.0[0] += q;
+    assert_eq!(statement(&h.u, &h.x, &y), Ok(()));
     let mut u = h.u.clone();
     u[0].0[0] = u64::MAX;
     assert!(matches!(
@@ -627,7 +633,7 @@ fn malformed_encodings_are_errors() {
         b[i] ^= 0x20;
         assert_eq!(EvalProof::from_bytes(ctx, &b), Err(DecodeError::BadMagic));
     }
-    for version in [0u64, 1, 3, u64::MAX] {
+    for version in [0u64, 1, 2, 4, u64::MAX] {
         let mut b = h.bytes.clone();
         b[8..16].copy_from_slice(&version.to_le_bytes());
         assert_eq!(
@@ -687,7 +693,7 @@ fn malformed_encodings_are_errors() {
     b[word_at(w1)..word_at(w1) + 8].copy_from_slice(&(a1 - 1).to_le_bytes());
     let moved = EvalProof::from_bytes(ctx, &b).unwrap();
     assert_ne!(moved, h.proof);
-    assert!(verify(ctx, &h.pcs, &h.u, &h.x, &h.y, &moved).is_err());
+    assert!(verify_value(ctx, &h.pcs, &h.u, &h.x, &h.y, &moved).is_err());
     // a* at and beyond the cap; every value below it decodes.
     for a in [MAX_ATTEMPTS, MAX_ATTEMPTS + 1, 1 << 32, u64::MAX] {
         let mut b = h.bytes.clone();
@@ -724,7 +730,7 @@ fn fuzzed_encodings_never_panic() {
         match EvalProof::from_bytes(ctx, b) {
             Ok(p) => {
                 assert_eq!(p.to_bytes(), b, "a decoded encoding is canonical");
-                let result = verify(ctx, &h.pcs, &h.u, &h.x, &h.y, &p);
+                let result = verify_value(ctx, &h.pcs, &h.u, &h.x, &h.y, &p);
                 if b == h.bytes.as_slice() {
                     assert!(result.is_ok());
                 } else {
@@ -835,36 +841,37 @@ fn provers_refuse_wrong_claims_and_mismatched_inputs() {
     let (u, state) = commit(&ctx, &mut comm, &mut rng, &f).unwrap();
     let field = ctx.field();
     let fresh = || PrgRandomness::new(seed("party/errors", &[8]));
-    let run = |u: &[Poly], x: &[Ext<K>], y: &Ext<K>, comm: &mut Loopback| {
+    let run = |u: &[Poly], x: &[Ext<K>], comm: &mut Loopback| {
         let mut ch = FsChallenger::new(EVAL_DOMAIN);
-        eval_with(&ctx, &pcs, comm, &mut fresh(), &mut ch, &state, u, x, y).map(|o| o.proof)
+        eval_with(&ctx, &pcs, comm, &mut fresh(), &mut ch, &state, u, x).map(|o| o.proof)
     };
-    let y_bad = field.add(&y, &field.one());
-    assert_eq!(
-        run(&u, &x, &y_bad, &mut comm),
-        Err(Error::ClaimMismatch(hachi_co_conv::VerifyError::Mismatch))
-    );
     let mut x_bad = x.clone();
     x_bad[0].0[0] = q;
     assert!(matches!(
-        run(&u, &x_bad, &y, &mut comm),
+        run(&u, &x_bad, &mut comm),
         Err(Error::Statement(StatementError::NonCanonical {
             what: "x",
             ..
         }))
     ));
     assert!(matches!(
-        run(&u[..0], &x, &y, &mut comm),
+        run(&u[..0], &x, &mut comm),
         Err(Error::Statement(StatementError::Shape { .. }))
     ));
     // A network with another modulus.
     let mut other = Loopback::new(q + 2).unwrap();
     assert!(matches!(
-        run(&u, &x, &y, &mut other),
+        run(&u, &x, &mut other),
         Err(Error::Conv(hachi_co_conv::Error::Network { what: "q", .. }))
     ));
-    // The honest claim goes through.
-    assert!(run(&u, &x, &y, &mut comm).is_ok());
+    // The honest run goes through, and its proof gives f(x); another expected value is refused.
+    let proof = run(&u, &x, &mut comm).unwrap();
+    verify_value(&ctx, &pcs, &u, &x, &y, &proof).unwrap();
+    let y_bad = field.add(&y, &field.one());
+    assert_eq!(
+        verify_value(&ctx, &pcs, &u, &x, &y_bad, &proof),
+        Err(VerifyError::ValueMismatch)
+    );
     // A base PCS over another field: the provers' check of the opened values stops them.
     let (_, ctx2) = load("toy-n2");
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
@@ -878,7 +885,6 @@ fn provers_refuse_wrong_claims_and_mismatched_inputs() {
             &state,
             &u,
             &x,
-            &y
         ),
         Err(Error::Sumcheck(
             hachi_co_sumcheck::Error::OpeningMismatch { .. }
@@ -898,5 +904,5 @@ fn provers_refuse_wrong_claims_and_mismatched_inputs() {
     let (fx, ctx2): (Fixture, Context<K>) = load("toy-n2");
     let (u2, x2, y2) = fixture_statement(&fx);
     let proof1 = fixture_proof(&load("toy-n1").0);
-    assert!(verify(&ctx2, &clear_pcs(&ctx2), &u2, &x2, &y2, &proof1).is_err());
+    assert!(verify_value(&ctx2, &clear_pcs(&ctx2), &u2, &x2, &y2, &proof1).is_err());
 }

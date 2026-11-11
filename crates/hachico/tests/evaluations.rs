@@ -24,7 +24,8 @@ use common::{
 };
 use hachi::HachiChoices;
 use hachi_co::{
-    BasePcsWords, EVAL_DOMAIN, EvalOutput, HachiBase, commit, encoded_len, eval, eval_with, verify,
+    BasePcsWords, EVAL_DOMAIN, EvalOutput, HachiBase, commit, encoded_len, eval, eval_with,
+    verify_value,
 };
 use hachi_co_commit::open;
 use hachi_co_core::{BasePcs, Context, Ext, FsChallenger, Poly, PrgRandomness};
@@ -98,10 +99,10 @@ fn commit_and_prove<P: BasePcs<K> + Sync>(
         let proofs = claims
             .iter()
             .enumerate()
-            .map(|(k, (x, y))| {
+            .map(|(k, (x, _))| {
                 let tag = [n, index, p as u64, k as u64];
                 let mut rng = PrgRandomness::new(seed("party/evaluations/eval", &tag));
-                eval(ctx, pcs, comm, &mut rng, &state, &u, x, y)
+                eval(ctx, pcs, comm, &mut rng, &state, &u, x)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok::<_, hachi_co::Error>((u, state, proofs))
@@ -134,12 +135,12 @@ fn several_evaluations<P: BasePcs<K> + Sync>(ctx: &Context<K>, pcs: &P, index: u
     let (u, states, proofs) = commit_and_prove(ctx, pcs, &shares, &network, &claims, index);
     assert!(open(ctx, &states, &u, &f, None).unwrap().bit);
     for ((x, y), proof) in claims.iter().zip(&proofs) {
-        verify(ctx, pcs, &u, x, y, proof).unwrap();
+        verify_value(ctx, pcs, &u, x, y, proof).unwrap();
     }
     // Everything but rho^u is fresh: one claim proved twice has two different proofs.
     assert_ne!(proofs[0], proofs[3]);
     // Each proof is about its own claim.
-    assert!(verify(ctx, pcs, &u, &claims[1].0, &claims[1].1, &proofs[0]).is_err());
+    assert!(verify_value(ctx, pcs, &u, &claims[1].0, &claims[1].1, &proofs[0]).is_err());
 }
 
 #[test]
@@ -165,18 +166,17 @@ fn several_evaluations_of_one_commitment_verify_with_hachi() {
 fn a_reused_source_is_refused() {
     let ctx = context(1, PadRule::Field, 2);
     let pcs = clear_pcs(&ctx);
-    let (f, shares, network) = instance(&ctx, 2);
+    let (_, shares, network) = instance(&ctx, 2);
     let x = common::random_vector(
         &mut ChaCha8Rng::seed_from_u64(9100),
         ctx.q(),
         ctx.layout.ell,
     );
-    let y = evaluate_by_monomials(ctx.field(), &f, &x);
     let runs = run_with(&network, |_, comm| {
         let mut rng = PrgRandomness::new(seed("party/evaluations/reused", &[]));
         let (u, state) = commit(&ctx, comm, &mut rng, &shares[0]).unwrap();
-        eval(&ctx, &pcs, comm, &mut rng, &state, &u, &x, &y).unwrap();
-        eval(&ctx, &pcs, comm, &mut rng, &state, &u, &x, &y)
+        eval(&ctx, &pcs, comm, &mut rng, &state, &u, &x).unwrap();
+        eval(&ctx, &pcs, comm, &mut rng, &state, &u, &x)
     });
     let output = runs.into_iter().next().unwrap().unwrap().output;
     let error = output.expect_err("the second Eval must fail");
@@ -205,7 +205,7 @@ fn prove_with_private<P: BasePcs<K> + Sync>(
         let mut rng = PrgRandomness::new(seed("party/evaluations", &[n, index, p as u64]));
         let (u, state) = commit(ctx, comm, &mut rng, &shares[p - 1]).unwrap();
         let mut ch = FsChallenger::new(EVAL_DOMAIN);
-        let out = eval_with(ctx, pcs, comm, &mut rng, &mut ch, &state, &u, &x, &y).unwrap();
+        let out = eval_with(ctx, pcs, comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
         (u, out)
     });
     let outputs: Vec<(Vec<Poly>, EvalOutput<K>)> = runs
@@ -224,7 +224,7 @@ fn prove_with_private<P: BasePcs<K> + Sync>(
 fn both_pads<P: BasePcs<K> + Sync>(ctx: &Context<K>, pcs: &P, words: &BasePcsWords, index: u64) {
     let l = &ctx.layout;
     let (u, x, y, outs) = prove_with_private(ctx, pcs, index);
-    verify(ctx, pcs, &u, &x, &y, &outs[0].proof).unwrap();
+    verify_value(ctx, pcs, &u, &x, &y, &outs[0].proof).unwrap();
     let at = pad_index(l);
     for out in &outs {
         assert_eq!(out.proof, outs[0].proof);
@@ -313,9 +313,9 @@ fn the_proof_is_bound_to_the_rule_of_the_pad() {
     let (field_ctx, residues_ctx) = (context(PadRule::Field), context(PadRule::Residues));
     let (pcs_f, pcs_r) = (clear_pcs(&field_ctx), clear_pcs(&residues_ctx));
     let (u, x, y, outs) = prove_with_private(&field_ctx, &pcs_f, 40);
-    verify(&field_ctx, &pcs_f, &u, &x, &y, &outs[0].proof).unwrap();
-    assert!(verify(&residues_ctx, &pcs_r, &u, &x, &y, &outs[0].proof).is_err());
+    verify_value(&field_ctx, &pcs_f, &u, &x, &y, &outs[0].proof).unwrap();
+    assert!(verify_value(&residues_ctx, &pcs_r, &u, &x, &y, &outs[0].proof).is_err());
     let (u, x, y, outs) = prove_with_private(&residues_ctx, &pcs_r, 41);
-    verify(&residues_ctx, &pcs_r, &u, &x, &y, &outs[0].proof).unwrap();
-    assert!(verify(&field_ctx, &pcs_f, &u, &x, &y, &outs[0].proof).is_err());
+    verify_value(&residues_ctx, &pcs_r, &u, &x, &y, &outs[0].proof).unwrap();
+    assert!(verify_value(&field_ctx, &pcs_f, &u, &x, &y, &outs[0].proof).is_err());
 }

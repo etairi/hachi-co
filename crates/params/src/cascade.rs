@@ -61,7 +61,8 @@ pub struct Params {
     pub beta_bar: u128,
     /// $\bar\omega = 2\omega$ (line 281).
     pub omega_bar: u64,
-    /// $\bar\gamma = b$ (line 281).
+    /// $\bar\gamma = b - 1$ (line 281, which reads $b$ at `8834c9f` and $b - 1$ since the
+    /// draft's commit `28721d6`).
     pub gamma_bar: u64,
     /// $\mu = 2^r\delta + n\delta + 2^r n_A\delta + n n_A\delta + n m_u + n m_v + 2^m\delta\tau + 2$,
     /// the length of $\mathbf z'$ (line 282; 5_Building_Blocks.tex:177-186).
@@ -91,7 +92,7 @@ pub struct Params {
     /// $2\bar\omega\bar\beta = 8\omega b^\tau$, the $\infty$-norm bound of the
     /// $\mathsf{MSIS}$ instance for $\mathbf A$ (line 581).
     pub msis_bound_a: u128,
-    /// $2\bar\gamma = 2b$, the $\infty$-norm bound of the $\mathsf{MSIS}$ instance for
+    /// $2\bar\gamma = 2(b - 1)$, the $\infty$-norm bound of the $\mathsf{MSIS}$ instance for
     /// $\mathbf B$ (line 581).
     pub msis_bound_b: u128,
     /// $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1)$, the largest value $\mathbf J^{-1}$
@@ -303,7 +304,8 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
     let b_tau = rules::checked_pow(b, dd.tau, "b^tau")?;
     let beta_bar = b_tau.checked_mul(2).ok_or_else(overflow("beta_bar"))?;
     let omega_bar = omega.checked_mul(2).ok_or_else(overflow("omega_bar"))?;
-    let gamma_bar = c.b;
+    // b >= 2 is checked before the cascade runs, so b - 1 >= 1.
+    let gamma_bar = c.b - 1;
 
     let two_r = rules::checked_pow(2, s.r, "2^r")?;
     let two_m = rules::checked_pow(2, s.m, "2^m")?;
@@ -364,7 +366,9 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
         .ok_or_else(overflow("width of D"))?;
 
     let msis_bound_a = dd.binding_guard / 2;
-    let msis_bound_b = b.checked_mul(2).ok_or_else(overflow("2 gamma_bar"))?;
+    let msis_bound_b = u128::from(gamma_bar)
+        .checked_mul(2)
+        .ok_or_else(overflow("2 gamma_bar"))?;
     let j_inv_capacity = rules::j_inv_capacity(c.b, dd.tau)?;
 
     let log2_rejection_m = rules::log2_rejection_constant(dd.big_n, dd.gamma, dd.beta1);

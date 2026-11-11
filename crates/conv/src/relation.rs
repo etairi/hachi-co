@@ -8,7 +8,11 @@ use crate::share::e_map;
 use hachi_co_core::{Context, PartyState};
 use hachi_co_math::{Ext, Poly};
 
-/// The three conditions of [`check_relation`].
+/// The conditions of [`check_relation`]. In the draft since commit `c071784` they are those of
+/// $\mathcal R\_2$ (`5_Building_Blocks.tex`, $\Pi\_A$), apart from $\mathsf{Open} = 1$, which
+/// `hachi_co_commit::open` checks on the same states, $\mathbf c' = (1, \dots, 1)$, the global
+/// relaxation factor, and $(\mathbf x', v, \mathbf a, \mathbf b, E) = \mathsf{InputConv}(\mathbf x)$,
+/// which holds because [`public_vectors`] computes them from $\mathbf x$.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConvRelation {
     /// The input statement: $f(\mathbf x) = y$ for $\mathbf f = \sum\_p \langle \mathbf f
@@ -22,12 +26,16 @@ pub struct ConvRelation {
     /// The link that the verifier's check enforces: $E(u) = f(\mathbf x)$, read in
     /// $\mathbb F\_{q^k}$ (`field-to-ring-rok.tex`:189-193, Eq. (conv)).
     pub link: bool,
+    /// $\Vert \mathbf s\_{i'} \Vert\_\infty \le \lfloor b/2 \rfloor$ for every block $i'$ of the
+    /// states, a condition of $\mathcal R\_1$ and $\mathcal R\_2$ since the draft's commit
+    /// `c071784` (centered coefficients).
+    pub digits_short: bool,
 }
 
 impl ConvRelation {
-    /// Whether all three conditions hold.
+    /// Whether all the conditions hold.
     pub fn holds(&self) -> bool {
-        self.input && self.output && self.link
+        self.input && self.output && self.link && self.digits_short
     }
 }
 
@@ -153,9 +161,17 @@ pub fn check_relation<const K: usize>(
     let f_prime_at_x_prime = ring.inner(&monomials, &f_prime)?;
     let u_reduced = ring.from_coeffs(&u.0)?;
     let e_u = e_map(ctx, &u_reduced, &public.v_point)?;
+    let half_b = ctx.b() / 2;
+    let mut digits_short = true;
+    for block in states.iter().flat_map(|st| &st.blocks) {
+        for s in &block.s {
+            digits_short &= ring.inf_norm(s)? <= half_b;
+        }
+    }
     Ok(ConvRelation {
         input: fx == field.reduce(y),
         output: f_prime_at_x_prime == u_reduced,
         link: ctx.sub.extract(&e_u).is_ok_and(|e| e == fx),
+        digits_short,
     })
 }

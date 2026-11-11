@@ -23,11 +23,11 @@
 //! ```
 //!
 //! **Choices this crate makes where the draft is silent** (each is documented at its item):
-//! $q$ is either fixed or the smallest admissible prime ([`QChoice::Smallest`]); $\tau$ is tight
-//! by default ([`TauRule`]); $\omega$ may be the smallest radius meeting the knowledge-error
-//! target ([`Omega::MinForTarget`]); the severities follow the rule in [`report`]; the
-//! development presets are a kind of their own ([`PresetKind::Dev`]); the proof encoding that
-//! [`sizes`](fn@crate::sizes) counts uses 64-bit words ([`sizes::WORD_BYTES`]).
+//! $q$ is either fixed or the smallest admissible prime ([`QChoice::Smallest`]); $\omega$ may be
+//! the smallest radius meeting the knowledge-error target ([`Omega::MinForTarget`]); the
+//! severities follow the rule in [`report`]; the development presets are a kind of their own
+//! ([`PresetKind::Dev`]); the proof encoding that [`sizes`](fn@crate::sizes) counts uses 64-bit
+//! words ([`sizes::WORD_BYTES`]).
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
 //! `8834c9f`), cited by file and line; "Hachi" is ePrint 2026/156 (NOZ26), cited by lemma.

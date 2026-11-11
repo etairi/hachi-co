@@ -7,7 +7,7 @@
 //!
 //! [`EvalProof::from_bytes`]: crate::EvalProof::from_bytes
 
-/// A statement $(\mathbf u, \mathbf x, y)$ that does not fit the context: a commitment
+/// A statement $(\mathbf u, \mathbf x)$ that does not fit the context: a commitment
 /// $\mathbf u$ without $n\_B$ ring elements of $d$ coefficients, a point $\mathbf x$ without
 /// $\ell$ coordinates, or a residue that is not below $q$. The statement is absorbed into the
 /// Fiat-Shamir transcript, so its encoding must be canonical ([`crate::check_statement`]).
@@ -142,11 +142,6 @@ pub enum Error {
     /// The statement does not fit the context.
     #[error("statement: {0}")]
     Statement(#[from] StatementError),
-    /// The claimed evaluation $y$ fails the check $y = E(u)$ of $\Pi\_{\mathsf{conv}}$ with the
-    /// $E(u)$ the provers computed (`field-to-ring-rok.tex`:189-193), so the verifier would
-    /// reject; the provers stop before the ring-to-linear step.
-    #[error("the claimed evaluation fails y = E(u): {0}")]
-    ClaimMismatch(hachi_co_conv::VerifyError),
 }
 
 /// Why the verifier rejected, by step. Every malformed or tampered statement or proof gives one
@@ -160,8 +155,9 @@ pub enum VerifyError {
     /// The proof does not fit the context.
     #[error(transparent)]
     Proof(#[from] ProofError),
-    /// $\Pi\_{\mathsf{conv}}$'s check failed: $E(u) \notin \mathcal R\_q^H$ or $y \ne E(u)$
-    /// (`field-to-ring-rok.tex`:192-193).
+    /// The verifier's step of $\Pi\_A$ failed: $E(u)$ is malformed or not in
+    /// $\mathcal R\_q^H$, so it is not a value in $\mathbb F\_{q^k}$
+    /// ([`hachi_co_conv::read_value`]).
     #[error("Pi_conv: {0}")]
     Conv(hachi_co_conv::VerifyError),
     /// The public vectors of $\Pi\_{\mathsf{conv}}$ or the matrix of $E$ could not be computed (not
@@ -179,4 +175,8 @@ pub enum VerifyError {
     /// party and the polynomial), or a failing challenger.
     #[error("sumcheck: {0}")]
     Sumcheck(hachi_co_sumcheck::VerifyError),
+    /// The proof is accepted, but the value $y$ it proves differs from the expected one
+    /// ([`verify_value`](crate::verify_value)).
+    #[error("the proof is valid for another value than the expected one")]
+    ValueMismatch,
 }

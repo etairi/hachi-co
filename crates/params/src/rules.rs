@@ -82,8 +82,10 @@ pub fn j_inv_capacity(b: u64, tau: u32) -> Result<u128> {
 ///
 /// - [`TauRule::Tight`]: the least $\tau$ with
 ///   $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$ (user decision of 2026-10-17,
-///   `docs/m0-spec.md`). Needs $b \ge 3$, otherwise [`Error::TightTauUndefined`].
-/// - [`TauRule::Draft`]: $\tau = \lceil \log_b \beta \rceil + 1$ (6_Collaborative_Hachi.tex:280).
+///   `docs/m0-spec.md`, and the draft's Setup since its commit `21f2b41`). Needs $b \ge 3$,
+///   otherwise [`Error::TightTauUndefined`].
+/// - [`TauRule::Draft`]: $\tau = \lceil \log_b \beta \rceil + 1$, the draft's rule until `21f2b41`
+///   (6_Collaborative_Hachi.tex:280 at `8834c9f`).
 /// - [`TauRule::Ceil`]: $\tau = \lceil \log_b \beta \rceil$, which in general does *not* make
 ///   $\beta$ representable (balanced digits cover only about $b^\tau/2$); the report flags it.
 ///

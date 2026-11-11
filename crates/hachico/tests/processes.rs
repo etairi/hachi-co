@@ -26,7 +26,7 @@ use common::seed;
 use hachi_co::harness::{
     self, Instance, PROOF_FILE, PartyConfig, STATEMENT_FILE, Setup, Statement,
 };
-use hachi_co::{EvalProof, verify};
+use hachi_co::{EvalProof, verify_value};
 use hachi_co_mpc::{Comm, MemoryConfig, run_in_memory};
 use std::fs::{self, File};
 use std::net::{SocketAddr, TcpListener};
@@ -231,7 +231,7 @@ fn processes_agree_with_the_in_memory_run(n: usize) {
     // The proof decodes and verifies, here and with `--verify`.
     let proof = EvalProof::from_bytes(ctx, bytes).unwrap();
     let (u, x, y) = statement.values();
-    verify(ctx, &setup.pcs, &u, &x, &y, &proof).unwrap();
+    verify_value(ctx, &setup.pcs, &u, &x, &y, &proof).unwrap();
     let verified = run(&["--verify".as_ref(), c.output.as_os_str()], &dir, "verify");
     assert!(
         verified.status.success(),

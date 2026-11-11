@@ -10,10 +10,12 @@ use hachi_co_sumcheck::{ClaimedPoly, FinalValues, PcsWords, RoundMessage, Sumche
 /// The first 8 bytes of every encoded [`EvalProof`].
 pub const MAGIC: [u8; 8] = *b"HCO-EVAL";
 
-/// The version of the encoding, the second 8 bytes of the header (little-endian): 2 since the
-/// proof carries the base PCS's commitments and opening proofs (version 1, the encoding without
-/// a base PCS, had neither).
-pub const VERSION: u64 = 2;
+/// The version of the encoding, the second 8 bytes of the header (little-endian): 3 since the
+/// value $y$ left the statement (it is read from $E(u)$, so the Fiat-Shamir transcript no longer
+/// absorbs a claimed value, and proofs of version 2 do not verify), 2 since the proof carries
+/// the base PCS's commitments and opening proofs (version 1, the encoding without a base PCS,
+/// had neither). The layout of the encoding is the same in versions 2 and 3.
+pub const VERSION: u64 = 3;
 
 /// The length of the header: [`MAGIC`] and [`VERSION`].
 pub const HEADER_LEN: usize = 16;

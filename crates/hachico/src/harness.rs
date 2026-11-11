@@ -577,16 +577,7 @@ pub fn prove<C: Comm>(
     let (u, state) = commit(ctx, comm, &mut rng, share)?;
     let commit_time = start.elapsed();
     let start = Instant::now();
-    let proof = eval(
-        ctx,
-        pcs,
-        comm,
-        &mut rng,
-        &state,
-        &u,
-        &instance.x,
-        &instance.y,
-    )?;
+    let proof = eval(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
     Ok(PartyOutput {
         u,
         proof,
@@ -617,16 +608,7 @@ pub fn prove_streaming<C: Comm>(
     let (u, state) = commit_streaming(ctx, comm, &mut rng, dir, |_| Ok(chunks.next_chunk()?))?;
     let commit_time = start.elapsed();
     let start = Instant::now();
-    let proof = eval(
-        ctx,
-        pcs,
-        comm,
-        &mut rng,
-        &state,
-        &u,
-        &instance.x,
-        &instance.y,
-    )?;
+    let proof = eval(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
     Ok(PartyOutput {
         u,
         proof,
@@ -669,8 +651,8 @@ impl Statement {
         }
     }
 
-    /// $(\mathbf u, \mathbf x, y)$ as the verifier takes them; [`verify`] checks their shapes
-    /// and residues.
+    /// $(\mathbf u, \mathbf x)$ as the verifier takes them ([`verify`] checks their shapes and
+    /// residues), and the value $y = f(\mathbf x)$ that the harness expects the verifier to output.
     pub fn values(&self) -> (Vec<Poly>, Vec<Ext<K>>, Ext<K>) {
         (
             self.u.iter().cloned().map(Poly).collect(),
@@ -840,17 +822,21 @@ pub struct VerifyReport {
     pub proof_bytes: usize,
     /// The time of [`EvalProof::from_bytes`] and [`verify`].
     pub verify_time: Duration,
+    /// The value $y$ that the verifier output, equal to the statement's $y$.
+    pub value: Ext<K>,
 }
 
 /// The verifier of an output directory: reads [`STATEMENT_FILE`] and [`PROOF_FILE`], rebuilds
 /// the context and the base PCS from the statement's preset and setup seed ([`Setup::new`]),
-/// decodes the proof ([`EvalProof::from_bytes`]) and runs [`verify`] on
-/// $(\mathbf u, \mathbf x, y)$.
+/// decodes the proof ([`EvalProof::from_bytes`]), runs [`verify`] on $(\mathbf u, \mathbf x)$,
+/// which outputs the value $y$, and compares it with the statement's $y = f(\mathbf x)$, which
+/// the harness computed from the instance (the demo knows the polynomial).
 ///
 /// # Errors
 /// [`HarnessError::Io`] or [`HarnessError::Config`] if the files cannot be read or the
 /// statement does not parse; [`HarnessError::Decode`] if the proof does not decode;
-/// [`HarnessError::Rejected`] if the verifier rejects.
+/// [`HarnessError::Rejected`] if the verifier rejects, or with
+/// [`VerifyError::ValueMismatch`] if it outputs another value.
 pub fn verify_output(dir: &Path) -> Result<VerifyReport, HarnessError> {
     let statement = Statement::load(&dir.join(STATEMENT_FILE))?;
     let setup = Setup::new(&statement.preset, statement.n, &statement.setup_seed)?;
@@ -858,10 +844,15 @@ pub fn verify_output(dir: &Path) -> Result<VerifyReport, HarnessError> {
     let start = Instant::now();
     let proof = EvalProof::from_bytes(&setup.ctx, &bytes)?;
     let (u, x, y) = statement.values();
-    verify(&setup.ctx, &setup.pcs, &u, &x, &y, &proof)?;
+    let value = verify(&setup.ctx, &setup.pcs, &u, &x, &proof)?;
+    let verify_time = start.elapsed();
+    if value != setup.ctx.field().reduce(&y) {
+        return Err(crate::VerifyError::ValueMismatch.into());
+    }
     Ok(VerifyReport {
         statement,
         proof_bytes: bytes.len(),
-        verify_time: start.elapsed(),
+        verify_time,
+        value,
     })
 }

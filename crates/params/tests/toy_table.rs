@@ -108,7 +108,7 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         let b_tau = b.pow(p.tau);
         assert_eq!(big(p.beta_bar), &two * &b_tau);
         assert_eq!(p.omega_bar, 4);
-        assert_eq!(p.gamma_bar, 4);
+        assert_eq!(p.gamma_bar, 3); // b - 1 since the draft's commit 28721d6
         let mu = pow2(p.r) * &delta
             + &nn * &delta
             + pow2(p.r) * &n_a * &delta
@@ -134,7 +134,7 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         );
         assert_eq!(big(p.binding_guard), big(16) * &omega * &b_tau);
         assert_eq!(big(p.msis_bound_a), big(8) * &omega * &b_tau);
-        assert_eq!(p.msis_bound_b, 8);
+        assert_eq!(p.msis_bound_b, 6); // 2 gamma_bar
         assert_eq!(
             big(p.range_guard),
             pow2(9) * &nn * &omega * &omega * &b + 1u8

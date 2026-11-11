@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Hachi-Co WP8: the collaborative field-to-ring reduction Pi_conv (public vectors, shares of u, F_AH(E), the check y = E(u))"
+description = "Hachi-Co WP8: the collaborative field-to-ring reduction Pi_conv (public vectors, shares of u, F_AH(E), the value y read from E(u))"
 publish = false
 
 [dependencies]

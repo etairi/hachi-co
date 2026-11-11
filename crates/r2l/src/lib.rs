@@ -98,7 +98,8 @@ pub use local::{
 };
 pub use prover1::{norm_check, z_hat, z_of_sum};
 pub use relation::{
-    RowBlockChecks, UnpackedWitness, relation_holds, residual, row_block_checks, sum_shares,
+    R3Conditions, RowBlockChecks, UnpackedWitness, r3_conditions, relation_holds, residual,
+    row_block_checks, sum_shares,
 };
 pub use share::{y_share, z_prime_share};
 pub use verifier::{LinearRelation, linear_relation, verifier_challenges};

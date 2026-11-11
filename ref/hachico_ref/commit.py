@@ -132,10 +132,16 @@ def commit(ctx, pp, f_init):
 
 # ----------------------------------------------------------------- Open ----
 def open_check(ctx, pp, states, rho_u, u, f, c=None):
-    """Open(pp, st, comm, f, c) (6_CH:403-420), with every relation checked in Sage arithmetic.
-    rho_u is the provers' rho^u (n, m_u, d), read from their states.
+    """Open(pp, st, comm, f, c) as the draft states it since commit 28721d6 (6_CH, Open), with every
+    relation checked in Sage arithmetic. rho_u is the provers' rho^u (n, m_u, d), read from their states.
 
-    c defaults to c* = (1, ..., 1).  Returns (bit, checks) where checks names every sub-condition."""
+    1. Assemble: prover p's state supplies the blocks of its part T_p of the partition T in pp
+       (P.blocks_of(p)); other entries of a state are ignored, and the unheld blocks T_0 are zero.
+    2. Decode: f'_i from the states, f_hat = psi^{-1}(f'), f_bar_q = sum_p f_hat_{p||q}.
+    3. The checks (a) f = f_bar, (b) f'_i = G s_i, (c) A s_i = G t_hat_i and ||c_i s_i|| <= beta_bar,
+       (d) B (t_hat, rho^u) = u and ||(t_hat, rho^u)|| <= gamma_bar, (e) the blocks of T_0 are zero.
+    c defaults to c* = (1, ..., 1). Returns (bit, checks) where checks names every sub-condition, with
+    c in the slack space and the presence of every block of T_p in prover p's state first."""
     P, R, F, S, SR = ctx.P, ctx.R, ctx.F, ctx.S, ctx.SR
     nb, bl = P.n_blocks, P.block_len
     if c is None:
@@ -146,29 +152,28 @@ def open_check(ctx, pp, states, rho_u, u, f, c=None):
     cc = R.centered(c)
     checks["c_in_slack_space"] = bool(all(int(np.abs(cc[i]).sum()) <= P.omega_bar and SR.is_unit(c[i])
                                           for i in range(nb)))
-    # 1. assemble
-    s_list, th_list, several = [], [], False
+    # 1. assemble by the partition T
+    zero_f = np.zeros((bl, P.d), dtype=np.int64)
     zero_s = np.zeros((bl * P.delta, P.d), dtype=np.int64)
     zero_t = np.zeros((P.n_A * P.delta, P.d), dtype=np.int64)
-    for i in range(nb):
-        holders = [p for p in states if i in states[p]]
-        if len(holders) > 1:
-            several = True
-        if holders:
-            s_list.append(states[holders[0]][i]["s"])
-            th_list.append(states[holders[0]][i]["t_hat"])
-        else:
-            s_list.append(zero_s)
-            th_list.append(zero_t)
-    checks["no_block_in_several_states"] = not several
+    f_list, s_list, th_list = [zero_f] * nb, [zero_s] * nb, [zero_t] * nb
+    complete = True
+    for p in range(1, P.n + 1):
+        for i in P.blocks_of(p):
+            entry = states.get(p, {}).get(i)
+            if entry is None:
+                complete = False
+                continue
+            f_list[i], s_list[i], th_list[i] = entry["f_prime"], entry["s"], entry["t_hat"]
+    checks["states_hold_their_blocks"] = complete
     t_hat = np.concatenate(th_list)
-    # (t_hat, rho^u), on which B acts (6_CH:414-417)
+    # (t_hat, rho^u), on which B acts
     t_rho = np.concatenate([t_hat, R.reduce(np.asarray(rho_u).reshape(P.n * P.m_u, P.d))])
-    # 2. decode the message: f'_{i||j} = G s_i, f_hat = psi^{-1}, f_bar_q = sum_p f_hat_{p||q}
+    # 2. decode the polynomial from f' as the states hold it: f_hat = psi^{-1}(f'), f_bar_q = sum_p f_hat_{p||q}
     g = 2 ** (P.alpha - P.kappa)
     f_hat = F.zeros(2 ** (P.logn + P.ell))
     for i in range(nb):
-        fpi = R.g_apply(s_list[i], P.b, P.delta)
+        fpi = R.reduce(np.asarray(f_list[i]))
         for j in range(bl):
             dec = S.psi_inv(S.ring([int(x) for x in fpi[j]]))
             for kk in range(g):
@@ -177,6 +182,9 @@ def open_check(ctx, pp, states, rho_u, u, f, c=None):
     for p in range(2 ** P.logn):
         f_bar = F.add(f_bar, f_hat[p * 2 ** P.ell:(p + 1) * 2 ** P.ell])
     # 3. conditions
+    checks["f_eq_f_bar"] = bool(np.array_equal(f_bar % P.q, np.asarray(f) % P.q))                   # (a)
+    checks["f_prime_eq_G_s"] = bool(all(                                                           # (b)
+        np.array_equal(R.reduce(np.asarray(f_list[i])), R.g_apply(s_list[i], P.b, P.delta)) for i in range(nb)))
     A, B = pp["A"], pp["B"]
     ok_a = True
     norm_cs = 0
@@ -187,10 +195,12 @@ def open_check(ctx, pp, states, rho_u, u, f, c=None):
         # ||c_i s_i||_inf of the R_q product, centered (4_P:86)
         cs = np.array([R.mul(c[i], s_list[i][e]) for e in range(s_list[i].shape[0])])
         norm_cs = max(norm_cs, R.inf_norm(cs))
-    checks["A_s_eq_G_that"] = bool(ok_a)
+    checks["A_s_eq_G_that"] = bool(ok_a)                                                              # (c)
     checks["norm_c_s_le_beta_bar"] = bool(norm_cs <= P.beta_bar)
-    checks["B_that_eq_u"] = SR.matvec(B.tolist(), t_rho.tolist()) == np.asarray(u).tolist()
+    checks["B_that_eq_u"] = SR.matvec(B.tolist(), t_rho.tolist()) == np.asarray(u).tolist()        # (d)
     checks["norm_that_le_gamma_bar"] = bool(R.inf_norm(t_rho) <= P.gamma_bar)
-    checks["f_eq_f_bar"] = bool(np.array_equal(f_bar % P.q, np.asarray(f) % P.q))
+    unheld = [i for i in range(nb) if P.owner_of_block(i) is None]                                    # (e)
+    checks["unheld_blocks_zero"] = bool(all(not np.asarray(f_list[i]).any() and not np.asarray(s_list[i]).any()
+                                            and not np.asarray(th_list[i]).any() for i in unheld))
     bit = all(checks.values())
     return bit, dict(checks=checks, max_norm_c_s=int(norm_cs), max_norm_t_hat=R.inf_norm(t_rho))

@@ -9,7 +9,7 @@ mod common;
 use common::K;
 use common::net::run_with;
 use hachi_co::harness::{Instance, PartyConfig, Setup, prove, prove_streaming};
-use hachi_co::{commit, commit_streaming, eval, verify};
+use hachi_co::{commit, commit_streaming, eval, verify_value};
 use hachi_co_commit::open;
 use hachi_co_core::{BlockState, Context, Ext, PartyState, PrgRandomness};
 use hachi_co_mpc::{Loopback, MemoryConfig};
@@ -171,20 +171,19 @@ fn a_state_on_disk_serves_several_evaluations() {
         .unwrap();
         let proofs: Vec<_> = points
             .iter()
-            .zip(&values)
             .enumerate()
-            .map(|(k, (x, y))| {
+            .map(|(k, x)| {
                 let mut seed = party_seed(p);
                 seed[1] = 1 + k as u8;
                 let mut rng = PrgRandomness::new(seed);
-                eval(ctx, pcs, comm, &mut rng, &state, &u, x, y).unwrap()
+                eval(ctx, pcs, comm, &mut rng, &state, &u, x).unwrap()
             })
             .collect();
         (u, proofs)
     });
     let (u, proofs) = runs.into_iter().next().unwrap().unwrap().output;
     for ((x, y), proof) in points.iter().zip(&values).zip(&proofs) {
-        verify(ctx, pcs, &u, x, y, proof).unwrap();
+        verify_value(ctx, pcs, &u, x, y, proof).unwrap();
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }

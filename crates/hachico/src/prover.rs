@@ -83,7 +83,8 @@ pub struct EvalOutput<const K: usize> {
 /// $\mathsf{Eval}$ for the party `comm.id()` with Fiat-Shamir: [`eval_with`] on a fresh
 /// [`FsChallenger`] with the domain [`EVAL_DOMAIN`], keeping only the proof. Every party calls it
 /// with the same base PCS `pcs`, its own network end, randomness and state and the same
-/// statement $(\mathbf u, \mathbf x, y)$; every party obtains the same proof.
+/// statement $(\mathbf u, \mathbf x)$; every party obtains the same proof, from which the verifier
+/// reads the value $y$ ([`verify`](crate::verify)).
 ///
 /// # Errors
 /// As [`eval_with`].
@@ -96,24 +97,23 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
     state: &PartyState<K>,
     u: &[Poly],
     x: &[Ext<K>],
-    y: &Ext<K>,
 ) -> Result<EvalProof<K>, Error> {
     let mut ch = FsChallenger::new(EVAL_DOMAIN);
-    Ok(eval_with(ctx, pcs, comm, rng, &mut ch, state, u, x, y)?.proof)
+    Ok(eval_with(ctx, pcs, comm, rng, &mut ch, state, u, x)?.proof)
 }
 
 /// $\mathsf{Eval}\langle \mathcal P\_1(\mathsf{st}\_1), \dots, \mathcal P\_n(\mathsf{st}\_n)
-/// \rangle(\mathsf{pp}, \mathbf u, \mathbf x)$ (`6_Collaborative_Hachi.tex`:426-437) for the party
-/// `comm.id()`, proving the claim $f(\mathbf x) = y$ for the polynomial committed in
+/// \rangle(\mathsf{pp}, \mathbf u, \mathbf x)$ (`6_Collaborative_Hachi.tex`:426-437; at the draft's
+/// commit `c071784` the composition of $\Pi\_A$, $\Pi\_B$, $\Pi\_C$) for the party `comm.id()`,
+/// proving that $y = E(u)$ is the value $f(\mathbf x)$ of the polynomial committed in
 /// $\mathbf u$, with the base PCS `pcs` (the same at every party and at the verifier) and the
 /// coins drawn from `ch`, which must be fresh: an [`FsChallenger`]`::new(`[`EVAL_DOMAIN`]`)` for a
 /// real proof ([`eval`]), or a replay challenger in fixture tests. Steps:
 ///
 /// 1. [`check_statement`], then [`absorb_statement`] (parameters, $\mathbf A, \mathbf B,
-///    \mathbf D$, the digest of `pcs`'s parameters, $\mathbf u$, $\mathbf x$, $y$);
-/// 2. $\Pi\_{\mathsf{conv}}$ ([`hachi_co_conv::pi_conv`], line 429): the public vectors,
-///    $\langle u \rangle\_p$ and $E(u)$; the provers check $y = E(u)$
-///    ([`hachi_co_conv::check`]) and stop with [`Error::ClaimMismatch`] if it fails; $E(u)$ is
+///    \mathbf D$, the digest of `pcs`'s parameters, $\mathbf u$, $\mathbf x$);
+/// 2. $\Pi\_{\mathsf{conv}}$ ([`hachi_co_conv::pi_conv`], line 429; $\Pi\_A$ at `c071784`): the
+///    public vectors, $\langle u \rangle\_p$ and $E(u)$, which is the value $y$; $E(u)$ is
 ///    absorbed under [`LABEL_E_U`];
 /// 3. the ring-to-linear step with its attempts ([`hachi_co_r2l::run`], line 435), which calls
 ///    `begin_attempt`, absorbs each attempt's $\mathbf v$ and draws $\mathbf c$ itself;
@@ -144,7 +144,7 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 ///
 /// # Errors
 /// [`Error::Statement`] for a statement that does not fit the context;
-/// [`Error::ClaimMismatch`] if $y \ne E(u)$; the errors of the building blocks
+/// the errors of the building blocks
 /// ([`Error::Conv`], [`Error::R2l`], [`Error::Sumcheck`]), which include those of `comm`,
 /// `rng`, `ch` and `pcs`.
 #[allow(clippy::too_many_arguments)] // eval's arguments, the base PCS and the challenger
@@ -163,12 +163,10 @@ pub fn eval_with<
     state: &PartyState<K>,
     u: &[Poly],
     x: &[Ext<K>],
-    y: &Ext<K>,
 ) -> Result<EvalOutput<K>, Error> {
-    check_statement(ctx, u, x, y)?;
-    absorb_statement(ch, ctx, &pcs.params_digest(), u, x, y);
+    check_statement(ctx, u, x)?;
+    absorb_statement(ch, ctx, &pcs.params_digest(), u, x);
     let conv = pi_conv(ctx, comm, state, x)?;
-    hachi_co_conv::check(ctx, y, &conv.e_u).map_err(Error::ClaimMismatch)?;
     ch.absorb_polys(LABEL_E_U, core::slice::from_ref(&conv.e_u));
     let r2l = hachi_co_r2l::run(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
     let (transcript, private) = {

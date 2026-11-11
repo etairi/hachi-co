@@ -4,8 +4,9 @@
 //!
 //! The statement is the public input of $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:426): the
 //! public parameters $\mathsf{pp}$ (the parameters and $\mathbf A, \mathbf B, \mathbf D$,
-//! lines 298-302), the commitment $\mathbf u$, the point $\mathbf x$ and the claimed evaluation
-//! $y$. The base PCS's own parameters (lines 294-297) enter through their digest
+//! lines 298-302), the commitment $\mathbf u$ and the point $\mathbf x$. Since the draft's commit
+//! `c071784` the value $y$ is not part of it: the verifier reads $y$ from $E(u)$ and outputs it.
+//! The base PCS's own parameters (lines 294-297) enter through their digest
 //! ([`BasePcs::params_digest`](hachi_co_core::BasePcs::params_digest)). Its commitments are
 //! absorbed before the sumcheck's coins, and every opening is made under a context derived from
 //! the transcript.
@@ -50,15 +51,13 @@ pub const LABEL_PP_D: &str = "hachi-co/eval/pp/D";
 pub const LABEL_PP_BASE: &str = "hachi-co/eval/pp/base-pcs";
 /// The label of the evaluation point $\mathbf x \in \mathbb F\_{q^k}^\ell$.
 pub const LABEL_X: &str = "hachi-co/eval/x";
-/// The label of the claimed evaluation $y \in \mathbb F\_{q^k}$.
-pub const LABEL_Y: &str = "hachi-co/eval/y";
 
 /// The parameter words of the statement: the choices of `params`
 /// ([`hachi_co_params::Choices`]) with the radius $\omega$ and the modulus $q$ resolved, as
 /// 64-bit integers in a fixed order, each with its label from [`LABELS_PARAMS`]:
 /// $\lambda$, $n$, $t$, $\ell$, $\alpha$, $\kappa$, $b$, $\omega$ (`params.omega`), the challenge
-/// set (0 for the $\ell\_1$ ball, 1 for the sparse set), the $\tau$ rule (0 tight, 1 the draft's,
-/// 2 ceil), $n\_A$, $n\_B$, $n\_D$, $m\_u$, $m\_v$, the rule of the pad (0 for
+/// set (0 for the $\ell\_1$ ball, 1 for the sparse set), the $\tau$ rule (0 tight, 1 the earlier
+/// draft's, 2 ceil), $n\_A$, $n\_B$, $n\_D$, $m\_u$, $m\_v$, the rule of the pad (0 for
 /// [`PadRule::Field`], 1 for [`PadRule::Residues`]), $q$ (`params.q`).
 ///
 /// [`hachi_co_params::derive`] computes every other parameter from these, so they fix the
@@ -118,8 +117,11 @@ fn rows(m: &Matrix) -> Vec<Poly> {
 /// 3. the digest of the base PCS's parameters under [`LABEL_PP_BASE`]
 ///    ([`Challenger::absorb_words`], one vector of four words);
 /// 4. the commitment $\mathbf u$ under [`hachi_co_commit::LABEL_U`];
-/// 5. $\mathbf x$ under [`LABEL_X`] and $y$ under [`LABEL_Y`]
-///    ([`Challenger::absorb_exts`]).
+/// 5. $\mathbf x$ under [`LABEL_X`] ([`Challenger::absorb_exts`]).
+///
+/// The statement is the public input $\mathbbm x\_1 = (\mathbf x, \mathbf u)$ of $\Pi\_A$
+/// (`6_Collaborative_Hachi.tex`, $\mathsf{Eval}$ step 1, at the draft's commit `c071784`): the
+/// value $y$ is not part of it, since the verifier reads it from $E(u)$ and outputs it.
 ///
 /// The provers and the verifier call it with the same arguments on a fresh challenger; check the
 /// statement first ([`check_statement`]), so that only canonical residues are absorbed.
@@ -129,7 +131,6 @@ pub fn absorb_statement<const K: usize, H: Challenger<K>>(
     base_digest: &[u8; 32],
     u: &[Poly],
     x: &[Ext<K>],
-    y: &Ext<K>,
 ) {
     for (label, value) in statement_words(&ctx.params) {
         ch.absorb_u64(label, value);
@@ -146,7 +147,6 @@ pub fn absorb_statement<const K: usize, H: Challenger<K>>(
     ch.absorb_words(LABEL_PP_BASE, &[digest]);
     ch.absorb_polys(hachi_co_commit::LABEL_U, u);
     ch.absorb_exts(LABEL_X, x);
-    ch.absorb_exts(LABEL_Y, core::slice::from_ref(y));
 }
 
 fn check_residues<'a>(
@@ -176,18 +176,16 @@ fn check_len(what: &'static str, expected: usize, actual: usize) -> Result<(), S
 }
 
 /// Checks that the statement fits the context: $\mathbf u$ has $n\_B$ ring elements of $d$
-/// coefficients, $\mathbf x$ has $\ell$ coordinates, and every residue of $\mathbf u$,
-/// $\mathbf x$ and $y$ is below $q$ (canonical encodings, so that one statement has one
-/// transcript).
+/// coefficients, $\mathbf x$ has $\ell$ coordinates, and every residue of $\mathbf u$ and
+/// $\mathbf x$ is below $q$ (canonical encodings, so that one statement has one transcript).
 ///
 /// # Errors
 /// [`StatementError::Shape`] or [`StatementError::NonCanonical`] for the first violation, in the
-/// order $\mathbf u$, $\mathbf x$, $y$.
+/// order $\mathbf u$, $\mathbf x$.
 pub fn check_statement<const K: usize>(
     ctx: &Context<K>,
     u: &[Poly],
     x: &[Ext<K>],
-    y: &Ext<K>,
 ) -> Result<(), StatementError> {
     let (l, q) = (&ctx.layout, ctx.q());
     check_len("u (n_B ring elements)", l.n_b, u.len())?;
@@ -196,6 +194,5 @@ pub fn check_statement<const K: usize>(
     }
     check_residues("u", u.iter().flat_map(|p| p.0.iter()), q)?;
     check_len("x (l coordinates)", l.ell, x.len())?;
-    check_residues("x", x.iter().flat_map(|e| e.0.iter()), q)?;
-    check_residues("y", y.0.iter(), q)
+    check_residues("x", x.iter().flat_map(|e| e.0.iter()), q)
 }

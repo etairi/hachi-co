@@ -142,7 +142,7 @@ fn every_fixture_records_a_passing_run() {
         for (group, count) in [
             ("transcript", 16 + 4 * n),
             ("witness", witnesses),
-            ("open", 4),
+            ("open", 6),
         ] {
             let tests = fx.get(&format!("/negative_tests/{group}")).unwrap();
             let tests = tests.as_object().unwrap();
