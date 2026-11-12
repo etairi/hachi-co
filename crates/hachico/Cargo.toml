@@ -24,6 +24,15 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[features]
+# The binary hachi-co-party-profile: hachi-co-party under a counting allocator, for memory profiles.
+alloc-profile = []
+
+[[bin]]
+name = "hachi-co-party-profile"
+path = "src/bin/hachi-co-party-profile.rs"
+required-features = ["alloc-profile"]
+
 # serde_json is a normal dependency of this crate, so the tests can use it without a dev-dependency.
 [dev-dependencies]
 hachi-co-core = { workspace = true, features = ["fixtures"] }
