@@ -1,0 +1,47 @@
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -18,6 +18,10 @@
+ #include "Fiat_Shamir.h"
+ #include "Distributed_Sumcheck.h"
+ #include "MPI_utils.hpp"
++
++// hachi-co patch: the payload counter of scripts/ppp26/mpi_count.c when it is preloaded, absent (null) otherwise.
++extern "C" { extern unsigned long long hco_mpi_sent_bytes __attribute__((weak)); }
++static double hco_mpi_kb() { return &hco_mpi_sent_bytes ? hco_mpi_sent_bytes / 1024.0 : -1.0; }
+ #include "timer.hpp"
+ #include <algorithm>
+ 
+@@ -841,12 +845,19 @@
+         
+         int l = (int)(-100.0/(log2(1-0.34*(1-(1.0/(double)rate))*(1.0-(double)_k/(double)N))));
+         double cm = 0;
++        // hachi-co patch: time the dealer emulation of the random shares and the masks' encoding and commitment,
++        // which the timed region below leaves out, and read the communication counters around both.
++        double hco_cm0 = ::cm, hco_mpi0 = hco_mpi_kb();
++        auto hco_t0 = std::chrono::steady_clock::now();
+         dummy_setup(R_shares, mask_shares, N, M, k, _k, l);
++        auto hco_t1 = std::chrono::steady_clock::now();
+         prepare_mask_shares(mask_shares, mask_data, C_mask, Com_mask, N, M, k, _k, l);
++        auto hco_t2 = std::chrono::steady_clock::now();
+         secret_share_coefficients(coefficients, M, N, _k, k);
+         
+         MPI_Barrier(MPI_COMM_WORLD);
+         pt_cp.reset();
++        double hco_cm1 = ::cm, hco_mpi1 = hco_mpi_kb();
+         
+         pt.start();
+         commit(codeword, row_data,coefficients, R_shares, C, l, k, _k, N);
+@@ -859,6 +870,13 @@
+         open_zk(codeword,C_mask,row_data,mask_data,C,Com_mask,r,F(0),l,k,_k,M,N,ps,false);
+         pt.end();
+         double open_time = pt.get_time()-commit_time;
++        double hco_mpi2 = hco_mpi_kb();
++        printf("hco-patch Id : %d, Commit time: %lf, Open time: %lf, Dealer setup: %lf, Mask commit: %lf, "
++               "Comm KB setup: %lf, Comm KB timed: %lf, MPI KB setup: %lf, MPI KB timed: %lf\n", rank, commit_time,
++               open_time, std::chrono::duration<double>(hco_t1 - hco_t0).count(),
++               std::chrono::duration<double>(hco_t2 - hco_t1).count(), hco_cm1 - hco_cm0, ::cm - hco_cm1,
++               hco_mpi0 < 0 ? -1.0 : hco_mpi1 - hco_mpi0, hco_mpi0 < 0 ? -1.0 : hco_mpi2 - hco_mpi1);
++        fflush(stdout);
+         
+         if(rank == 0){
+             vector<double> buff(4);

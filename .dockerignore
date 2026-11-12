@@ -1,0 +1,8 @@
+# The build context of docker/Dockerfile: the workspace's manifests and crates, nothing else.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!.cargo/
+**/target
+**/__pycache__

@@ -4,3 +4,4 @@
 *.poly
 *.preprocess
 .DS_Store
+/runs

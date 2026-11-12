@@ -1,0 +1,18 @@
+{
+ "project": "YOUR-PROJECT-ID",
+ "network": "default",
+ "machine_type": "c3-standard-8",
+ "image_family": "ubuntu-2404-lts-amd64",
+ "image_project": "ubuntu-os-cloud",
+ "boot_disk_gb": 50,
+ "rust": "1.99.1",
+ "port": 7300,
+ "tag": "hco-party",
+ "ssh_user": "",
+ "instances": [
+  {"name": "hco-p1", "zone": "us-central1-a"},
+  {"name": "hco-p2", "zone": "us-central1-a"},
+  {"name": "hco-p3", "zone": "us-central1-a"},
+  {"name": "hco-p4", "zone": "us-central1-a"}
+ ]
+}
