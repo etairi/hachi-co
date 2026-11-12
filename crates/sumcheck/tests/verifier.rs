@@ -290,12 +290,35 @@ fn transcript_tampering_fails_as_recorded() {
                 .unwrap()
         );
         conv_cases.push("tamper E(u) message: Pi_conv check".to_owned());
-        // v of the accepted attempt, coefficient 0 + 1, enters y and hence a.
+        // v, coefficient 0 + 1, enters y and hence a.
         let mut y_vec = inst.y.clone();
         y_vec[0].0[0] = (y_vec[0].0[0] + 1) % ctx.q();
         let bad = PublicInput::new(ctx, &inst.m, &y_vec, &inst.e, &inst.y_ring);
         check(
-            "tamper v (accepted attempt) coefficient 0 += 1".to_owned(),
+            "tamper v coefficient 0 += 1".to_owned(),
+            failing(inst, &honest, &bad, &run.privates),
+        );
+        // The verifier selects another iteration than j* (a tampered set of accepted
+        // iterations): M of that iteration does not fit z', and the final check of H1 fails.
+        let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+        let other = if j_star + 1 < l.rej_iterations {
+            j_star + 1
+        } else {
+            j_star - 1
+        };
+        let embed = |pointer: &str| -> Vec<Poly> {
+            fx.exts::<K>(pointer)
+                .unwrap()
+                .iter()
+                .map(|x| ctx.sub.embed(x))
+                .collect()
+        };
+        let c = fx.int_rows("/ring_to_linear/c").unwrap();
+        let m_other =
+            hachi_co_core::build_m(ctx, &embed("/conv/b"), &embed("/conv/a"), &c, other).unwrap();
+        let bad = PublicInput::new(ctx, &m_other, &inst.y, &inst.e, &inst.y_ring);
+        check(
+            format!("tamper the selected iteration j* -> {other}"),
             failing(inst, &honest, &bad, &run.privates),
         );
         seen.extend(conv_cases);

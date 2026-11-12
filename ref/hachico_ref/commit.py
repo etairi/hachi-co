@@ -1,7 +1,8 @@
-"""Setup (matrices), the instance input, AS.Share, PConv, Commit and Open.
+"""Setup (matrices), the instance input, PConv, Commit and Open.
 
-Draft references: Setup 6_CH:265-303; Commit 6_CH:305-401; Open 6_CH:403-421; PConv F2R:65-116;
-AS.Share 4_P:150-164; Slice 4_P:167-183; F_AH 4_P:185-201.
+Draft references: Setup 6_CH:265-303; Commit 6_CH:305-401 (without the resharing of 308-313 since the draft's
+commit 1096ea2: each party commits to its input share as it is); Open 6_CH:403-421; PConv F2R:65-116;
+AS.Share 4_P:150-164 (used here only to sample the input shares); Slice 4_P:167-183; F_AH 4_P:185-201.
 
 Indexing (m0-spec "Bit strings"): nat(b_1..b_s) = sum_j b_j 2^{s-j}, b_1 most significant, values in
 [0, 2^s).  The draft's nat (4_P:7) is 1-indexed and LSB-first; we use the m0-spec convention throughout,
@@ -85,18 +86,16 @@ def pconv(ctx, f_shares):
 
 # --------------------------------------------------------------- Commit ----
 def commit(ctx, pp, f_init):
-    """Commit<P_1(f_1), ..., P_n(f_n)>(pp) (6_CH:305-401).  Returns (u, states, data).
+    """Commit<P_1(<f>_1), ..., P_n(<f>_n)>(pp) (6_CH:305-401 as the draft's commit 1096ea2 revises it: no
+    resharing).  Returns (u, states, data).
 
     states[p] = {block i: dict(f_prime, s, t, t_hat)} for the blocks prover p owns (6_CH:400); each prover's
     state also comprises its rho^u_p, here data["rho_u"][p - 1] (signed, m_u ring elements)."""
     P, R, F = ctx.P, ctx.R, ctx.F
     n = P.n
-    # step 1-2: resharing by AS.Share, then local sums
-    resh = np.zeros((n, n) + f_init.shape[1:], dtype=np.int64)       # resh[i][j] = <f_i>_j
-    for i in range(n):
-        resh[i] = as_share(F, f_init[i], n, Prg(ctx.seed, "commit/reshare", i))
-    f_shares = resh.sum(axis=0) % F.q                                 # <f>_j = sum_i <f_i>_j
-    # step 3: PConv
+    # each party's share is its input share as it is (no resharing since the draft's commit 1096ea2)
+    f_shares = np.asarray(f_init, dtype=np.int64) % F.q
+    # PConv
     f_hat, f_prime = pconv(ctx, f_shares)
     # step 4: local inner commitments of the owned blocks
     A, B = pp["A"], pp["B"]
@@ -125,7 +124,7 @@ def commit(ctx, pp, f_init):
             slices[p - 1, i * w:(i + 1) * w] = st["t_hat"]
     t_hat_all = slices.sum(axis=0) % P.q
     u = R.matvec(B, np.concatenate([t_hat_all, R.reduce(rho_u.reshape(n * P.m_u, P.d))]))
-    data = dict(reshare=resh, f_shares=f_shares, f_hat=f_hat, f_prime=f_prime, t_hat_slices=slices,
+    data = dict(f_shares=f_shares, f_hat=f_hat, f_prime=f_prime, t_hat_slices=slices,
                 t_hat=t_hat_all, rho_u=rho_u, u=u)
     return u, states, data
 

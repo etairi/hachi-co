@@ -11,15 +11,14 @@ use std::collections::BTreeSet;
 #[cfg(doc)]
 use hachi_co_params::PadRule;
 
-/// The PRG domain of the resharing in Commit ([`PartyRandomness::reshare`]; index 0).
-pub const DOMAIN_RESHARE: &str = "hachi-co/commit/reshare";
-/// The PRG domain of the masks $\mathbf r\_i$ ([`PartyRandomness::mask`]; index = attempt).
+/// The PRG domain of the masks $\mathbf r\_i^j$ ([`PartyRandomness::mask`]; index = iteration
+/// $j$, 0-indexed).
 pub const DOMAIN_MASK: &str = "hachi-co/r2l/mask";
 /// The PRG domain of the commitment's randomness $\boldsymbol\rho^u\_i$
 /// ([`PartyRandomness::rho_u`]; index 0).
 pub const DOMAIN_RHO_U: &str = "hachi-co/commit/rho-u";
 /// The PRG domain of the first message's randomness $\boldsymbol\rho^v\_i$
-/// ([`PartyRandomness::rho_v`]; index = attempt).
+/// ([`PartyRandomness::rho_v`]; index 0).
 pub const DOMAIN_RHO_V: &str = "hachi-co/r2l/rho-v";
 /// The PRG domain of the witness pad $\rho^w\_i$ ([`PartyRandomness::rho_w`]; index 0).
 pub const DOMAIN_RHO_W: &str = "hachi-co/sumcheck/rho-w";
@@ -55,38 +54,19 @@ pub(crate) fn uniform_ext<const K: usize>(prg: &mut ShakePrg, q: u64) -> Result<
 /// [`PrgRandomness`] and `ReplayRandomness` implement the trait for every `K`. Generic code with
 /// a bound `R: PartyRandomness<K>` calls `rng.mask(..)` directly; on a concrete value, a method
 /// whose signature does not mention `K` (`mask`, `rho_u`, `rho_v`, `base_pcs`) needs it spelled out:
-/// `PartyRandomness::<4>::mask(&mut rng, attempt, gamma, len)`.
+/// `PartyRandomness::<4>::mask(&mut rng, iteration, gamma, len)`.
+///
+/// Commit draws no shares: since the draft's commit `1096ea2` each party commits to its input
+/// share as it is, without the resharing $\mathsf{AS.Share}$ of earlier drafts.
 pub trait PartyRandomness<const K: usize> {
-    /// $\mathsf{AS.Share}(\mathbf x, n)$ (`4_preliminaries.tex`:154; Commit,
-    /// `6_Collaborative_Hachi.tex`:308-310) of a vector $\mathbf x \in \mathbb F\_{q^K}^{len}$:
-    /// shares $1, \dots, n-1$ uniform in $\mathbb F\_{q^K}^{len}$ and share $n$ equal to
-    /// $\mathbf x - \sum\_{j \lt n} \langle \mathbf x \rangle\_j$. Returns the $n$ shares in order;
-    /// share $j$ goes to party $j$. For $n = 1$ the only share is $\mathbf x$.
-    ///
-    /// # Errors
-    /// [`Error::Parameter`] for $n = 0$, and implementation-specific errors.
-    fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>>;
-
-    /// [`PartyRandomness::reshare`] of a vector given in consecutive chunks, for a vector too
-    /// large for memory: the concatenated shares do not depend on the chunks. It replaces the
-    /// draw of `reshare`, not an addition to it.
-    ///
-    /// # Errors
-    /// [`Error::Parameter`] for $n = 0$ or a source without streams, and implementation-specific
-    /// errors.
-    fn reshare_stream(&mut self, _field: &Fqk<K>, _n: usize) -> Result<ReshareStream<K>> {
-        Err(Error::Parameter(
-            "this randomness source has no streaming AS.Share".into(),
-        ))
-    }
-
-    /// The mask $\mathbf r\_i \leftarrow \chi\_r$ of attempt `attempt` of the ring-to-linear step
-    /// (`5_Building_Blocks.tex`:122; `4_preliminaries.tex`:117): `len` $= N = d\delta 2^m$
-    /// integers uniform in $\[-\gamma, \gamma\]$, flat (element $i$, coefficient $j$ at $id + j$).
+    /// The mask $\mathbf r\_i^j \leftarrow \chi\_r$ of iteration `iteration` $= j$ (0-indexed,
+    /// the draft's $j + 1$) of the ring-to-linear step (`fig:ring-to-linear`, step 3, since the
+    /// draft's commit `1096ea2`; `4_preliminaries.tex`:117): `len` $= N = d\delta 2^m$ integers
+    /// uniform in $\[-\gamma, \gamma\]$, flat (element $i$, coefficient $j$ at $id + j$).
     ///
     /// # Errors
     /// [`Error::Sampling`] if $\gamma \gt 2^{63} - 1$, and implementation-specific errors.
-    fn mask(&mut self, attempt: u64, gamma: u64, len: usize) -> Result<Vec<i64>>;
+    fn mask(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>>;
 
     /// The commitment's randomness $\boldsymbol\rho^u\_i \leftarrow S\_b^{m\_u}$
     /// (`6_Collaborative_Hachi.tex`:382; $S\_b$ of `4_preliminaries.tex`:88): `len` $= m\_u d$
@@ -96,13 +76,13 @@ pub trait PartyRandomness<const K: usize> {
     /// [`Error::Sampling`] for $b = 0$, and implementation-specific errors.
     fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>>;
 
-    /// The first message's randomness $\boldsymbol\rho^v\_i \leftarrow S\_b^{m\_v}$ of attempt
-    /// `attempt` (`5_Building_Blocks.tex`:122; $S\_b$ of `4_preliminaries.tex`:88): `len`
+    /// The first message's randomness $\boldsymbol\rho^v\_i \leftarrow S\_b^{m\_v}$, one for all
+    /// $L$ iterations (`fig:ring-to-linear`, step 3; $S\_b$ of `4_preliminaries.tex`:88): `len`
     /// $= m\_v d$ integers uniform in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, flat.
     ///
     /// # Errors
     /// [`Error::Sampling`] for $b = 0$, and implementation-specific errors.
-    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>>;
+    fn rho_v(&mut self, b: u64, len: usize) -> Result<Vec<i64>>;
 
     /// The witness pad $\rho^w\_i \leftarrow \mathbb F\_{q^K}$ (`5_Building_Blocks.tex`:252).
     ///
@@ -146,16 +126,15 @@ pub trait PartyRandomness<const K: usize> {
 ///
 /// | Method | PRG stream (`seed`, domain, index) | draws, in order |
 /// |---|---|---|
-/// | `reshare` | [`DOMAIN_RESHARE`], 0 | shares $1..n-1$, element by element, each element's $K$ coordinates by [`uniform::uniform_mod_q`] |
-/// | `mask` | [`DOMAIN_MASK`], attempt | [`rej::mask`] ($\[-\gamma, \gamma\]$, entry by entry) |
+/// | `mask` | [`DOMAIN_MASK`], iteration | [`rej::mask`] ($\[-\gamma, \gamma\]$, entry by entry) |
 /// | `rho_u` | [`DOMAIN_RHO_U`], 0 | [`uniform::short`] ($S\_b$, entry by entry) |
-/// | `rho_v` | [`DOMAIN_RHO_V`], attempt | [`uniform::short`] ($S\_b$, entry by entry) |
-/// | `rho_w` | [`DOMAIN_RHO_W`], 0 | one element, as in `reshare` |
-/// | `blinder` | [`DOMAIN_BLINDER_G0`] or [`DOMAIN_BLINDER_G1`], 0 | $s\_0$, then $s\_{j,k}$ row by row, each element as in `reshare` |
+/// | `rho_v` | [`DOMAIN_RHO_V`], 0 | [`uniform::short`] ($S\_b$, entry by entry) |
+/// | `rho_w` | [`DOMAIN_RHO_W`], 0 | one element of $\mathbb F\_{q^K}$, its $K$ coordinates by [`uniform::uniform_mod_q`] |
+/// | `blinder` | [`DOMAIN_BLINDER_G0`] or [`DOMAIN_BLINDER_G1`], 0 | $s\_0$, then $s\_{j,k}$ row by row, each element as in `rho_w` |
 /// | `base_pcs` | [`DOMAIN_BASE_PCS`], index | the first 32 bytes of the stream |
 ///
 /// **No reuse.** Each stream is served at most once: a second request for the same domain and
-/// index is [`Error::RandomnessReuse`], because a reused mask or share leaks the secret it hides
+/// index is [`Error::RandomnessReuse`], because a reused mask leaks the secret it hides
 /// (plan `docs/hachi-co-plan.md`, finding F5). A request that fails (for example with an invalid
 /// $\gamma$) does not use up its stream. One `PrgRandomness` therefore serves one Commit and one
 /// Eval of one party; use a fresh seed for every further Eval.
@@ -205,73 +184,19 @@ impl PrgRandomness {
     }
 }
 
-/// $\mathsf{AS.Share}$ of a vector given in consecutive chunks
-/// ([`PartyRandomness::reshare_stream`]): share $j \lt n$ is the stream
-/// (seed, [`DOMAIN_RESHARE`], $j - 1$) of uniform elements of $\mathbb F\_{q^K}$.
-pub struct ReshareStream<const K: usize> {
-    field: Fqk<K>,
-    shares: Vec<ShakePrg>,
-}
-
-impl<const K: usize> ReshareStream<K> {
-    /// The shares of the next chunk `input`, in order; share $j$ goes to party $j$.
-    ///
-    /// # Errors
-    /// The errors of the sampler.
-    pub fn next_chunk(&mut self, input: &[Ext<K>]) -> Result<Vec<Vec<Ext<K>>>> {
-        let (field, q) = (&self.field, self.field.modulus());
-        let mut last: Vec<Ext<K>> = input.iter().map(|x| field.reduce(x)).collect();
-        let mut shares = Vec::with_capacity(self.shares.len() + 1);
-        for prg in &mut self.shares {
-            let share = (0..input.len())
-                .map(|_| uniform_ext::<K>(prg, q))
-                .collect::<Result<Vec<_>>>()?;
-            for (l, s) in last.iter_mut().zip(&share) {
-                *l = field.sub(l, s);
-            }
-            shares.push(share);
-        }
-        shares.push(last);
-        Ok(shares)
-    }
-}
-
 impl<const K: usize> PartyRandomness<K> for PrgRandomness {
-    fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>> {
-        PartyRandomness::<K>::reshare_stream(self, field, n)?.next_chunk(input)
-    }
-
-    fn reshare_stream(&mut self, field: &Fqk<K>, n: usize) -> Result<ReshareStream<K>> {
-        if n == 0 {
-            return Err(Error::Parameter("AS.Share needs n >= 1".into()));
-        }
-        if !self.used.insert((DOMAIN_RESHARE, 0)) {
-            return Err(Error::RandomnessReuse {
-                kind: DOMAIN_RESHARE,
-                index: 0,
-            });
-        }
-        let shares = (1..n as u64)
-            .map(|j| ShakePrg::new(&self.seed, DOMAIN_RESHARE.as_bytes(), j - 1))
-            .collect();
-        Ok(ReshareStream {
-            field: field.clone(),
-            shares,
+    fn mask(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
+        self.draw(DOMAIN_MASK, iteration, |prg| {
+            Ok(rej::mask(prg, gamma, len)?)
         })
-    }
-
-    fn mask(&mut self, attempt: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
-        self.draw(DOMAIN_MASK, attempt, |prg| Ok(rej::mask(prg, gamma, len)?))
     }
 
     fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
         self.draw(DOMAIN_RHO_U, 0, |prg| Ok(uniform::short(prg, b, len)?))
     }
 
-    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
-        self.draw(DOMAIN_RHO_V, attempt, |prg| {
-            Ok(uniform::short(prg, b, len)?)
-        })
+    fn rho_v(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
+        self.draw(DOMAIN_RHO_V, 0, |prg| Ok(uniform::short(prg, b, len)?))
     }
 
     fn rho_w(&mut self, field: &Fqk<K>) -> Result<Ext<K>> {

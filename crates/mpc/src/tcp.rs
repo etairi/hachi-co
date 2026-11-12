@@ -45,9 +45,10 @@
 //! | payload | $m$ words, each `u64` little-endian |
 //!
 //! that is $18 + L + 8m$ bytes, of which [`Stats`](crate::Stats) counts the $8m$ of the payload.
-//! A frame of $2^{28}$ words (2 GiB) carries the resharing of Commit up to $\ell = 26$ with
-//! $k = 4$ ($2^\ell k$ words to each party, `6_Collaborative_Hachi.tex`:308-310); larger
-//! witnesses need a streaming transfer, which this transport does not do. The receiver checks
+//! A frame of $2^{28}$ words (2 GiB) carried the resharing of Commit up to $\ell = 26$ with
+//! $k = 4$ ($2^\ell k$ words to each party, `6_Collaborative_Hachi.tex`:308-310 at `8834c9f`);
+//! since the draft's commit `1096ea2` Commit sends no shares, and every message of the protocol
+//! is far smaller. The receiver checks
 //! both bounds before it allocates anything, and it allocates the payload as its words arrive,
 //! so a peer cannot make it reserve memory for words that it does not send. A frame that breaks
 //! the format (a label longer than the bound or not UTF-8, a payload longer than the bound) is

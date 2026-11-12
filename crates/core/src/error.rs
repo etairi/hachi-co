@@ -68,18 +68,17 @@ pub enum Error {
     #[error("integer overflow in {0}")]
     Overflow(&'static str),
     /// A [`PrgRandomness`](crate::PrgRandomness) stream was requested a second time. Reusing a
-    /// mask or a share leaks the secret it hides (plan `docs/hachi-co-plan.md`, finding F5), so
+    /// mask leaks the secret it hides (plan `docs/hachi-co-plan.md`, finding F5), so
     /// each stream is served once.
     #[error("randomness stream {kind} with index {index} was already used")]
     RandomnessReuse {
         /// The kind of randomness (the PRG domain).
         kind: &'static str,
-        /// The stream index (the attempt for masks and $\boldsymbol\rho$, otherwise 0).
+        /// The stream index (the iteration for masks, otherwise 0).
         index: u64,
     },
-    /// A challenger was used out of order (for example
-    /// [`Challenger::begin_attempt`](crate::Challenger::begin_attempt)`(a)` with $a \gt 0$ before
-    /// attempt 0); the message names the misuse.
+    /// A challenger was used out of order (for example a sumcheck round coin for round 0); the
+    /// message names the misuse.
     #[error("challenger: {0}")]
     Challenger(String),
     /// A base polynomial commitment scheme ([`BasePcs`](crate::BasePcs)) refused an input: a

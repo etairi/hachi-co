@@ -29,12 +29,14 @@ fn partition_matches_a_brute_force_reimplementation() {
                 owner[l.t + i * l.n_a * l.delta + e] = p;
             }
         }
+        let iters = l.rej_iterations;
         for p in 1..=n {
-            for e in 0..l.delta {
-                owner[l.w0 + (p - 1) * l.delta + e] = p;
+            // The L digit vectors of every prover, prover-major (the draft's w0_hat since 1096ea2).
+            for e in 0..iters * l.delta {
+                owner[l.w0 + (p - 1) * iters * l.delta + e] = p;
             }
-            for e in 0..l.n_a * l.delta {
-                owner[l.t0 + (p - 1) * l.n_a * l.delta + e] = p;
+            for e in 0..iters * l.n_a * l.delta {
+                owner[l.t0 + (p - 1) * iters * l.n_a * l.delta + e] = p;
             }
             for e in 0..l.m_v {
                 owner[l.rho_v + (p - 1) * l.m_v + e] = p;
@@ -96,21 +98,34 @@ fn ranges_follow_the_element_major_layout() {
             assert_eq!(t.start, l.t + i * l.n_a * l.delta);
         }
         assert!(l.w_hat_range(l.n_blocks).is_empty() && l.t_hat_range(l.n_blocks).is_empty());
+        let iters = l.rej_iterations;
+        assert_eq!(iters, 16, "the toys have L = 16");
         for p in 1..=n {
-            assert_eq!(l.w0_hat_range(p).len(), l.delta);
-            assert_eq!(l.t0_hat_range(p).len(), l.n_a * l.delta);
+            for j in 0..iters {
+                let w0 = l.w0_hat_range(p, j);
+                assert_eq!(w0.len(), l.delta);
+                assert_eq!(w0.start, l.w0 + ((p - 1) * iters + j) * l.delta);
+                let t0 = l.t0_hat_range(p, j);
+                assert_eq!(t0.len(), l.n_a * l.delta);
+                assert_eq!(t0.start, l.t0 + ((p - 1) * iters + j) * l.n_a * l.delta);
+            }
+            assert!(l.w0_hat_range(p, iters).is_empty() && l.t0_hat_range(p, iters).is_empty());
+            assert_eq!(l.w0_hat_block(p).start, l.w0_hat_range(p, 0).start);
+            assert_eq!(l.w0_hat_block(p).end, l.w0_hat_range(p, iters - 1).end);
+            assert_eq!(l.t0_hat_block(p).start, l.t0_hat_range(p, 0).start);
+            assert_eq!(l.t0_hat_block(p).end, l.t0_hat_range(p, iters - 1).end);
             assert_eq!(l.rho_v_range(p).len(), l.m_v);
             assert_eq!(l.rho_u_range(p).len(), l.m_u);
         }
-        assert_eq!(l.w0_hat_range(n).end, l.t0);
-        assert_eq!(l.t0_hat_range(n).end, l.rho_v);
+        assert_eq!(l.w0_hat_range(n, iters - 1).end, l.t0);
+        assert_eq!(l.t0_hat_range(n, iters - 1).end, l.rho_v);
         assert_eq!(l.rho_v_range(n).end, l.t);
         assert_eq!(l.t_hat_range(l.n_blocks - 1).end, l.rho_u);
         assert_eq!(l.rho_u_range(n).end, l.z);
         assert_eq!(l.z_hat_range().len(), l.width_a * l.tau);
         for p in [0, n + 1] {
-            assert!(l.w0_hat_range(p).is_empty());
-            assert!(l.t0_hat_range(p).is_empty());
+            assert!(l.w0_hat_range(p, 0).is_empty() && l.w0_hat_block(p).is_empty());
+            assert!(l.t0_hat_range(p, 0).is_empty() && l.t0_hat_block(p).is_empty());
             assert!(l.rho_v_range(p).is_empty());
             assert!(l.rho_u_range(p).is_empty());
         }

@@ -136,9 +136,9 @@ pub struct Instance {
     pub name: &'static str,
     pub fx: Fixture,
     pub ctx: Context<K>,
-    /// M from `core::build_m` with b, a from `conv` and c from the accepted attempt.
+    /// M from `core::build_m` with b, a from `conv`, c and the selected iteration j*.
     pub m: Matrix,
-    /// y from `core::build_y` with the accepted attempt's v and the commitment u.
+    /// y from `core::build_y` with v and the commitment u.
     pub y: Vec<Poly>,
     /// The matrix of E at the point v of Pi_conv (`Subfield::e_matrix`).
     pub e: Vec<Vec<u64>>,
@@ -168,19 +168,15 @@ fn build(name: &'static str) -> Instance {
             .map(|x| ctx.sub.embed(x))
             .collect()
     };
-    let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
-    let c = fx
-        .int_rows(&format!("/ring_to_linear/attempts/{accepted}/c"))
-        .unwrap();
-    let m = build_m(&ctx, &embed("/conv/b"), &embed("/conv/a"), &c).unwrap();
+    let c = fx.int_rows("/ring_to_linear/c").unwrap();
+    let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+    let m = build_m(&ctx, &embed("/conv/b"), &embed("/conv/a"), &c, j_star).unwrap();
     assert_eq!(
         sha256_residues(m.iter().flatten().flat_map(|p| p.0.iter().copied())),
         fx.str("/ring_to_linear/M_sha256").unwrap(),
         "{name}: M"
     );
-    let v = fx
-        .polys(&format!("/ring_to_linear/attempts/{accepted}/v"))
-        .unwrap();
+    let v = fx.polys("/ring_to_linear/v").unwrap();
     let y = build_y(&ctx, &v, &fx.polys("/commit/u").unwrap()).unwrap();
     assert_eq!(y, fx.polys("/ring_to_linear/y").unwrap(), "{name}: y");
     let e = ctx

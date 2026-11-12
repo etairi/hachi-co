@@ -4,18 +4,20 @@
 use crate::error::{DecodeError, ProofError};
 use hachi_co_core::{Context, Ext, Layout, Poly};
 use hachi_co_params::sizes::BasePcsWords;
-use hachi_co_r2l::MAX_ATTEMPTS;
 use hachi_co_sumcheck::{ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckTranscript};
 
 /// The first 8 bytes of every encoded [`EvalProof`].
 pub const MAGIC: [u8; 8] = *b"HCO-EVAL";
 
-/// The version of the encoding, the second 8 bytes of the header (little-endian): 3 since the
-/// value $y$ left the statement (it is read from $E(u)$, so the Fiat-Shamir transcript no longer
-/// absorbs a claimed value, and proofs of version 2 do not verify), 2 since the proof carries
-/// the base PCS's commitments and opening proofs (version 1, the encoding without a base PCS,
-/// had neither). The layout of the encoding is the same in versions 2 and 3.
-pub const VERSION: u64 = 3;
+/// The version of the encoding, the second 8 bytes of the header (little-endian): 4 since the
+/// ring-to-linear step has $L$ parallel iterations of the rejection sampling (the draft's commit
+/// `1096ea2`), so that the proof carries the provers' sets of accepted iterations in place of the
+/// index of an accepted attempt; 3 since the value $y$ left the statement (it is read from
+/// $E(u)$, so the Fiat-Shamir transcript no longer absorbs a claimed value, and proofs of
+/// version 2 do not verify), 2 since the proof carries the base PCS's commitments and opening
+/// proofs (version 1, the encoding without a base PCS, had neither). The layout of the encoding
+/// is the same in versions 2 and 3.
+pub const VERSION: u64 = 4;
 
 /// The length of the header: [`MAGIC`] and [`VERSION`].
 pub const HEADER_LEN: usize = 16;
@@ -30,8 +32,8 @@ const _: () = assert!(8 == hachi_co_params::sizes::WORD_BYTES);
 const PCS_ORDER: [ClaimedPoly; 3] = [ClaimedPoly::W, ClaimedPoly::G0, ClaimedPoly::G1];
 
 /// What the provers send to the verifier in $\mathsf{Eval}$ (`6_Collaborative_Hachi.tex`:
-/// 426-437): the public messages of $\Pi\_{\mathsf{conv}}$, of the accepted attempt of the
-/// ring-to-linear step and of the sumcheck, whose transcript carries the base PCS's commitments
+/// 426-437): the public messages of $\Pi\_{\mathsf{conv}}$, of the ring-to-linear step and of
+/// the sumcheck, whose transcript carries the base PCS's commitments
 /// and opening proofs as words. The verifier's coins are not part of it: it re-derives them, the
 /// challenges $\mathbf c$ included.
 ///
@@ -43,12 +45,12 @@ pub struct EvalProof<const K: usize> {
     /// $E(u) \in \mathcal R\_q^H$, the output of $\mathcal F\_{\mathsf{AH}}(E)$
     /// (`field-to-ring-rok.tex`:189-193): $d$ residues.
     pub e_u: Poly,
-    /// The index $a^\ast$ of the accepted attempt of the ring-to-linear step
-    /// (`5_Building_Blocks.tex`:141; Fiat-Shamir with aborts, `ref/README.md`, choice 5), below
-    /// [`MAX_ATTEMPTS`].
-    pub attempt: u64,
-    /// The accepted attempt's first message $\mathbf v \in \mathcal R\_q^{n\_D}$
-    /// (`5_Building_Blocks.tex`:132-133).
+    /// The provers' sets $R\_1, \dots, R\_n$ of accepted iterations of the rejection sampling
+    /// (`fig:ring-to-linear`, step 6), $\lceil L/64 \rceil$ words each
+    /// ([`hachi_co_r2l::accept`]); the verifier computes $j^\ast$ from them.
+    pub accept_sets: Vec<Vec<u64>>,
+    /// The first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the ring-to-linear step
+    /// (`5_Building_Blocks.tex`:132-133), which commits to the images of all $L$ masks.
     pub v: Vec<Poly>,
     /// The sumcheck transcript (`5_Building_Blocks.tex`:249-273, 325-332, 346-352): $G\_{0,p},
     /// G\_{1,p}$, the base-PCS commitments, the $\ell''$ round messages, the final values and the
@@ -66,22 +68,28 @@ fn add(a: usize, b: usize) -> Result<usize, DecodeError> {
     a.checked_add(b).ok_or(DecodeError::Overflow)
 }
 
-/// The words of the encoding besides the base PCS's items: $a^\ast$, the $6n$ lengths of the
-/// items and the residues, $1 + 6n + d + n\_D d + k(2n + \ell''(d\_0 + d\_1 + 2) + 3n)$.
+/// The words of the $n$ sets of accepted iterations, $n \lceil L/64 \rceil$.
+fn accept_words(l: &Layout) -> Result<usize, DecodeError> {
+    mul(l.n, l.rej_iterations.div_ceil(64))
+}
+
+/// The words of the encoding besides the base PCS's items: the accept sets, the $6n$ lengths of
+/// the items and the residues, $n \lceil L/64 \rceil + 6n + d + n\_D d + k(2n + \ell''(d\_0 +
+/// d\_1 + 2) + 3n)$.
 fn fixed_words(l: &Layout) -> Result<usize, DecodeError> {
     // Field elements: 2n sums, l'' rounds of (d0 + 1) + (d1 + 1) values, 3n final values.
     let per_round = add(add(l.d0, l.d1)?, 2)?;
     let exts = add(add(mul(2, l.n)?, mul(l.ell_pp, per_round)?)?, mul(3, l.n)?)?;
-    let head = add(1, mul(6, l.n)?)?;
+    let head = add(accept_words(l)?, mul(6, l.n)?)?;
     add(add(head, add(l.d, mul(l.n_d, l.d)?)?)?, mul(exts, l.k)?)
 }
 
 /// The number of bytes of [`EvalProof::to_bytes`] for a proof of `layout` with a base PCS whose
 /// items of each prover have the words `base`: the header ([`HEADER_LEN`]) and
-/// $8(1 + 6n + d + n\_D d + k(2n + \ell''(d\_0 + d\_1 + 2) + 3n) + n(c\_w + c\_{g\_0} + c\_{g\_1} +
-/// \pi\_w + \pi\_{g\_0} + \pi\_{g\_1}))$ bytes: one little-endian word for $a^\ast$, one per
-/// length of a base-PCS item, one per residue (a field element has $k$ residues), and the
-/// items' own words. This is the formula of [`hachi_co_params::sizes_with_base`], computed here
+/// $8(n \lceil L/64 \rceil + 6n + d + n\_D d + k(2n + \ell''(d\_0 + d\_1 + 2) + 3n) + n(c\_w +
+/// c\_{g\_0} + c\_{g\_1} + \pi\_w + \pi\_{g\_0} + \pi\_{g\_1}))$ bytes: the little-endian
+/// words of the accept sets, one per length of a base-PCS item, one per residue (a field element
+/// has $k$ residues), and the items' own words. This is the formula of [`hachi_co_params::sizes_with_base`], computed here
 /// from the layout.
 ///
 /// # Errors
@@ -142,13 +150,26 @@ fn check_exts<const K: usize>(
     check_canonical(what, values.iter().flat_map(|e| e.0.iter()), q)
 }
 
-/// The attempt index must be below the cap.
-fn check_attempt(attempt: u64) -> Result<(), ProofError> {
-    if attempt >= MAX_ATTEMPTS {
-        return Err(ProofError::AttemptOutOfRange {
-            attempt,
-            cap: MAX_ATTEMPTS,
-        });
+/// The $n$ sets of accepted iterations must have $\lceil L/64 \rceil$ words each and name only
+/// iterations below $L$ ([`hachi_co_r2l::check_accept_set`]).
+fn check_accept_sets<const K: usize>(
+    ctx: &Context<K>,
+    sets: &[Vec<u64>],
+) -> Result<(), ProofError> {
+    let l = &ctx.layout;
+    check_len("accept sets (one per prover)", l.n, sets.len())?;
+    for (p0, set) in sets.iter().enumerate() {
+        check_len(
+            "accept set (ceil(L/64) words)",
+            l.rej_iterations.div_ceil(64),
+            set.len(),
+        )?;
+        if hachi_co_r2l::check_accept_set(ctx, p0 + 1, set).is_err() {
+            return Err(ProofError::AcceptSet {
+                party: p0 + 1,
+                iterations: l.rej_iterations,
+            });
+        }
     }
     Ok(())
 }
@@ -231,7 +252,8 @@ impl Reader<'_> {
 }
 
 impl<const K: usize> EvalProof<K> {
-    /// Checks the proof against the context: $a^\ast$ below [`MAX_ATTEMPTS`]; $E(u)$ with $d$
+    /// Checks the proof against the context: $n$ sets of accepted iterations of
+    /// $\lceil L/64 \rceil$ words, each naming only iterations below $L$; $E(u)$ with $d$
     /// residues; $\mathbf v$ with $n\_D$ ring elements of $d$ residues; $n$ sums $G\_{0,p}$ and
     /// $n$ sums $G\_{1,p}$; $n$ base-PCS commitments of each polynomial; $\ell''$ round messages
     /// of $d\_0 + 1$ and $d\_1 + 1$ field elements; $n$ final values of each kind; $n$ base-PCS
@@ -244,7 +266,7 @@ impl<const K: usize> EvalProof<K> {
     /// The first violation, in the order of the encoding.
     pub fn validate(&self, ctx: &Context<K>) -> Result<(), ProofError> {
         let (l, q) = (&ctx.layout, ctx.q());
-        check_attempt(self.attempt)?;
+        check_accept_sets(ctx, &self.accept_sets)?;
         let t = &self.sumcheck;
         for poly in PCS_ORDER {
             check_len(
@@ -278,7 +300,7 @@ impl<const K: usize> EvalProof<K> {
     }
 
     /// The number of bytes of [`EvalProof::to_bytes`] for this proof, counted without encoding
-    /// it: the header, $a^\ast$, one length word per base-PCS item, every residue and the words
+    /// it: the header, the accept sets, one length word per base-PCS item, every residue and the words
     /// of the base-PCS items as they are (saturating at `usize::MAX`). For a proof that passes
     /// [`EvalProof::validate`] it is [`encoded_len`] with the words of its base-PCS items.
     pub fn encoded_len(&self) -> usize {
@@ -293,7 +315,11 @@ impl<const K: usize> EvalProof<K> {
             + t.finals.g0.len()
             + t.finals.g1.len();
         let items = pcs_items(&t.commitments).count() + pcs_items(&t.openings).count();
-        let words = 1usize
+        let words = self
+            .accept_sets
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
             .saturating_add(items)
             .saturating_add(t.commitments.total_words())
             .saturating_add(t.openings.total_words())
@@ -308,7 +334,7 @@ impl<const K: usize> EvalProof<K> {
     /// The canonical encoding: the 16-byte header ([`MAGIC`], then [`VERSION`] as a
     /// little-endian `u64`) followed by little-endian `u64` words in this order:
     ///
-    /// 1. $a^\ast$;
+    /// 1. the sets $R\_1, \dots, R\_n$, $\lceil L/64 \rceil$ words each;
     /// 2. the lengths, in words, of the $6n$ base-PCS items of 5 and 8, in their order there
     ///    (the commitments, then the opening proofs), so that the decoder knows the exact length
     ///    of the encoding before reading the rest;
@@ -339,7 +365,7 @@ impl<const K: usize> EvalProof<K> {
             }
         };
         let exts = |list: &[Ext<K>]| list.iter().flat_map(|e| e.0).collect::<Vec<u64>>();
-        put(&mut out, &mut core::iter::once(self.attempt));
+        put(&mut out, &mut self.accept_sets.iter().flatten().copied());
         put(
             &mut out,
             &mut pcs_items(&t.commitments)
@@ -375,7 +401,8 @@ impl<const K: usize> EvalProof<K> {
     /// encodings of the proofs that pass [`EvalProof::validate`]: the header must be [`MAGIC`] and
     /// [`VERSION`]; the length must be [`encoded_len`] of the context with the lengths of the
     /// base-PCS items written in the encoding (read first, so that the length is checked before
-    /// the rest is read); every residue must be below $q$ and $a^\ast$ below [`MAX_ATTEMPTS`].
+    /// the rest is read); every residue must be below $q$ and every accept set must name only
+    /// iterations below $L$.
     /// The base PCS's words are taken as they are (the verifier decodes them). Never panics,
     /// and allocates no more than the encoding's length.
     ///
@@ -384,8 +411,8 @@ impl<const K: usize> EvalProof<K> {
     /// base-PCS items (then `expected` is the length with empty items), or than the length they
     /// imply; [`DecodeError::BadMagic`], [`DecodeError::UnsupportedVersion`];
     /// [`DecodeError::TrailingBytes`] for more bytes than that length;
-    /// [`DecodeError::Invalid`] for a non-canonical residue or an attempt index at or beyond the
-    /// cap; [`DecodeError::Overflow`] if the length overflows.
+    /// [`DecodeError::Invalid`] for a non-canonical residue or an accept set beyond $L$;
+    /// [`DecodeError::Overflow`] if the length overflows.
     pub fn from_bytes(ctx: &Context<K>, bytes: &[u8]) -> Result<Self, DecodeError> {
         let (l, q) = (&ctx.layout, ctx.q());
         let shortest = encoded_len(l, &BasePcsWords::default())?;
@@ -409,7 +436,8 @@ impl<const K: usize> EvalProof<K> {
         }
         let (words, _) = body.as_chunks::<8>();
         let items = mul(6, l.n)?;
-        let Some(table) = words.get(1..add(1, items)?) else {
+        let sets = accept_words(l)?;
+        let Some(table) = words.get(sets..add(sets, items)?) else {
             return Err(truncated);
         };
         let lengths = table
@@ -431,8 +459,15 @@ impl<const K: usize> EvalProof<K> {
             actual,
             q,
         };
-        let attempt = r.word()?;
-        check_attempt(attempt)?;
+        let set_len = l.rej_iterations.div_ceil(64);
+        let accept_sets = (0..l.n)
+            .map(|_| {
+                (0..set_len)
+                    .map(|_| r.word())
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        check_accept_sets(ctx, &accept_sets)?;
         for _ in 0..items {
             r.word()?;
         }
@@ -460,7 +495,7 @@ impl<const K: usize> EvalProof<K> {
         let openings = r.pcs_words(l.n, proof_lengths)?;
         Ok(Self {
             e_u,
-            attempt,
+            accept_sets,
             v,
             sumcheck: SumcheckTranscript {
                 g0_sums,

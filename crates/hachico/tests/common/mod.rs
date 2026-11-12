@@ -207,16 +207,34 @@ pub fn fixture_transcript(fx: &Fixture) -> SumcheckTranscript<K> {
     }
 }
 
-/// The proof assembled from a fixture's recorded values (`conv/E_u`, the accepted attempt and
-/// its `v`, and the sumcheck transcript), without base-PCS words: what the oracle records.
-pub fn fixture_proof_without_pcs(fx: &Fixture) -> EvalProof<K> {
-    let accepted = fx.u64("/ring_to_linear/accepted_attempt").unwrap();
+/// The provers' sets of accepted iterations as a fixture records them
+/// (`ring_to_linear/accept_sets`), as the words of [`hachi_co_r2l::encode_accept_set`].
+pub fn fixture_accept_sets(fx: &Fixture, ctx: &Context<K>) -> Vec<Vec<u64>> {
+    (0..fx.n())
+        .map(|p0| {
+            let listed: Vec<usize> = fx
+                .get(&format!("/ring_to_linear/accept_sets/{p0}"))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|j| j.as_u64().unwrap() as usize)
+                .collect();
+            let flags: Vec<bool> = (0..ctx.layout.rej_iterations)
+                .map(|j| listed.contains(&j))
+                .collect();
+            hachi_co_r2l::encode_accept_set(ctx, &flags).unwrap()
+        })
+        .collect()
+}
+
+/// The proof assembled from a fixture's recorded values (`conv/E_u`, the sets of accepted
+/// iterations, `v`, and the sumcheck transcript), without base-PCS words: what the oracle records.
+pub fn fixture_proof_without_pcs(fx: &Fixture, ctx: &Context<K>) -> EvalProof<K> {
     EvalProof {
         e_u: fx.poly("/conv/E_u").unwrap(),
-        attempt: accepted,
-        v: fx
-            .polys(&format!("/ring_to_linear/attempts/{accepted}/v"))
-            .unwrap(),
+        accept_sets: fixture_accept_sets(fx, ctx),
+        v: fx.polys("/ring_to_linear/v").unwrap(),
         sumcheck: fixture_transcript(fx),
     }
 }
@@ -302,7 +320,7 @@ pub fn clear_pcs_words<H: Challenger<K>>(
 /// ([`recorded_polynomials`]) at the recorded point, under the replay challenger's contexts.
 pub fn fixture_proof(fx: &Fixture) -> EvalProof<K> {
     let ctx = fx.context::<K>().unwrap();
-    let mut proof = fixture_proof_without_pcs(fx);
+    let mut proof = fixture_proof_without_pcs(fx, &ctx);
     let point = fx.exts::<K>("/sumcheck/coins/a").unwrap();
     let mut ch = ReplayChallenger::new(fx).unwrap();
     let (commitments, openings) =
@@ -410,8 +428,8 @@ pub fn assert_claims_match(
     assert!(pcs.iter().all(|(_, ok)| *ok), "{what}: {pcs:?}");
 }
 
-/// The matrix $\mathbf M$ of a fixture's accepted attempt, rebuilt from the recorded public
-/// vectors and challenges (for the tests that compare the provers' relation).
+/// The matrix $\mathbf M$ of a fixture, rebuilt from the recorded public vectors, challenges and
+/// selected iteration (for the tests that compare the provers' relation).
 pub fn fixture_m(fx: &Fixture, ctx: &Context<K>) -> Vec<Vec<Poly>> {
     let embed = |pointer: &str| -> Vec<Poly> {
         fx.exts::<K>(pointer)
@@ -420,11 +438,9 @@ pub fn fixture_m(fx: &Fixture, ctx: &Context<K>) -> Vec<Vec<Poly>> {
             .map(|x| ctx.sub.embed(x))
             .collect()
     };
-    let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
-    let c = fx
-        .int_rows(&format!("/ring_to_linear/attempts/{accepted}/c"))
-        .unwrap();
-    build_m(ctx, &embed("/conv/b"), &embed("/conv/a"), &c).unwrap()
+    let c = fx.int_rows("/ring_to_linear/c").unwrap();
+    let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+    build_m(ctx, &embed("/conv/b"), &embed("/conv/a"), &c, j_star).unwrap()
 }
 
 /// One call made to a [`Recorder`]: the method, the label (for absorbs), the number of absorbed
@@ -442,10 +458,8 @@ pub enum Call {
     U64(&'static str, u64),
     /// `context(label)`: the label and the context.
     Context(String, [u8; 32]),
-    /// `begin_attempt(a)`.
-    Begin(u64),
-    /// `r2l_challenges(a, count, d, omega)`.
-    R2l(u64, usize, usize, u64),
+    /// `r2l_challenges(count, d, omega)`.
+    R2l(usize, usize, u64),
     /// `sumcheck_coins(.., l'', log n, log nu)`.
     Coins(usize, usize, usize),
     /// `round_coin(.., r)`.
@@ -501,20 +515,14 @@ impl<H: Challenger<K>> Challenger<K> for Recorder<H> {
         context
     }
 
-    fn begin_attempt(&mut self, attempt: u64) -> hachi_co_core::Result<()> {
-        self.log.push(Call::Begin(attempt));
-        Challenger::<K>::begin_attempt(&mut self.inner, attempt)
-    }
-
     fn r2l_challenges(
         &mut self,
-        attempt: u64,
         count: usize,
         d: usize,
         omega: u64,
     ) -> hachi_co_core::Result<Vec<Vec<i64>>> {
-        self.log.push(Call::R2l(attempt, count, d, omega));
-        Challenger::<K>::r2l_challenges(&mut self.inner, attempt, count, d, omega)
+        self.log.push(Call::R2l(count, d, omega));
+        Challenger::<K>::r2l_challenges(&mut self.inner, count, d, omega)
     }
 
     fn sumcheck_coins(

@@ -239,7 +239,7 @@ impl<const K: usize> Context<K> {
         u64::try_from(self.params.beta1).unwrap_or(u64::MAX)
     }
 
-    /// $\beta = n\gamma$, the bound that prover 1 checks on $\Vert \mathbf z \Vert\_\infty$
+    /// $\beta = n\gamma$, the bound that every prover checks on $\Vert \mathbf z \Vert\_\infty$
     /// (`6_Collaborative_Hachi.tex`:279; `5_Building_Blocks.tex`:144). Saturating as
     /// [`Context::gamma`].
     pub fn beta(&self) -> u64 {

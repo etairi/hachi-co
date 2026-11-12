@@ -7,11 +7,14 @@ use crate::data::{Matrix, check_len, check_polys};
 use crate::{Context, Result};
 use hachi_co_math::Poly;
 
-/// The matrix $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of `5_Building_Blocks.tex`:170-176,
-/// dense and row-major, for the public vectors $\mathbf b$ and $\mathbf a$ embedded in
-/// $\mathcal R\_q$ ([`PublicVectors::b_ring`](crate::PublicVectors::b_ring) and
-/// [`PublicVectors::a_ring`](crate::PublicVectors::a_ring)) and the challenges
-/// $\mathbf c \in \mathcal C^{2^r}$ (signed coefficients, `5_Building_Blocks.tex`:134-138).
+/// The matrix $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of `5_Building_Blocks.tex`:170-176
+/// (`fig:ring-to-linear-2` since the draft's commit `1096ea2`), dense and row-major, for the
+/// public vectors $\mathbf b$ and $\mathbf a$ embedded in $\mathcal R\_q$
+/// ([`PublicVectors::b_ring`](crate::PublicVectors::b_ring) and
+/// [`PublicVectors::a_ring`](crate::PublicVectors::a_ring)), the challenges
+/// $\mathbf c \in \mathcal C^{2^r}$ (signed coefficients, `5_Building_Blocks.tex`:134-138) and
+/// the selected iteration $j^\ast \lt L$ of the rejection sampling (0-indexed, the draft's
+/// $j^\ast + 1$).
 ///
 /// With the positions of [`Layout`](crate::Layout) (0-indexed; $b^e$ is the constant polynomial
 /// $b^e \bmod q$, $i \lt 2^r$, $p \in \lbrace 1, \dots, n \rbrace$, $j \lt 2^m$, $e \lt \delta$,
@@ -24,23 +27,28 @@ use hachi_co_math::Poly;
 /// - row $\mathrm{row}\_{bG}$ ($\mathbf b^T \mathbf G\_{2^r} \mid -1$): $b\_i b^e$ at
 ///   $w + i\delta + e$, and $-1$ at $u = \mu - 2$;
 /// - row $\mathrm{row}\_c$ ($\mathbf c^T \otimes \mathbf G\_1 \mid \mathbf 1\_n^T \otimes
-///   \mathbf G\_1 \mid -\mathbf a^T \mathbf G\_{2^m} \mathbf J\_{\delta 2^m}$): $c\_i b^e$ at
-///   $w + i\delta + e$, $b^e$ at $w\_0 + (p-1)\delta + e$, and $-a\_j b^{e + \theta}$ at
-///   $z + (j\delta + e)\tau + \theta$;
-/// - rows $\mathrm{row}\_A + a$ ($\mathbf 1\_n^T \otimes \mathbf G\_{n\_A} \mid \mathbf c^T
-///   \otimes \mathbf G\_{n\_A} \mid -\mathbf A \mathbf J\_{\delta 2^m}$): $b^e$ at
-///   $t\_0 + (p-1) n\_A \delta + a\delta + e$, $c\_i b^e$ at $t + i n\_A \delta + a\delta + e$,
-///   and $-A\_{a,j'} b^\theta$ at $z + j'\tau + \theta$ for $j' \lt \delta 2^m$.
+///   \hat{\mathbf e}\_{j^\ast}^T \otimes \mathbf G\_1 \mid -\mathbf a^T \mathbf G\_{2^m}
+///   \mathbf J\_{\delta 2^m}$): $c\_i b^e$ at $w + i\delta + e$, $b^e$ at the positions of
+///   $\hat{\mathbf w}\_{0,p}^{j^\ast}$, $w\_0 + ((p-1)L + j^\ast)\delta + e$, and
+///   $-a\_j b^{e + \theta}$ at $z + (j\delta + e)\tau + \theta$;
+/// - rows $\mathrm{row}\_A + a$ ($\mathbf 1\_n^T \otimes \hat{\mathbf e}\_{j^\ast}^T \otimes
+///   \mathbf G\_{n\_A} \mid \mathbf c^T \otimes \mathbf G\_{n\_A} \mid -\mathbf A
+///   \mathbf J\_{\delta 2^m}$): $b^e$ at $t\_0 + ((p-1)L + j^\ast) n\_A \delta + a\delta + e$,
+///   $c\_i b^e$ at $t + i n\_A \delta + a\delta + e$, and $-A\_{a,j'} b^\theta$ at
+///   $z + j'\tau + \theta$ for $j' \lt \delta 2^m$.
 ///
-/// The fourth and fifth row blocks state $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T
-/// \mathbf G\_{2^m} \mathbf z$ and $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p} = \mathbf A
-/// \mathbf z$ (`5_Building_Blocks.tex`:196). The challenges are reduced modulo $q$; checking
+/// The fourth and fifth row blocks state $\sum\_i c\_i w\_i + \sum\_p w\_{0,p}^{j^\ast} =
+/// \mathbf a^T \mathbf G\_{2^m} \mathbf z$ and $\sum\_i c\_i \mathbf t\_i + \sum\_p
+/// \mathbf t\_{0,p}^{j^\ast} = \mathbf A \mathbf z$ (`5_Building_Blocks.tex`:196, and the text
+/// after `fig:ring-to-linear-2`); the masks of the other iterations enter only the $\mathbf D$
+/// rows. The challenges are reduced modulo $q$; checking
 /// $\mathbf c \in \mathcal C^{2^r}$ is the caller's job (the ring-to-linear step checks it).
 /// Every residue of the result is canonical.
 ///
 /// # Errors
 /// [`Error::Shape`](crate::Error::Shape) unless `b_ring` has $2^r$ and `a_ring` $2^m$
-/// polynomials of $d$ coefficients and `c` has $2^r$ vectors of $d$ coefficients; the errors of
+/// polynomials of $d$ coefficients and `c` has $2^r$ vectors of $d$ coefficients;
+/// [`Error::Layout`](crate::Error::Layout) unless $j^\ast \lt L$; the errors of
 /// [`PublicParams::validate`](crate::PublicParams::validate) if `ctx.pp` was changed into an
 /// invalid shape after the context was built.
 pub fn build_m<const K: usize>(
@@ -48,10 +56,17 @@ pub fn build_m<const K: usize>(
     b_ring: &[Poly],
     a_ring: &[Poly],
     c: &[Vec<i64>],
+    j_star: usize,
 ) -> Result<Matrix> {
     let l = &ctx.layout;
     let ring = &ctx.ring;
     let zq = ring.zq();
+    if j_star >= l.rej_iterations {
+        return Err(crate::Error::Layout(format!(
+            "the selected iteration j* = {j_star} is not below L = {}",
+            l.rej_iterations
+        )));
+    }
     check_polys("b (ring)", b_ring, l.n_blocks, l.d)?;
     check_polys("a (ring)", a_ring, l.block_len, l.d)?;
     check_len("c (one challenge per block)", l.n_blocks, c.len())?;
@@ -90,10 +105,11 @@ pub fn build_m<const K: usize>(
         }
     }
     m[l.row_bg][l.u] = constant(zq.neg(1));
-    // 1_n^T (x) G_1 on w0_hat.
-    for p in 0..l.n {
+    // 1_n^T (x) e_{j*}^T (x) G_1 on w0_hat: the digits of w0_{p}^{j*} of every prover.
+    for p in 1..=l.n {
+        let first = l.w0_hat_range(p, j_star).start;
         for (e, pe) in bp.iter().take(l.delta).enumerate() {
-            m[l.row_c][l.w0 + p * l.delta + e] = constant(*pe);
+            m[l.row_c][first + e] = constant(*pe);
         }
     }
     // -a^T G_{2^m} J_{delta 2^m} on z_hat: z_hat entry (j delta + e) tau + theta has weight
@@ -106,12 +122,14 @@ pub fn build_m<const K: usize>(
             }
         }
     }
-    // The n_A rows: 1_n^T (x) G_{n_A} on t0_hat, c^T (x) G_{n_A} on t_hat, -A J on z_hat.
+    // The n_A rows: 1_n^T (x) e_{j*}^T (x) G_{n_A} on t0_hat, c^T (x) G_{n_A} on t_hat, -A J on
+    // z_hat.
     for a in 0..l.n_a {
         let row = &mut m[l.row_a + a];
-        for p in 0..l.n {
+        for p in 1..=l.n {
+            let first = l.t0_hat_range(p, j_star).start;
             for (e, pe) in bp.iter().take(l.delta).enumerate() {
-                row[l.t0 + p * l.n_a * l.delta + a * l.delta + e] = constant(*pe);
+                row[first + a * l.delta + e] = constant(*pe);
             }
         }
         for (i, ci) in cq.iter().enumerate() {
@@ -129,8 +147,8 @@ pub fn build_m<const K: usize>(
 }
 
 /// The vector $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$ of
-/// `5_Building_Blocks.tex`:187-193: the first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the
-/// accepted attempt at rows $\mathrm{row}\_D + \cdot$, the commitment
+/// `5_Building_Blocks.tex`:187-193: the first message $\mathbf v \in \mathcal R\_q^{n\_D}$ at
+/// rows $\mathrm{row}\_D + \cdot$, the commitment
 /// $\mathbf u \in \mathcal R\_q^{n\_B}$ at rows $\mathrm{row}\_B + \cdot$, and zeros in the
 /// $\mathbf b^T \mathbf G$, $\mathbf c$ and $\mathbf A$ rows. Residues are returned reduced.
 ///

@@ -27,16 +27,15 @@ use common::{
     K, additive_shares, assert_claims_match, clear_pcs, clear_words, random_instance, seed,
 };
 use hachi_co::{
-    EVAL_DOMAIN, EvalOutput, EvalProof, VerifyError, commit, eval_with, verify_claims_with,
-    verify_value,
+    EVAL_DOMAIN, EvalOutput, VerifyError, commit, eval_with, verify_claims_with, verify_value,
 };
-use hachi_co_commit::{LABEL_FAH_B, LABEL_RESHARE, open};
+use hachi_co_commit::{LABEL_FAH_B, open};
 use hachi_co_conv::LABEL_FAH_E;
 use hachi_co_core::{Context, Ext, FsChallenger, PartyState, Poly, PrgRandomness};
 use hachi_co_mpc::{Comm, Fault, LABEL_SETUP, Loopback, MemoryConfig, Stats, ZeroSharing};
 use hachi_co_params::presets::toy_choices;
 use hachi_co_params::{Choices, QChoice, derive};
-use hachi_co_r2l::{COMM_ABORT, COMM_FAH_D, COMM_FAH_Z, COMM_PROVER1, response_len};
+use hachi_co_r2l::{COMM_ACCEPT, COMM_FAH_D, COMM_FAH_Z, response_len};
 use hachi_co_sumcheck::{
     ALL_GATHER_COMMITMENTS, ALL_GATHER_FINAL, ALL_GATHER_OPENINGS, ALL_GATHER_SUMS, FAH_ROUND,
 };
@@ -175,8 +174,8 @@ fn honest_runs_with_2_3_4_and_8_parties_are_accepted() {
             check_honest(&inst, &outs, &what);
             let bytes: u64 = stats.iter().map(|s| s.total().bytes_sent).sum();
             eprintln!(
-                "{what}: a* = {}, Commit and Eval {elapsed:.2?}, {bytes} payload bytes sent in all",
-                outs[0].out.proof.attempt
+                "{what}: j* = {}, Commit and Eval {elapsed:.2?}, {bytes} payload bytes sent in all",
+                outs[0].out.r2l.j_star
             );
         }
     }
@@ -311,20 +310,20 @@ fn a_party_that_leaves_ends_the_run_at_once() {
     eprintln!("{runs} runs with a party leaving; {finished} other parties still finished");
 }
 
-/// The payload bytes that party $p$ sends under each label in an honest run with `attempts`
-/// attempts, from the protocol's message sizes (8 bytes per word): the resharing sends a share of
-/// $2^\ell$ field elements to every other party; F_AH(B), F_AH(E), F_AH(D) and the round calls
-/// broadcast $n\_B d$, $d$, $n\_D d$ and $(d\_0 + d\_1 + 2) K$ words (twice with fresh zero
-/// sharings); the abort and prover-1 flags are one word; the responses go to prover 1; the
-/// all-gathers broadcast $2K$ and $3K$ words, and the three base-PCS commitments and the three
-/// opening proofs of `ClearPcs`, each with its length word. Every public broadcast (the F_AH
-/// calls, the flags and the all-gathers, not the resharing) ends with the agreement round of
-/// `hachi-co-mpc`: a digest of 4 words to every other party.
+/// The payload bytes that party $p$ sends under each label in an honest run, from the protocol's
+/// message sizes (8 bytes per word): Commit sends no shares (no resharing since the draft's
+/// commit `1096ea2`); F_AH(B), F_AH(E), F_AH(D) and the round calls broadcast $n\_B d$, $d$,
+/// $n\_D d$ and $(d\_0 + d\_1 + 2) K$ words (twice with fresh zero sharings), F_AH(D) once for the
+/// $L$ masks; the set of accepted iterations is $\lceil L/64 \rceil$ words to every other party;
+/// the prover-1 flag is one word; the responses go to prover 1; the all-gathers broadcast $2K$
+/// and $3K$ words, and the three base-PCS commitments and the three opening proofs of
+/// `ClearPcs`, each with its length word. Every public broadcast (the F_AH calls, the flags and
+/// the all-gathers) ends with the agreement round of `hachi-co-mpc`: a digest of 4 words to every
+/// other party.
 fn expected_bytes_sent(
     ctx: &Context<K>,
     n: usize,
     p: usize,
-    attempts: u64,
     mode: ZeroSharing,
 ) -> Vec<(&'static str, u64)> {
     let l = &ctx.layout;
@@ -342,19 +341,17 @@ fn expected_bytes_sent(
     let digest = 32 * peers;
     vec![
         (LABEL_SETUP, 8 * (3 * peers + seeds)),
-        (LABEL_RESHARE, 8 * peers * k * (1u64 << l.ell)),
         (LABEL_FAH_B, 8 * peers * fah * l.n_b as u64 * d + digest),
         (LABEL_FAH_E, 8 * peers * fah * d + digest),
+        (COMM_FAH_D, 8 * peers * fah * l.n_d as u64 * d + digest),
         (
-            COMM_FAH_D,
-            (8 * peers * fah * l.n_d as u64 * d + digest) * attempts,
+            COMM_ACCEPT,
+            8 * peers * l.rej_iterations.div_ceil(64) as u64 + digest,
         ),
-        (COMM_ABORT, (8 * peers + digest) * attempts),
         (
             COMM_FAH_Z,
             8 * peers * fah * response_len(ctx) as u64 + digest,
         ),
-        (COMM_PROVER1, 8 * peers + digest),
         (ALL_GATHER_SUMS, 8 * peers * 2 * k + digest),
         (ALL_GATHER_COMMITMENTS, 8 * peers * commitments + digest),
         (
@@ -368,13 +365,12 @@ fn expected_bytes_sent(
 
 /// Checks every party's accounting against [`expected_bytes_sent`], and that the bytes received
 /// in all equal the bytes sent in all, label by label.
-fn check_bytes(ctx: &Context<K>, proof: &EvalProof<K>, stats: &[Stats], mode: ZeroSharing) {
+fn check_bytes(ctx: &Context<K>, stats: &[Stats], mode: ZeroSharing) {
     let n = stats.len();
-    let attempts = proof.attempt + 1;
     let mut total = Stats::default();
     for (i, s) in stats.iter().enumerate() {
         let p = i + 1;
-        let expected = expected_bytes_sent(ctx, n, p, attempts, mode);
+        let expected = expected_bytes_sent(ctx, n, p, mode);
         for &(label, bytes) in &expected {
             assert_eq!(
                 s.label(label).bytes_sent,
@@ -405,7 +401,8 @@ fn the_bytes_of_every_call_match_the_message_sizes() {
         for mode in MODES {
             let inst = instance(&toy_choices(n), 0);
             let (outs, stats) = run_honest(&inst, 0, &network(&inst, 0, mode));
-            check_bytes(&inst.ctx, &outs[0].out.proof, &stats, mode);
+            check_honest(&inst, &outs, &format!("n = {n}, {mode:?}"));
+            check_bytes(&inst.ctx, &stats, mode);
         }
     }
 }
@@ -425,20 +422,15 @@ fn byte_report_at_l_12() {
         let (outs, stats) = run_honest(&inst, 0, &network(&inst, 0, ZeroSharing::PairwiseSeeds));
         let elapsed = start.elapsed();
         check_honest(&inst, &outs, &format!("l = 12, n = {n}"));
-        check_bytes(
-            &inst.ctx,
-            &outs[0].out.proof,
-            &stats,
-            ZeroSharing::PairwiseSeeds,
-        );
+        check_bytes(&inst.ctx, &stats, ZeroSharing::PairwiseSeeds);
         let mut total = Stats::default();
         for s in &stats {
             total += s;
         }
         eprintln!(
-            "\nl = 12, n = {n}, q = {}, a* = {}, Commit and Eval {elapsed:.2?} (threads), proof {} bytes",
+            "\nl = 12, n = {n}, q = {}, j* = {}, Commit and Eval {elapsed:.2?} (threads), proof {} bytes",
             inst.ctx.q(),
-            outs[0].out.proof.attempt,
+            outs[0].out.r2l.j_star,
             outs[0].out.proof.to_bytes().len()
         );
         eprintln!(

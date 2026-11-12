@@ -1,12 +1,13 @@
 //! Rejection sampling at the toy parameters: the boundary cases of
-//! `negative_tests.rej_boundary_toy` through this crate's Rej step, and the abort rate of the
-//! n-prover step over 10^4 emulated attempts per preset against the exact 1 - M^{-n}.
+//! `negative_tests.rej_boundary_toy` through this crate's Rej step, and the rate at which some
+//! prover rejects one iteration of the n-prover step, over 10^4 emulated iterations per preset,
+//! against the exact 1 - M^{-n}.
 
 mod common;
 
 use common::{K, load};
-use hachi_co_core::{Fixture, PrgRandomness};
-use hachi_co_r2l::{Error, fold, respond, response_len, sample_attempt};
+use hachi_co_core::{Fixture, PartyRandomness, PrgRandomness};
+use hachi_co_r2l::{Error, fold, respond, response_len};
 use hachi_co_sampling::l1ball::L1Ball;
 use hachi_co_sampling::rej::acceptance_probability;
 use hachi_co_sampling::{Error as SamplingError, ShakePrg};
@@ -144,30 +145,35 @@ fn seed(preset: &str, parts: &[&[u8]]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// The abort rate of the n-prover step: 10^4 attempts per preset, each with every party emulated
-/// locally (fresh `PrgRandomness` per party and run, the party's real fold for fresh uniform
-/// challenges, and this crate's Rej); an attempt aborts iff some party rejects. The observed
-/// fraction must lie within 3 sigma of the exact 1 - M^{-n}, M^{-1} from
-/// `hachi_co_sampling::rej::acceptance_probability` (5_Building_Blocks.tex:207).
+/// The rejection rate of one iteration of the n-prover step: 10^4 iterations per preset, each
+/// with every party emulated locally (a fresh `PrgRandomness` per party and run for the mask, the
+/// party's real fold for fresh uniform challenges, and this crate's Rej); an iteration is rejected
+/// iff some party rejects it. The observed fraction must lie within 3 sigma of the exact
+/// 1 - M^{-n}, M^{-1} from `hachi_co_sampling::rej::acceptance_probability`
+/// (5_Building_Blocks.tex:207). The step aborts only when all L iterations are rejected, with
+/// probability (1 - M^{-n})^L, which the oracle records as `params/abort_probability`.
 #[test]
 fn abort_rate_matches_one_minus_m_to_the_minus_n() {
     for name in Fixture::TOY {
         let start = Instant::now();
-        let (fx, ctx, pv, states) = load(name);
+        let (fx, ctx, _, states) = load(name);
         let l = &ctx.layout;
         let n = l.n;
         let ratio = acceptance_probability(ctx.gamma(), ctx.beta1(), response_len(&ctx)).unwrap();
         let accept_one = to_f64(&ratio.numerator, &ratio.denominator);
         let expected = 1.0 - accept_one.powi(n as i32);
-        // The oracle's float of the same quantity (its params section), to 1e-12.
-        let recorded = fx
-            .get("/params/abort_probability")
-            .unwrap()
-            .as_f64()
-            .unwrap();
+        // The oracle's floats of the same quantities (its params section), to 1e-12.
+        let recorded = |key: &str| fx.get(key).unwrap().as_f64().unwrap();
+        let per_iteration = recorded("/params/abort_probability_per_iteration");
         assert!(
-            (expected - recorded).abs() <= 1e-12,
-            "{name}: {expected} vs {recorded}"
+            (expected - per_iteration).abs() <= 1e-12,
+            "{name}: {expected} vs {per_iteration}"
+        );
+        let all = expected.powi(l.rej_iterations as i32);
+        let recorded_all = recorded("/params/abort_probability");
+        assert!(
+            (all - recorded_all).abs() <= 1e-12 * all.max(1e-300),
+            "{name}: {all} vs {recorded_all}"
         );
         let ball = L1Ball::new(l.d, ctx.omega()).unwrap();
         let c_seed = seed(name, &[b"c"]);
@@ -183,9 +189,10 @@ fn abort_rate_matches_one_minus_m_to_the_minus_n() {
                     name,
                     &[&run.to_le_bytes(), &(p as u64).to_le_bytes()],
                 ));
-                let secrets = sample_attempt::<K, _>(&ctx, &pv, &mut rng, 0).unwrap();
+                let mask = PartyRandomness::<K>::mask(&mut rng, 0, ctx.gamma(), response_len(&ctx))
+                    .unwrap();
                 let f = fold(&ctx, st, &c).unwrap();
-                abort |= respond(&ctx, &f, &secrets.mask).unwrap().is_none();
+                abort |= respond(&ctx, &f, &mask).unwrap().is_none();
             }
             aborts += u64::from(abort);
         }
@@ -193,7 +200,7 @@ fn abort_rate_matches_one_minus_m_to_the_minus_n() {
         let sigma = (expected * (1.0 - expected) / TRIALS as f64).sqrt();
         let z = (rate - expected) / sigma;
         println!(
-            "{name}: {aborts} aborts in {TRIALS} attempts, rate {rate:.4}, exact 1 - M^-n = \
+            "{name}: {aborts} rejected iterations in {TRIALS}, rate {rate:.4}, exact 1 - M^-n = \
              {expected:.6}, sigma {sigma:.6}, (rate - exact)/sigma = {z:+.2}, seeds {TAG}, \
              {:.1} s",
             start.elapsed().as_secs_f64()

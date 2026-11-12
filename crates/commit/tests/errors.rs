@@ -1,14 +1,13 @@
-//! Malformed inputs and messages give errors, never panics: received shares of the wrong length or
-//! with residues $\ge q$ (also through the driver, with a tampering network), networks that do not
-//! match the context, invalid parties, block indices and duplicate blocks.
+//! Malformed inputs and messages give errors, never panics: input shares of the wrong length,
+//! a malformed output of $\mathcal F\_{\mathsf{AH}}(\mathbf B)$ (through the driver, with a tampering
+//! network), networks that do not match the context, invalid parties, block indices and duplicate
+//! blocks.
 mod common;
 
 use common::{K, load};
 use hachi_co_commit::{
-    Error, block_state, commit, decode_received, fah_b_input, party_state, pconv_blocks, reshare,
-    sum_shares, t_hat_slice,
+    Error, block_state, commit, fah_b_input, input_share, party_state, pconv_blocks, t_hat_slice,
 };
-use hachi_co_core::wire::flatten_exts;
 use hachi_co_core::{Fixture, ReplayRandomness};
 use hachi_co_math::Ext;
 use hachi_co_mpc::{Comm, Loopback, PartyId, Result as MpcResult};
@@ -19,58 +18,25 @@ fn f_init(fx: &Fixture, p: usize) -> Vec<Ext<K>> {
 }
 
 #[test]
-fn received_shares_are_checked() {
+fn the_input_share_is_read_modulo_q_and_checked_for_length() {
     let (fx, ctx) = load("toy-n3");
     let q = ctx.q();
-    let len = 1usize << ctx.layout.ell;
-    let good: Vec<Vec<u64>> = (1..=3)
-        .map(|i| {
-            flatten_exts(
-                &fx.ext_rows::<K>(&format!("/commit/reshare/{}", i - 1))
-                    .unwrap()[0],
-            )
-        })
-        .collect();
-    assert!(decode_received::<K>(&ctx, &good).is_ok());
-    // A residue >= q from party 2 is named.
-    let mut bad = good.clone();
-    bad[1][7] = q;
+    let input = f_init(&fx, 2);
+    // Commit has no resharing: the share is the input share, as the oracle records it.
     assert_eq!(
-        decode_received::<K>(&ctx, &bad),
-        Err(Error::NonCanonical {
-            from: 2,
-            what: "a reshared share",
-            value: q,
-            q
-        })
+        input_share(&ctx, &input).unwrap(),
+        fx.exts::<K>("/commit/f_shares/1").unwrap()
     );
-    bad[1][7] = u64::MAX;
-    assert!(matches!(
-        decode_received::<K>(&ctx, &bad),
-        Err(Error::NonCanonical { from: 2, .. })
-    ));
-    // Wrong lengths and counts.
-    let mut short = good.clone();
-    short[2].pop();
-    assert!(matches!(
-        decode_received::<K>(&ctx, &short),
-        Err(Error::Shape { .. })
-    ));
-    assert!(matches!(
-        decode_received::<K>(&ctx, &good[..2]),
-        Err(Error::Shape { .. })
-    ));
-    let received = decode_received::<K>(&ctx, &good).unwrap();
-    assert!(matches!(
-        sum_shares(&ctx, &received[..2]),
-        Err(Error::Shape { .. })
-    ));
-    let mut ragged = received.clone();
-    ragged[0].truncate(len - 1);
-    assert!(matches!(
-        sum_shares(&ctx, &ragged),
-        Err(Error::Shape { .. })
-    ));
+    let unreduced: Vec<Ext<K>> = input.iter().map(|x| Ext(x.0.map(|c| c + q))).collect();
+    assert_eq!(input_share(&ctx, &unreduced).unwrap(), input);
+    for len in [0, input.len() - 1, input.len() + 1] {
+        let mut wrong = input.clone();
+        wrong.resize(len, Ext([0; K]));
+        assert!(matches!(
+            input_share(&ctx, &wrong),
+            Err(Error::Shape { .. })
+        ));
+    }
 }
 
 #[test]
@@ -86,11 +52,6 @@ fn party_local_functions_refuse_bad_arguments() {
     }
     assert!(matches!(
         pconv_blocks(&ctx, 1, &share[1..]),
-        Err(Error::Shape { .. })
-    ));
-    let mut rng = ReplayRandomness::new(&fx, 1).unwrap();
-    assert!(matches!(
-        reshare(&ctx, &mut rng, &share[1..]),
         Err(Error::Shape { .. })
     ));
     let rho_u = vec![ctx.ring.zero(); l.m_u];
@@ -133,7 +94,7 @@ fn party_local_functions_refuse_bad_arguments() {
     ));
 }
 
-/// A loopback whose exchange adds $q$ to one received residue.
+/// A loopback whose $\mathcal F\_{\mathsf{AH}}$ drops one word of the output.
 struct Tampering(Loopback);
 
 impl Comm for Tampering {
@@ -147,7 +108,9 @@ impl Comm for Tampering {
         self.0.modulus()
     }
     fn fah(&mut self, label: &'static str, local: &[u64]) -> MpcResult<Vec<u64>> {
-        self.0.fah(label, local)
+        let mut out = self.0.fah(label, local)?;
+        out.pop();
+        Ok(out)
     }
     fn gather(
         &mut self,
@@ -165,9 +128,7 @@ impl Comm for Tampering {
         label: &'static str,
         outgoing: Vec<Vec<u64>>,
     ) -> MpcResult<Vec<Vec<u64>>> {
-        let mut incoming = self.0.exchange(label, outgoing)?;
-        incoming[0][3] += self.0.modulus();
-        Ok(incoming)
+        self.0.exchange(label, outgoing)
     }
     fn all_gather(&mut self, label: &'static str, local: &[u64]) -> MpcResult<Vec<Vec<u64>>> {
         self.0.all_gather(label, local)
@@ -182,7 +143,7 @@ fn the_driver_refuses_malformed_messages_and_mismatched_networks() {
     let mut comm = Tampering(Loopback::new(q).unwrap());
     assert!(matches!(
         commit(&ctx, &mut comm, &mut rng, &f_init(&fx, 1)),
-        Err(Error::NonCanonical { from: 1, .. })
+        Err(Error::Shape { .. })
     ));
     // Another modulus, another number of parties, a short input.
     let mut comm = Loopback::new(33554501).unwrap();

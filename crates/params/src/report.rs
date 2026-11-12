@@ -34,9 +34,6 @@ pub enum ConstraintId {
     /// $q \equiv 5 \pmod 8$ (6_Collaborative_Hachi.tex:274), needed for
     /// $\mathcal R_q^H \cong \mathbb F_{q^k}$ (Hachi, Lemma 5). Fatal.
     QFiveMod8,
-    /// $q > 1 + 2^{\ell+3} n \omega^2 b$ (6_Collaborative_Hachi.tex:274; the draft does not
-    /// derive it). Fatal.
-    QAboveRangeGuard,
     /// $q > 4\bar\omega\bar\beta$ (6_Collaborative_Hachi.tex:274): otherwise the
     /// $\mathsf{MSIS}$ bound $2\bar\omega\bar\beta$ of relaxed binding (line 581) is at least
     /// $q/2$ and the instance is trivially solvable. Fatal.
@@ -77,6 +74,11 @@ pub enum ConstraintId {
     /// The knowledge error of the folding challenge, $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$
     /// ([`rules::knowledge_error_holds`]). Warning.
     KnowledgeError,
+    /// $L = \lambda$ iterations of the rejection sampling (the draft's `fig:parameters` since its
+    /// commit `1096ea2`), with which the honest provers abort with probability
+    /// $(1 - M^{-n})^L \le (1 - 1/e)^\lambda$. Warning: a smaller $L$ only makes an abort
+    /// likelier ([`RejIterations::Fixed`](crate::RejIterations::Fixed)).
+    RejIterationsLambda,
 }
 
 impl ConstraintId {
@@ -84,7 +86,6 @@ impl ConstraintId {
     pub const ALL: [ConstraintId; 14] = [
         ConstraintId::QPrime,
         ConstraintId::QFiveMod8,
-        ConstraintId::QAboveRangeGuard,
         ConstraintId::QAboveBindingGuard,
         ConstraintId::CenteredResponses,
         ConstraintId::AlphaMinusKappa,
@@ -96,12 +97,15 @@ impl ConstraintId {
         ConstraintId::RejectionConstant,
         ConstraintId::JInvRepresentable,
         ConstraintId::KnowledgeError,
+        ConstraintId::RejIterationsLambda,
     ];
 
     /// The severity of a violation of this condition.
     pub const fn severity(self) -> Severity {
         match self {
-            ConstraintId::RejectionConstant | ConstraintId::KnowledgeError => Severity::Warning,
+            ConstraintId::RejectionConstant
+            | ConstraintId::KnowledgeError
+            | ConstraintId::RejIterationsLambda => Severity::Warning,
             _ => Severity::Fatal,
         }
     }
@@ -111,7 +115,6 @@ impl ConstraintId {
         match self {
             ConstraintId::QPrime => "q prime",
             ConstraintId::QFiveMod8 => "q = 5 mod 8",
-            ConstraintId::QAboveRangeGuard => "q > 1 + 2^(l+3) n omega^2 b",
             ConstraintId::QAboveBindingGuard => "q > 4 omega_bar beta_bar",
             ConstraintId::CenteredResponses => "2 beta < q",
             ConstraintId::AlphaMinusKappa => "2 <= alpha - kappa <= l",
@@ -123,16 +126,16 @@ impl ConstraintId {
             ConstraintId::RejectionConstant => "M <= e^(1/n)",
             ConstraintId::JInvRepresentable => "(ceil(b/2) - 1)(b^tau - 1)/(b - 1) >= beta",
             ConstraintId::KnowledgeError => "2^(r+1)/|C| <= 2^-lambda",
+            ConstraintId::RejIterationsLambda => "L = lambda",
         }
     }
 
     /// Where the condition comes from.
     pub const fn source(self) -> &'static str {
         match self {
-            ConstraintId::QPrime
-            | ConstraintId::QFiveMod8
-            | ConstraintId::QAboveRangeGuard
-            | ConstraintId::QAboveBindingGuard => "6_Collaborative_Hachi.tex:274",
+            ConstraintId::QPrime | ConstraintId::QFiveMod8 | ConstraintId::QAboveBindingGuard => {
+                "6_Collaborative_Hachi.tex:274"
+            }
             ConstraintId::CenteredResponses => "docs/m0-spec.md (unique centered responses)",
             ConstraintId::AlphaMinusKappa => "6_Collaborative_Hachi.tex:275",
             ConstraintId::KDividesHalfD => "4_preliminaries.tex:73",
@@ -144,6 +147,9 @@ impl ConstraintId {
                 "4_preliminaries.tex:100; docs/m0-spec.md (tau rule)"
             }
             ConstraintId::KnowledgeError => "Hachi Lemma 4; docs/m0-spec.md (Omega::MinForTarget)",
+            ConstraintId::RejIterationsLambda => {
+                "6_Collaborative_Hachi.tex, fig:parameters (draft commit 1096ea2)"
+            }
         }
     }
 }
@@ -202,11 +208,6 @@ impl Report {
             ConstraintId::QFiveMod8,
             p.q % 8 == 5,
             format!("q mod 8 = {}", p.q % 8),
-        );
-        push(
-            ConstraintId::QAboveRangeGuard,
-            q > p.range_guard,
-            format!("q = {}, 1 + 2^(l+3) n omega^2 b = {}", p.q, p.range_guard),
         );
         push(
             ConstraintId::QAboveBindingGuard,
@@ -270,6 +271,14 @@ impl Report {
             format!(
                 "log2(2^(r+1)/|C|) = {log2_error:.2} ({:?}, d = {}, omega = {}, r = {}), target -{}",
                 c.challenge_set, p.d, p.omega, p.r, c.lambda
+            ),
+        );
+        push(
+            ConstraintId::RejIterationsLambda,
+            p.rej_iterations == u64::from(c.lambda),
+            format!(
+                "L = {} ({:?}), lambda = {}",
+                p.rej_iterations, c.rej_iterations, c.lambda
             ),
         );
         debug_assert!(constraints.iter().map(|c| c.id).eq(ConstraintId::ALL));

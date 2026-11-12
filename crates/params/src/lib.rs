@@ -3,7 +3,7 @@
 //!
 //! | Item | Contents | Draft |
 //! |---|---|---|
-//! | [`Choices`] | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega$, the challenge set, the $\tau$ rule, $n_A, n_B, n_D, m_u, m_v$, $q$ | 6_Collaborative_Hachi.tex:265-275 |
+//! | [`Choices`] | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega$, the challenge set, the $\tau$ rule, the number $L$ of rejection iterations, $n_A, n_B, n_D, m_u, m_v$, $q$ | 6_Collaborative_Hachi.tex:265-275; `fig:parameters` for $L$ |
 //! | [`derive`](fn@crate::derive) | every derived quantity, exactly ([`Params`]) | 6_Collaborative_Hachi.tex:267-292 |
 //! | [`Report`] | each condition, whether it holds, and its [`Severity`] | 6_Collaborative_Hachi.tex:271-279, 4_preliminaries.tex:73, 100 |
 //! | [`presets`](mod@presets) | the toy presets, the development presets and the secure presets of `presets/secure.json` | `docs/m0-spec.md`; `docs/m1-spec.md`, WP11 |
@@ -16,7 +16,7 @@
 //! use hachi_co_params::{derive, presets::toy_choices};
 //!
 //! let (params, report) = derive(&toy_choices(2))?;
-//! assert_eq!((params.q, params.delta, params.tau, params.mu), (33554501, 13, 10, 790));
+//! assert_eq!((params.q, params.delta, params.tau, params.mu), (33554501, 13, 10, 1570));
 //! assert!(report.is_admissible()); // no fatal violation
 //! assert!(!report.all_hold()); // the toy misses the knowledge-error target (a warning)
 //! # Ok::<(), hachi_co_params::Error>(())
@@ -24,8 +24,9 @@
 //!
 //! **Choices this crate makes where the draft is silent** (each is documented at its item):
 //! $q$ is either fixed or the smallest admissible prime ([`QChoice::Smallest`]); $\omega$ may be
-//! the smallest radius meeting the knowledge-error target ([`Omega::MinForTarget`]); the
-//! severities follow the rule in [`report`]; the development presets are a kind of their own
+//! the smallest radius meeting the knowledge-error target ([`Omega::MinForTarget`]); the toy,
+//! development and benchmark presets fix $L = 16$ in place of the draft's $L = \lambda$
+//! ([`RejIterations::Fixed`]); the severities follow the rule in [`report`]; the development presets are a kind of their own
 //! ([`PresetKind::Dev`]); the proof encoding that [`sizes`](fn@crate::sizes) counts uses 64-bit
 //! words ([`sizes::WORD_BYTES`]).
 //!
@@ -43,7 +44,7 @@ pub mod rules;
 pub mod sizes;
 
 pub use cascade::{Params, derive};
-pub use choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, TauRule};
+pub use choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, RejIterations, TauRule};
 pub use error::{Error, Result};
 pub use presets::{Preset, PresetKind, preset, presets};
 pub use report::{Constraint, ConstraintId, Report, Severity};

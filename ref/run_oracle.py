@@ -30,21 +30,24 @@ def seed_for(P, idx=0):
 
 
 def select_run(P, seed_index=None, max_index=32):
-    """Fixture seed: --seed-index if given; otherwise the smallest index s >= 0 whose run contains at least
-    one aborted ring-to-linear attempt, so that the fixture covers the abort-and-retry path.  Every run tried
-    on the way is fully checked and reported (no run is discarded silently)."""
+    """Fixture seed: --seed-index if given; otherwise the smallest index s >= 0 whose run selects an iteration
+    j* > 0, that is, some prover rejected the first iteration of the rejection sampling, so that the fixture
+    covers the selection beyond the first iteration (fig:ring-to-linear, step 6).  Every run tried on the way is
+    fully checked and reported (no run is discarded silently)."""
     tried = []
     rng = [seed_index] if seed_index is not None else range(max_index)
     for s in rng:
         res = run_instance(P, seed_for(P, s))
-        pattern = [a["aborting_provers"] for a in res["r2l"]["attempts"]]
+        sets = res["r2l"]["accept_sets"]
         ok = all(res["relations"].values()) and res["verifier_accept"]
-        tried.append(dict(seed=seed_for(P, s), aborting_provers_per_attempt=pattern, all_checks_pass=bool(ok)))
-        if seed_index is not None or len(pattern) > 1:
+        tried.append(dict(seed=seed_for(P, s), j_star=res["r2l"]["j_star"], accept_sets=sets,
+                          all_checks_pass=bool(ok)))
+        if seed_index is not None or res["r2l"]["j_star"] > 0:
             rule = ("given by --seed-index" if seed_index is not None else
-                    "smallest index s >= 0 whose run has an aborted ring-to-linear attempt (retry-path coverage)")
+                    "smallest index s >= 0 whose run selects an iteration j* > 0 (coverage of a rejected first "
+                    "iteration)")
             return res, dict(rule=rule, tried=tried)
-    raise RuntimeError("no run with an abort among the first %d seeds" % max_index)
+    raise RuntimeError("no run with j* > 0 among the first %d seeds" % max_index)
 
 
 def main():
@@ -83,8 +86,8 @@ def main():
         t_sel = time.time()
         res, selection = select_run(P, args.seed_index)
         for tr_ in selection["tried"][:-1]:
-            print("  %s  run %s: attempts %s (no abort, not used for the fixture)"
-                  % ("PASS" if tr_["all_checks_pass"] else "FAIL", tr_["seed"], tr_["aborting_provers_per_attempt"]))
+            print("  %s  run %s: j* = %d (not used for the fixture)"
+                  % ("PASS" if tr_["all_checks_pass"] else "FAIL", tr_["seed"], tr_["j_star"]))
             if not tr_["all_checks_pass"]:
                 failures.append("%s run %s" % (P.name, tr_["seed"]))
         print("  info  fixture seed %s (%s); selection took %.1fs"
@@ -99,9 +102,9 @@ def main():
               % ("PASS" if not nfail else "FAIL", len(vc), P.ell_pp, 3 * P.n, res["verifier_accept"]))
         if nfail:
             failures.append("%s verifier %s" % (P.name, nfail))
-        atts = res["r2l"]["attempts"]
-        print("  info  ring-to-linear attempts: %d (aborting provers per attempt: %s); ||z|| = %d <= beta = %d"
-              % (len(atts), [a["aborting_provers"] for a in atts], res["r2l"]["z_norm"], P.beta))
+        sets = res["r2l"]["accept_sets"]
+        print("  info  ring-to-linear: L = %d iterations, j* = %d, accepted per prover %s; ||z|| = %d <= beta = %d"
+              % (P.rej_iterations, res["r2l"]["j_star"], [len(r) for r in sets], res["r2l"]["z_norm"], P.beta))
         d0s, d1s = res["hypercube"]["round_degrees_F0"], res["hypercube"]["round_degrees_F1"]
         print("  info  degree of sum_p F_0 round polys: U rounds %s, L rounds %s (2b+1 = %d, draft d0 = %d); "
               "F_1: max %d (d1 = %d)" % (sorted(set(d0s[:P.ell_U])), sorted(set(d0s[P.ell_U:])), 2 * P.b + 1,
@@ -120,6 +123,7 @@ def main():
             negres["open"] = neg.open_tests(res)
             negres["rej_boundary_toy"] = neg.rej_boundary_toy(P)
             negres["abort_rate"] = neg.abort_rate(P)
+            negres["empty_intersection"] = neg.empty_intersection(P)
             for group in ("transcript", "witness", "open"):
                 for name, info in negres[group].items():
                     ok = info["passed"]
@@ -140,11 +144,16 @@ def main():
             if not ok:
                 failures.append("%s rej boundary" % P.name)
             ar = negres["abort_rate"]
-            print("  %s  abort rate over %d attempts: %.4f vs exact 1 - M^-n = %.4f (3 sigma = %.4f, %s, seed %d)"
+            print("  %s  rejection rate of one iteration over %d trials: %.4f vs exact 1 - M^-n = %.4f (3 sigma = %.4f, %s, seed %d)"
                   % ("PASS" if ar["within_3_sigma"] else "FAIL", ar["trials"], ar["rate"], ar["exact"],
                      3 * ar["sigma"], ar["rng"], ar["seed"]))
             if not ar["within_3_sigma"]:
                 failures.append("%s abort rate" % P.name)
+            ei = negres["empty_intersection"]
+            print("  %s  negative  L = 1: a rejected iteration aborts the step (%s after %d run(s))"
+                  % ("PASS" if ei["passed"] else "FAIL", ei["seed"], ei["runs"]))
+            if not ei["passed"]:
+                failures.append("%s empty intersection" % P.name)
             print("  (negative tests %.1fs)" % (time.time() - t))
         print("  timings: " + ", ".join("%s %.2fs" % kv for kv in res["timings"].items()))
         if not args.no_write:
@@ -168,9 +177,9 @@ def main():
             t = time.time()
             rs = run_instance(P, seed_for(P, s))
             okr = all(rs["relations"].values()) and rs["verifier_accept"]
-            print("  %s  sweep seed %s: attempts %s, accept=%s (%.1fs)"
-                  % ("PASS" if okr else "FAIL", seed_for(P, s), [a["aborting_provers"] for a in rs["r2l"]["attempts"]],
-                     rs["verifier_accept"], time.time() - t))
+            print("  %s  sweep seed %s: j* = %d, accept=%s (%.1fs)"
+                  % ("PASS" if okr else "FAIL", seed_for(P, s), rs["r2l"]["j_star"], rs["verifier_accept"],
+                     time.time() - t))
             if not okr:
                 failures.append("%s sweep %d" % (P.name, s))
 

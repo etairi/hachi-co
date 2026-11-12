@@ -121,7 +121,7 @@ fn band_scan_equals_the_fixed_point_iteration() {
                 ..e.params.choices
             })
             .unwrap();
-            let bound = p.binding_guard.max(p.range_guard).max(2 * p.beta + 1);
+            let bound = p.binding_guard.max(2 * p.beta + 1);
             let next = next_prime_5_mod_8(bound).unwrap();
             let delta_next =
                 hachi_co_params::rules::ceil_log(u128::from(p.choices.b), u128::from(next))

@@ -146,10 +146,11 @@ pub struct UnpackedWitness {
     pub w: Vec<Poly>,
     /// $\hat{\mathbf w} = (\hat{\mathbf w}\_i)\_{i \lt 2^r}$, $2^r\delta$ entries, line 119.
     pub w_hat: Vec<Poly>,
-    /// $w\_{0,p}$ of the accepted attempt for $p = 1, \dots, n$ (entry $p - 1$), line 125.
+    /// $w\_{0,p}^{j^\ast}$ of the selected iteration for $p = 1, \dots, n$ (entry $p - 1$),
+    /// line 125.
     pub w0: Vec<Poly>,
-    /// $\mathbf t\_{0,p}$ of the accepted attempt for $p = 1, \dots, n$, $n\_A$ entries each,
-    /// line 124.
+    /// $\mathbf t\_{0,p}^{j^\ast}$ of the selected iteration for $p = 1, \dots, n$, $n\_A$
+    /// entries each, line 124.
     pub t0: Vec<Vec<Poly>>,
     /// $\mathbf t\_i = \mathbf A \mathbf s\_i$ for every block $i \lt 2^r$ ($\mathbf 0$ for an
     /// unowned block), $n\_A$ entries each (`6_Collaborative_Hachi.tex`:379).
@@ -167,11 +168,11 @@ pub struct RowBlockChecks {
     /// Row $\mathbf b^T \mathbf G\_{2^r} \mid -1$: $\sum\_i b\_i \mathbf G\_1 \hat{\mathbf w}\_i =
     /// u$ (`r2l.row_b: sum_i b_i w_i = u`; `5_Building_Blocks.tex`:173).
     pub row_b: bool,
-    /// Row $\mathbf c$: $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T \mathbf G\_{2^m}
-    /// \mathbf z$ (`r2l.row_c: ...`; line 174 and 196).
+    /// Row $\mathbf c$: $\sum\_i c\_i w\_i + \sum\_p w\_{0,p}^{j^\ast} = \mathbf a^T
+    /// \mathbf G\_{2^m} \mathbf z$ (`r2l.row_c: ...`; line 174 and 196).
     pub row_c: bool,
-    /// Rows $\mathbf A$: $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p} = \mathbf A
-    /// \mathbf z$ (`r2l.row_A: ...`; line 175 and 196).
+    /// Rows $\mathbf A$: $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p}^{j^\ast} =
+    /// \mathbf A \mathbf z$ (`r2l.row_A: ...`; line 175 and 196).
     pub row_a: bool,
 }
 
@@ -185,8 +186,8 @@ impl RowBlockChecks {
 /// The meaning of the row blocks of $\mathbf M$ (`5_Building_Blocks.tex`:173-175, 196), checked
 /// directly on the unpacked values with the challenges $\mathbf c$, as the oracle's
 /// `row_block_checks`: $\sum\_i b\_i \mathbf G\_1 \hat{\mathbf w}\_i = u$,
-/// $\sum\_i c\_i w\_i + \sum\_p w\_{0,p} = \mathbf a^T \mathbf G\_{2^m} \mathbf z$ and
-/// $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p} = \mathbf A \mathbf z$ over
+/// $\sum\_i c\_i w\_i + \sum\_p w\_{0,p}^{j^\ast} = \mathbf a^T \mathbf G\_{2^m} \mathbf z$ and
+/// $\sum\_i c\_i \mathbf t\_i + \sum\_p \mathbf t\_{0,p}^{j^\ast} = \mathbf A \mathbf z$ over
 /// $\mathcal R\_q$, with $\mathbf z$ reduced modulo $q$. Unlike $\mathbf M \mathbf z' =
 /// \mathbf y$, these use $w\_i$, $\mathbf t\_i$, $w\_{0,p}$, $\mathbf t\_{0,p}$ and $\mathbf z$
 /// before their decompositions, so they also test that $\hat{\mathbf w}$, $\hat{\mathbf t}\_0$,

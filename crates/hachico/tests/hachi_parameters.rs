@@ -18,6 +18,16 @@ const PHI: u32 = 13;
 /// The largest height of $\mathbf A$ at the masked level that the probe tries.
 const MAX_N_A0: usize = 12;
 
+/// The bases $b$ that the probe tries.
+const BASES: [u64; 3] = [4, 8, 16];
+
+/// The radii $\omega$ that the probe tries: every integer from 8 to 32. The grid
+/// $8, 12, 16, 24, 32$ used before found no masked choice at `secure-l16-n2-a8` and `-n4-a8` once
+/// $L = \lambda$ raised $\ell''$: their first iteration has $r = 9$, so $\omega = 24$ leaves the
+/// challenge set below $2^{\lambda + r + 1}$, while $\omega = 32$ puts the bound of the masked
+/// level above what Module-SIS allows at their $q$, and $\omega = 25$ does neither.
+const OMEGAS: std::ops::RangeInclusive<u64> = 8..=32;
+
 /// The MLWE ranks of `scripts/hachi-parameters/mlwe_ranks.txt`: `(q, d, b) -> nu`.
 fn mlwe_ranks() -> std::collections::BTreeMap<(u64, usize, u64), usize> {
     let path = concat!(
@@ -74,6 +84,9 @@ fn schedule_json(s: &Schedule, delta: usize) -> String {
 /// vectors) and candidate: the input of `scripts/hachi-parameters/choose.py`. Each object has one
 /// line without masks and one per height of the masked level, as the objects `"masked"` (the
 /// share polynomial), `"masked-g0"` and `"masked-g1"`.
+///
+/// The candidates are every base in [`BASES`], every radius in [`OMEGAS`] and every height up to
+/// 8 rows (`-a8`) or 6 (`-a10`).
 #[test]
 #[ignore = "a probe: run with --ignored --nocapture"]
 fn hachi_layouts() {
@@ -89,8 +102,8 @@ fn hachi_layouts() {
             ("g0", 1 + vars * params.d0 as usize),
             ("g1", 1 + vars * params.d1 as usize),
         ];
-        for b in [4u64, 8, 16] {
-            for omega in [8u64, 12, 16, 24, 32] {
+        for b in BASES {
+            for omega in OMEGAS {
                 for n_a in 1..=max_n_a {
                     let choices = HachiChoices {
                         b,

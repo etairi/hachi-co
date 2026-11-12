@@ -21,8 +21,8 @@ use hachi_co_params::PadRule;
 /// (`5_Building_Blocks.tex`:167-196, 283-298; the oracle's `oracle.verifier_public`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInput<'a> {
-    /// $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of the accepted attempt
-    /// ([`hachi_co_core::build_m`]).
+    /// $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of the challenges and the selected
+    /// iteration ([`hachi_co_core::build_m`]).
     pub m: &'a [Vec<Poly>],
     /// $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$
     /// ([`hachi_co_core::build_y`]).

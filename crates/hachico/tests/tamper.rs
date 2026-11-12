@@ -36,7 +36,6 @@ use hachi_co::{
 };
 use hachi_co_core::{Context, Ext, Fixture, FsChallenger, Poly, PrgRandomness, ReplayChallenger};
 use hachi_co_mpc::Loopback;
-use hachi_co_r2l::MAX_ATTEMPTS;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::ops::Range;
@@ -129,11 +128,34 @@ fn every_component_change_is_rejected(
         bump(&mut p.e_u.0[i], q);
         reject(&p, format!("E(u)[{i}] + 1"));
     }
-    for a in (0..MAX_ATTEMPTS).filter(|a| *a != proof.attempt) {
-        let mut p = proof.clone();
-        p.attempt = a;
-        reject(&p, format!("a* = {a}"));
+    // Another set of accepted iterations that moves the selected iteration j* or empties the
+    // intersection is rejected, under replayed coins as under Fiat-Shamir. (A change that leaves
+    // j* alone changes only the transcript: the Fiat-Shamir verifier rejects it
+    // (`accept_sets_are_bound_by_the_transcript`), the replayed coins do not depend on it.)
+    let full = (1u64 << l.rej_iterations) - 1;
+    let j_star = hachi_co_r2l::select_iteration(ctx, &proof.accept_sets).unwrap();
+    let mut moved = 0;
+    for party in 0..l.n {
+        let mut changes: Vec<(u64, String)> = (0..l.rej_iterations)
+            .map(|j| {
+                (
+                    proof.accept_sets[party][0] ^ (1 << j),
+                    format!("R_{} with iteration {j} flipped", party + 1),
+                )
+            })
+            .collect();
+        changes.push((0, format!("R_{} empty", party + 1)));
+        changes.push((full, format!("R_{} full", party + 1)));
+        for (set, what) in changes {
+            let mut p = proof.clone();
+            p.accept_sets[party][0] = set;
+            if hachi_co_r2l::select_iteration(ctx, &p.accept_sets).unwrap() != j_star {
+                reject(&p, what);
+                moved += 1;
+            }
+        }
     }
+    assert!(moved > 0, "{name}: some change of a set moves j*");
     for (j, poly) in proof.v.iter().enumerate() {
         for i in 0..poly.0.len() {
             let mut p = proof.clone();
@@ -462,18 +484,28 @@ fn malformed_structs_and_statements_are_errors() {
     let mut p = h.proof.clone();
     p.sumcheck.finals.g0[0].0[0] = u64::MAX;
     assert!(non_canonical(check(&p)));
-    // The attempt cap.
-    for a in [MAX_ATTEMPTS, MAX_ATTEMPTS + 1, u64::MAX] {
+    // A set naming an iteration at or beyond L.
+    for bit in [l.rej_iterations, l.rej_iterations + 1, 63] {
         let mut p = h.proof.clone();
-        p.attempt = a;
+        p.accept_sets[0][0] |= 1 << bit;
         assert_eq!(
             check(&p),
-            Err(VerifyError::Proof(ProofError::AttemptOutOfRange {
-                attempt: a,
-                cap: MAX_ATTEMPTS
+            Err(VerifyError::Proof(ProofError::AcceptSet {
+                party: 1,
+                iterations: l.rej_iterations
             }))
         );
     }
+    // A set with a word too many or too few.
+    let mut p = h.proof.clone();
+    p.accept_sets[0].push(0);
+    assert!(shape(check(&p)));
+    let mut p = h.proof.clone();
+    p.accept_sets[0].clear();
+    assert!(shape(check(&p)));
+    let mut p = h.proof.clone();
+    p.accept_sets.pop();
+    assert!(shape(check(&p)));
     // Wrong shapes.
     let mut p = h.proof.clone();
     p.e_u.0.pop();
@@ -559,9 +591,10 @@ fn malformed_structs_and_statements_are_errors() {
     ));
 }
 
-/// The word indices of the encoding of `proof` (after the header) by kind: the table of the
-/// base-PCS lengths, the residue words, and the base PCS's own words.
+/// The word indices of the encoding of `proof` (after the header) by kind: the accept sets, the
+/// table of the base-PCS lengths, the residue words, and the base PCS's own words.
 struct WordMap {
+    sets: Range<usize>,
     lengths: Range<usize>,
     residues: Vec<Range<usize>>,
     pcs: Vec<Range<usize>>,
@@ -571,7 +604,8 @@ struct WordMap {
 fn word_map(ctx: &Context<K>, proof: &EvalProof<K>) -> WordMap {
     let l = &ctx.layout;
     let t = &proof.sumcheck;
-    let lengths = 1..1 + 6 * l.n;
+    let sets = 0..l.n * l.rej_iterations.div_ceil(64);
+    let lengths = sets.end..sets.end + 6 * l.n;
     let head = l.d + l.n_d * l.d + 2 * l.n * K;
     let commitments = t.commitments.total_words();
     let middle = (l.ell_pp * (l.d0 + l.d1 + 2) + 3 * l.n) * K;
@@ -582,6 +616,7 @@ fn word_map(ctx: &Context<K>, proof: &EvalProof<K>) -> WordMap {
     let o = r2.end..r2.end + openings;
     WordMap {
         total: o.end,
+        sets,
         lengths,
         residues: vec![r1, r2],
         pcs: vec![c, o],
@@ -633,7 +668,7 @@ fn malformed_encodings_are_errors() {
         b[i] ^= 0x20;
         assert_eq!(EvalProof::from_bytes(ctx, &b), Err(DecodeError::BadMagic));
     }
-    for version in [0u64, 1, 2, 4, u64::MAX] {
+    for version in [0u64, 1, 2, 3, 5, u64::MAX] {
         let mut b = h.bytes.clone();
         b[8..16].copy_from_slice(&version.to_le_bytes());
         assert_eq!(
@@ -694,22 +729,26 @@ fn malformed_encodings_are_errors() {
     let moved = EvalProof::from_bytes(ctx, &b).unwrap();
     assert_ne!(moved, h.proof);
     assert!(verify_value(ctx, &h.pcs, &h.u, &h.x, &h.y, &moved).is_err());
-    // a* at and beyond the cap; every value below it decodes.
-    for a in [MAX_ATTEMPTS, MAX_ATTEMPTS + 1, 1 << 32, u64::MAX] {
+    // An accept set with a bit at or beyond L; every set within L decodes.
+    assert_eq!(map.sets, 0..l.n, "one word per set at L = 16");
+    for bad in [1u64 << l.rej_iterations, 1 << 32, u64::MAX] {
         let mut b = h.bytes.clone();
-        b[HEADER_LEN..HEADER_LEN + 8].copy_from_slice(&a.to_le_bytes());
+        b[HEADER_LEN..HEADER_LEN + 8].copy_from_slice(&bad.to_le_bytes());
         assert_eq!(
             EvalProof::from_bytes(ctx, &b),
-            Err(DecodeError::Invalid(ProofError::AttemptOutOfRange {
-                attempt: a,
-                cap: MAX_ATTEMPTS
+            Err(DecodeError::Invalid(ProofError::AcceptSet {
+                party: 1,
+                iterations: l.rej_iterations
             }))
         );
     }
-    for a in 0..MAX_ATTEMPTS {
+    for set in [0u64, 1, 0b1010, (1 << l.rej_iterations) - 1] {
         let mut b = h.bytes.clone();
-        b[HEADER_LEN..HEADER_LEN + 8].copy_from_slice(&a.to_le_bytes());
-        assert_eq!(EvalProof::from_bytes(ctx, &b).unwrap().attempt, a);
+        b[HEADER_LEN..HEADER_LEN + 8].copy_from_slice(&set.to_le_bytes());
+        assert_eq!(
+            EvalProof::from_bytes(ctx, &b).unwrap().accept_sets[0],
+            [set]
+        );
     }
     // An encoding for another context: toy-n2 has n = 2, so another table and length.
     let (_, ctx2) = load("toy-n2");
@@ -724,6 +763,7 @@ fn malformed_encodings_are_errors() {
 fn fuzzed_encodings_never_panic() {
     let h = honest();
     let (ctx, q) = (&h.ctx, h.ctx.q());
+    let l = &ctx.layout;
     let len = h.bytes.len();
     let map = word_map(ctx, &h.proof);
     let decode_and_verify = |b: &[u8]| -> bool {
@@ -766,8 +806,8 @@ fn fuzzed_encodings_never_panic() {
     for _ in 0..200 {
         let mut b = h.bytes[..HEADER_LEN].to_vec();
         for w in 0..words {
-            let value = if w == 0 {
-                rng.random_range(0..MAX_ATTEMPTS)
+            let value = if map.sets.contains(&w) {
+                rng.random_range(0..1u64 << l.rej_iterations)
             } else if map.lengths.contains(&w) {
                 let at = HEADER_LEN + 8 * w;
                 u64::from_le_bytes(h.bytes[at..at + 8].try_into().unwrap())
@@ -797,12 +837,12 @@ fn fuzzed_encodings_never_panic() {
                 b[at..at + 8].copy_from_slice(&rng.random::<u64>().to_le_bytes());
             }
             2 => {
-                // A canonical change: the word stays a valid a*, length, residue or base-PCS
-                // word.
+                // A canonical change: the word stays a valid accept set, length, residue or
+                // base-PCS word.
                 let w = rng.random_range(0..words);
                 let at = HEADER_LEN + 8 * w;
-                let value = if w == 0 {
-                    rng.random_range(0..MAX_ATTEMPTS)
+                let value = if map.sets.contains(&w) {
+                    rng.random_range(0..1u64 << l.rej_iterations)
                 } else if map.lengths.contains(&w) {
                     u64::from_le_bytes(h.bytes[at..at + 8].try_into().unwrap())
                 } else if in_any(&map.pcs, w) {
@@ -905,4 +945,32 @@ fn provers_refuse_wrong_claims_and_mismatched_inputs() {
     let (u2, x2, y2) = fixture_statement(&fx);
     let proof1 = fixture_proof(&load("toy-n1").0);
     assert!(verify_value(&ctx2, &clear_pcs(&ctx2), &u2, &x2, &y2, &proof1).is_err());
+}
+
+/// Under Fiat-Shamir the provers' sets of accepted iterations are part of the transcript: a
+/// change of a set that leaves j* where it is (an iteration after j* flipped) is rejected too,
+/// because the coins of the sumcheck follow the absorbed sets.
+#[test]
+fn accept_sets_are_bound_by_the_transcript() {
+    let h = honest();
+    let ctx = &h.ctx;
+    let l = &ctx.layout;
+    let j_star = hachi_co_r2l::select_iteration(ctx, &h.proof.accept_sets)
+        .unwrap()
+        .unwrap();
+    let mut tried = 0;
+    for j in j_star + 1..l.rej_iterations {
+        let mut p = h.proof.clone();
+        p.accept_sets[0][0] ^= 1 << j;
+        assert_eq!(
+            hachi_co_r2l::select_iteration(ctx, &p.accept_sets).unwrap(),
+            Some(j_star)
+        );
+        assert!(
+            verify_value(ctx, &h.pcs, &h.u, &h.x, &h.y, &p).is_err(),
+            "iteration {j} flipped was accepted"
+        );
+        tried += 1;
+    }
+    assert!(tried > 0, "j* = {j_star} leaves no later iteration");
 }

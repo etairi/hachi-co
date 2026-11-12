@@ -114,9 +114,9 @@ impl BlockState {
 pub struct PartyState<const K: usize> {
     /// The prover $p \in \lbrace 1, \dots, n \rbrace$.
     pub party: PartyId,
-    /// $\langle \mathbf f \rangle\_p = \sum\_i \langle \mathbf f\_i \rangle\_p \in
-    /// \mathbb F\_{q^k}^{2^\ell}$, its share after the resharing (`6_Collaborative_Hachi.tex`:
-    /// 308-313), coefficient $\mathrm{nat}(\mathbf q)$ at index $\mathrm{nat}(\mathbf q)$.
+    /// $\langle \mathbf f \rangle\_p \in \mathbb F\_{q^k}^{2^\ell}$, its input share as it is
+    /// (Commit has no resharing since the draft's commit `1096ea2`), coefficient
+    /// $\mathrm{nat}(\mathbf q)$ at index $\mathrm{nat}(\mathbf q)$.
     pub share: Vec<Ext<K>>,
     /// The blocks $p$ holds, [`Layout::blocks_of`]`(p)`, in increasing order of index (none for
     /// the unowned zero blocks, `ref/README.md`, "Blocks and owners").

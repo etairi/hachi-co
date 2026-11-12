@@ -38,7 +38,7 @@ pub enum StatementError {
 
 /// An [`EvalProof`](crate::EvalProof) that does not fit the context: a component of the wrong
 /// length (including a missing or extra base-PCS commitment or proof), a residue that is not
-/// below $q$, or an attempt index at or beyond the cap [`hachi_co_r2l::MAX_ATTEMPTS`]
+/// below $q$, or a set of accepted iterations with an iteration at or beyond $L$
 /// ([`EvalProof::validate`](crate::EvalProof::validate)). The words of the base PCS are judged
 /// by the sumcheck verifier, with the base PCS.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -64,14 +64,17 @@ pub enum ProofError {
         /// The modulus.
         q: u64,
     },
-    /// The index $a^\ast$ of the accepted attempt is at or beyond the cap on the attempts of the
-    /// ring-to-linear step ([`hachi_co_r2l::MAX_ATTEMPTS`]); honest provers never produce it.
-    #[error("malformed proof: attempt index {attempt} is not below the cap {cap}")]
-    AttemptOutOfRange {
-        /// The index in the proof.
-        attempt: u64,
-        /// The cap.
-        cap: u64,
+    /// A prover's set of accepted iterations names an iteration at or beyond $L$
+    /// ([`hachi_co_r2l::check_accept_set`]); honest provers never produce it, and every set has
+    /// one encoding.
+    #[error(
+        "malformed proof: the set of accepted iterations of prover {party} names an iteration at or beyond L = {iterations}"
+    )]
+    AcceptSet {
+        /// The prover whose set it is.
+        party: usize,
+        /// $L$.
+        iterations: usize,
     },
 }
 
@@ -105,7 +108,7 @@ pub enum DecodeError {
     #[error("unsupported encoding version {0}")]
     UnsupportedVersion(u64),
     /// The body decodes to a proof that does not fit the context (a residue not below $q$, or
-    /// an attempt index at or beyond the cap).
+    /// a set of accepted iterations beyond $L$).
     #[error(transparent)]
     Invalid(#[from] ProofError),
     /// The length of the encoding does not fit in `usize`: for layouts far beyond any parameter
@@ -130,7 +133,8 @@ pub enum Error {
     #[error(transparent)]
     Conv(#[from] hachi_co_conv::Error),
     /// An error of the ring-to-linear step (`hachi-co-r2l`), including
-    /// [`TooManyAttempts`](hachi_co_r2l::Error::TooManyAttempts).
+    /// [`NoCommonIteration`](hachi_co_r2l::Error::NoCommonIteration), the draft's abort when no
+    /// iteration of the rejection sampling is accepted by every prover.
     #[error(transparent)]
     R2l(#[from] hachi_co_r2l::Error),
     /// An error of the sumcheck provers (`hachi-co-sumcheck`).
@@ -164,9 +168,10 @@ pub enum VerifyError {
     /// expected after the statement checks; kept as a value rather than a panic).
     #[error("public vectors: {0}")]
     PublicVectors(hachi_co_conv::Error),
-    /// The ring-to-linear step: the challenges of the accepted attempt, $\mathbf c \in
-    /// \mathcal C^{2^r}$, or $\mathbf M$ and $\mathbf y$ (`5_Building_Blocks.tex`:134-138,
-    /// 157-179).
+    /// The ring-to-linear step: the challenges, $\mathbf c \in \mathcal C^{2^r}$, the selected
+    /// iteration (none in every set is
+    /// [`NoCommonIteration`](hachi_co_r2l::Error::NoCommonIteration)), or $\mathbf M$ and
+    /// $\mathbf y$ (`5_Building_Blocks.tex`:134-138, 157-179; `fig:ring-to-linear`, step 6).
     #[error("ring-to-linear: {0}")]
     RingToLinear(hachi_co_r2l::Error),
     /// The sumcheck verifier rejected (`5_Building_Blocks.tex`:308-366): a failing round or final

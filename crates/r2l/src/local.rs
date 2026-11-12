@@ -1,8 +1,9 @@
-//! The party-local steps of the ring-to-linear step (`5_Building_Blocks.tex`:115-143), as pure
-//! functions of the party's data: $w\_i$ and $\hat{\mathbf w}\_i$ of the owned blocks, the mask
-//! and $\boldsymbol\rho$ of an attempt with their images, the input to
-//! $\mathcal F\_{\mathsf{AH}}(\mathbf D)$, the check $\mathbf c \in \mathcal C^{2^r}$, the integer
-//! fold and $\mathsf{Rej}$.
+//! The party-local steps of the ring-to-linear step (`5_Building_Blocks.tex`:115-143, with the
+//! $L$ iterations of `fig:ring-to-linear` since the draft's commit `1096ea2`), as pure functions
+//! of the party's data: $w\_i$ and $\hat{\mathbf w}\_i$ of the owned blocks, the $L$ masks and
+//! $\boldsymbol\rho^v$ with their images, the input to $\mathcal F\_{\mathsf{AH}}(\mathbf D)$,
+//! the check $\mathbf c \in \mathcal C^{2^r}$, the integer fold, $\mathsf{Rej}$ and the sets of
+//! accepted iterations.
 //!
 //! Short vectors are flat (`docs/m1-spec.md`, "Conventions"): a vector of $L$ ring elements is
 //! $Ld$ integers, coefficient $j$ of element $i$ at $id + j$; masks, folds and responses have
@@ -243,52 +244,54 @@ pub fn mask_images<const K: usize>(
     images
 }
 
-/// Prover $p$'s private values of one attempt (`5_Building_Blocks.tex`:122-126).
+/// Prover $p$'s private values of the ring-to-linear step (`fig:ring-to-linear`, step 3, since
+/// the draft's commit `1096ea2`): the $L$ masks, their images and $\boldsymbol\rho^v\_p$.
 ///
-/// All of it is secret. The mask must never be revealed or reused (plan
-/// `docs/hachi-co-plan.md`, finding F5); $\boldsymbol\rho^v\_p$ and the images enter $p$'s share of
-/// $\mathbf z'$ if the attempt is accepted (as copies). `Debug` shows only the attempt index; the
-/// type is neither `Clone` nor comparable, so that the mask is not copied or compared by
-/// accident, and dropping it wipes the mask, $\boldsymbol\rho^v\_p$ and the images (best effort, see
-/// the crate documentation), also when an error ends the attempt early.
-pub struct AttemptSecrets {
-    /// The attempt index $a = 0, 1, \dots$ (`ref/README.md`, choice 5).
-    pub attempt: u64,
-    /// The mask $\mathbf r\_p \leftarrow \chi\_r$, uniform in $\[-\gamma, \gamma\]^N$, flat
-    /// (line 122).
-    pub mask: Vec<i64>,
-    /// $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, flat ($m\_v d$ integers in
-    /// $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$, line 122).
+/// All of it is secret. A mask must never be revealed or reused (plan `docs/hachi-co-plan.md`,
+/// finding F5); $\boldsymbol\rho^v\_p$ and the images of all $L$ masks enter $p$'s share of
+/// $\mathbf z'$ (as copies). `Debug` shows only the number of masks; the type is neither `Clone`
+/// nor comparable, so that a mask is not copied or compared by accident, and dropping it wipes
+/// the masks, $\boldsymbol\rho^v\_p$ and the images (best effort, see the crate documentation),
+/// also when an error ends the step early.
+pub struct MaskSecrets {
+    /// The masks $\mathbf r\_p^j \leftarrow \chi\_r$, $j \lt L$ (0-indexed, the draft's $j + 1$),
+    /// each uniform in $\[-\gamma, \gamma\]^N$ and flat.
+    pub masks: Vec<Vec<i64>>,
+    /// $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, one for all iterations, flat ($m\_v d$
+    /// integers in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$).
     pub rho_v: Vec<i64>,
-    /// The images of the mask ([`mask_images`]).
-    pub images: MaskImages,
+    /// The images of each mask ([`mask_images`]), in the order of the masks.
+    pub images: Vec<MaskImages>,
 }
 
-impl core::fmt::Debug for AttemptSecrets {
+impl core::fmt::Debug for MaskSecrets {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AttemptSecrets")
-            .field("attempt", &self.attempt)
+        f.debug_struct("MaskSecrets")
+            .field("masks", &format_args!("[{} masks]", self.masks.len()))
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for AttemptSecrets {
+impl Drop for MaskSecrets {
     fn drop(&mut self) {
-        self.wipe_mask();
+        self.wipe_masks();
         crate::ct::wipe(&mut self.rho_v);
-        let images = &mut self.images;
-        wipe_polys(&mut images.t0);
-        wipe_polys(&mut images.t0_hat);
-        wipe_polys(core::slice::from_mut(&mut images.w0));
-        wipe_polys(&mut images.w0_hat);
+        for images in &mut self.images {
+            wipe_polys(&mut images.t0);
+            wipe_polys(&mut images.t0_hat);
+            wipe_polys(core::slice::from_mut(&mut images.w0));
+            wipe_polys(&mut images.w0_hat);
+        }
     }
 }
 
-impl AttemptSecrets {
-    /// Overwrites the mask with zeros (best effort, see the crate documentation). The driver
-    /// calls it as soon as the mask is no longer needed.
-    pub fn wipe_mask(&mut self) {
-        crate::ct::wipe(&mut self.mask);
+impl MaskSecrets {
+    /// Overwrites every mask with zeros (best effort, see the crate documentation). The driver
+    /// calls it as soon as the masks are no longer needed, right after $\mathsf{Rej}$.
+    pub fn wipe_masks(&mut self) {
+        for mask in &mut self.masks {
+            crate::ct::wipe(mask);
+        }
     }
 
     /// $\boldsymbol\rho^v\_p$ as $m\_v$ ring elements with residues in $\[0, q)$ (checked to lie
@@ -316,57 +319,57 @@ impl AttemptSecrets {
     }
 }
 
-/// Step 2 for one attempt (`5_Building_Blocks.tex`:122-126): draws the mask
-/// $\mathbf r\_p \leftarrow \chi\_r$ ([`PartyRandomness::mask`], $N$ entries, width $\gamma$)
-/// and $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$ ([`PartyRandomness::rho_v`], $m\_v d$
-/// entries), both with index `attempt`, checks what the randomness source returned (lengths and
-/// ranges), and computes the [`mask_images`].
+/// Step 3 (`fig:ring-to-linear`, since the draft's commit `1096ea2`): draws the $L$ masks
+/// $\mathbf r\_p^j \leftarrow \chi\_r$ ([`PartyRandomness::mask`] with index $j$, $N$ entries,
+/// width $\gamma$) and one $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$
+/// ([`PartyRandomness::rho_v`], $m\_v d$ entries), checks what the randomness source returned
+/// (lengths and ranges), and computes the [`mask_images`] of every mask, in parallel.
 ///
 /// # Errors
 /// The errors of the randomness source ([`Error::Core`], e.g.
-/// [`RandomnessReuse`](hachi_co_core::Error::RandomnessReuse) for an attempt drawn twice from a
+/// [`RandomnessReuse`](hachi_co_core::Error::RandomnessReuse) for a second call on one
 /// [`hachi_co_core::PrgRandomness`]); [`Error::Shape`] or [`Error::OutOfRange`] if it returned
 /// malformed values; as [`mask_images`].
-pub fn sample_attempt<const K: usize, R: PartyRandomness<K>>(
+pub fn sample_masks<const K: usize, R: PartyRandomness<K>>(
     ctx: &Context<K>,
     pv: &PublicVectors<K>,
     rng: &mut R,
-    attempt: u64,
-) -> Result<AttemptSecrets> {
+) -> Result<MaskSecrets> {
     let l = &ctx.layout;
-    let mask = rng.mask(attempt, ctx.gamma(), response_len(ctx))?;
-    let mut secrets = AttemptSecrets {
-        attempt,
-        mask,
+    let mut secrets = MaskSecrets {
+        masks: Vec::with_capacity(l.rej_iterations),
         rho_v: Vec::new(),
-        images: MaskImages {
-            t0: Vec::new(),
-            t0_hat: Vec::new(),
-            w0: Poly::default(),
-            w0_hat: Vec::new(),
-        },
+        images: Vec::new(),
     };
     // On an error below, dropping `secrets` wipes what was drawn.
-    check_len(
-        "mask r_p (N = d delta 2^m)",
-        response_len(ctx),
-        secrets.mask.len(),
-    )?;
-    secrets.rho_v = rng.rho_v(attempt, ctx.b(), l.m_v * l.d)?;
+    for j in 0..l.rej_iterations {
+        let mask = rng.mask(j as u64, ctx.gamma(), response_len(ctx))?;
+        secrets.masks.push(mask);
+        check_len(
+            "mask r_p^j (N = d delta 2^m)",
+            response_len(ctx),
+            secrets.masks[j].len(),
+        )?;
+    }
+    secrets.rho_v = rng.rho_v(ctx.b(), l.m_v * l.d)?;
     secrets.rho_polys(ctx)?;
-    secrets.images = mask_images(ctx, pv, &secrets.mask)?;
+    secrets.images = secrets
+        .masks
+        .par_iter()
+        .map(|mask| mask_images(ctx, pv, mask))
+        .collect::<Result<Vec<_>>>()?;
     Ok(secrets)
 }
 
 /// Writes prover $p$'s values of $(\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
 /// \boldsymbol\rho^v)$ into `out` $= \mathbf z'\[0, t)$ (positions of [`hachi_co_core::Layout`]):
-/// its blocks of $\hat{\mathbf w}$, its own $\hat{\mathbf w}\_{0,p}$, $\hat{\mathbf t}\_{0,p}$
-/// and $\boldsymbol\rho^v\_p$; other entries are left untouched.
+/// its blocks of $\hat{\mathbf w}$, its own $\hat{\mathbf w}\_{0,p}^j$ and $\hat{\mathbf t}\_{0,p}^j$
+/// of every iteration $j \lt L$, and $\boldsymbol\rho^v\_p$; other entries are left untouched.
 pub(crate) fn fill_first_message_part<const K: usize>(
     ctx: &Context<K>,
     party: PartyId,
     w: &[BlockW],
-    secrets: &AttemptSecrets,
+    secrets: &MaskSecrets,
     out: &mut [Poly],
 ) -> Result<()> {
     let l = &ctx.layout;
@@ -385,16 +388,24 @@ pub(crate) fn fill_first_message_part<const K: usize>(
         check_polys("w_hat_i", &bw.w_hat, l.delta, l.d, ctx.q())?;
         out[l.w_hat_range(i)].clone_from_slice(&bw.w_hat);
     }
-    secrets.images.validate(ctx)?;
-    out[l.w0_hat_range(party)].clone_from_slice(&secrets.images.w0_hat);
-    out[l.t0_hat_range(party)].clone_from_slice(&secrets.images.t0_hat);
+    check_len(
+        "the images of the masks (one per iteration)",
+        l.rej_iterations,
+        secrets.images.len(),
+    )?;
+    for (j, images) in secrets.images.iter().enumerate() {
+        images.validate(ctx)?;
+        out[l.w0_hat_range(party, j)].clone_from_slice(&images.w0_hat);
+        out[l.t0_hat_range(party, j)].clone_from_slice(&images.t0_hat);
+    }
     let rho = secrets.rho_polys(ctx)?;
     out[l.rho_v_range(party)].clone_from_slice(&rho);
     Ok(())
 }
 
 /// Prover $p$'s slice $\lbrace (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
-/// \boldsymbol\rho) \rbrace\_p \in \mathcal R\_q^{t}$ (`5_Building_Blocks.tex`:127-133;
+/// \boldsymbol\rho) \rbrace\_p \in \mathcal R\_q^{t}$ (`5_Building_Blocks.tex`:127-133, the
+/// images of all $L$ masks;
 /// $\mathsf{Slice}$ of `4_preliminaries.tex`:167-177): the values $p$ holds at their positions of
 /// $\mathbf z'\[0, t)$ and zero elsewhere. It equals the first $t$ entries of $p$'s share of
 /// $\mathbf z'$ ([`crate::z_prime_share`]).
@@ -407,7 +418,7 @@ pub fn d_slice<const K: usize>(
     ctx: &Context<K>,
     party: PartyId,
     w: &[BlockW],
-    secrets: &AttemptSecrets,
+    secrets: &MaskSecrets,
 ) -> Result<Vec<Poly>> {
     let mut slice = vec![ctx.ring.zero(); ctx.layout.t];
     fill_first_message_part(ctx, party, w, secrets, &mut slice)?;

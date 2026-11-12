@@ -25,14 +25,19 @@ pub struct NamedBlock {
 ///
 /// All positions are 0-indexed (`ref/README.md`, "Indexing": the draft's 1-indexed position $u$ is
 /// our $u - 1$). The layout of $\mathbf z' \in \mathcal R\_q^{\mu - 1}$ is that of
-/// `5_Building_Blocks.tex`:177-186 and of the oracle (`ref/hachico_ref/r2l.py`, class `Layout`):
-/// $$\mathbf z' = \bigl\[ \hat{\mathbf w}\ (2^r\delta) \mid \hat{\mathbf w}\_0\ (n\delta) \mid
-/// \hat{\mathbf t}\_0\ (n n\_A \delta) \mid \boldsymbol\rho^v\ (n m\_v) \mid
+/// `5_Building_Blocks.tex`:177-186, with the $L$ masks per prover of the draft since its commit
+/// `1096ea2` (`fig:ring-to-linear`, step 3), and of the oracle (`ref/hachico_ref/r2l.py`, class
+/// `Layout`):
+/// $$\mathbf z' = \bigl\[ \hat{\mathbf w}\ (2^r\delta) \mid \hat{\mathbf w}\_0\ (nL\delta) \mid
+/// \hat{\mathbf t}\_0\ (nL n\_A \delta) \mid \boldsymbol\rho^v\ (n m\_v) \mid
 /// \hat{\mathbf t}\ (2^r n\_A \delta) \mid \boldsymbol\rho^u\ (n m\_u) \mid
 /// \hat{\mathbf z}\ (2^m \delta \tau) \mid \langle u \rangle\ (1) \bigr\],$$
 /// with the element-major gadget layout inside each block: $\hat{\mathbf w}\_i =
-/// \mathbf G\_1^{-1}(w\_i)$ at $w + i\delta + e$; $\hat{\mathbf w}\_{0,p}$ at $w\_0 + (p-1)\delta +
-/// e$; $\hat{\mathbf t}\_{0,p}$ at $t\_0 + (p-1) n\_A \delta + a\delta + e$; $\boldsymbol\rho^v\_p$ at
+/// \mathbf G\_1^{-1}(w\_i)$ at $w + i\delta + e$; $\hat{\mathbf w}\_{0,p}^j$ (iteration $j \lt L$,
+/// 0-indexed, the draft's $j + 1$) at $w\_0 + ((p-1)L + j)\delta + e$; $\hat{\mathbf t}\_{0,p}^j$
+/// at $t\_0 + ((p-1)L + j) n\_A \delta + a\delta + e$, prover-major as the draft's
+/// $\hat{\mathbf w}\_0 = ((\hat{\mathbf w}\_{0,1}^1, \dots, \hat{\mathbf w}\_{0,1}^L), \dots)$;
+/// $\boldsymbol\rho^v\_p$ at
 /// $\rho\_v + (p-1) m\_v + j$; $\hat{\mathbf t}\_i$ at $t + i n\_A \delta + a \delta + e$;
 /// $\boldsymbol\rho^u\_p$ at $\rho\_u + (p-1) m\_u + j$; digit
 /// $\theta$ of $z\_{j\delta + e}$ at $z + (j\delta + e)\tau + \theta$ (`ref/README.md`, "z′
@@ -83,6 +88,9 @@ pub struct Layout {
     /// $m\_v$, the ring elements of each $\boldsymbol\rho^v\_p \in S\_b^{m\_v}$
     /// (`5_Building_Blocks.tex`:122).
     pub m_v: usize,
+    /// $L$, the parallel iterations of the rejection sampling: every prover commits $L$ masks
+    /// (the draft's `fig:parameters` and `fig:ring-to-linear` since its commit `1096ea2`).
+    pub rej_iterations: usize,
     /// The witness pad's form.
     pub pad_rule: PadRule,
     /// $2^r$, the number of blocks of $\mathbf f'$.
@@ -97,8 +105,8 @@ pub struct Layout {
     /// The width $n\_A \delta 2^r + n m\_u$ of $\mathbf B$ (`6_Collaborative_Hachi.tex`:290);
     /// $\mathbf B$ acts on $\mathbf z'\[t, z)$.
     pub width_b: usize,
-    /// The width $\delta(2^r + n + n n\_A) + n m\_v$ of $\mathbf D$
-    /// (`6_Collaborative_Hachi.tex`:291); $\mathbf D$ acts on $\mathbf z'\[0..t)$.
+    /// The width $\delta(2^r + nL + nL n\_A) + n m\_v$ of $\mathbf D$ (the draft's Setup since its
+    /// commit `1096ea2`); $\mathbf D$ acts on $\mathbf z'\[0..t)$.
     pub width_d: usize,
     /// $\mu = \mathrm{len}(\mathbf z') + 1$ (`6_Collaborative_Hachi.tex`:282,
     /// `5_Building_Blocks.tex`:226): the pad's row comes after $\mathbf z'$.
@@ -125,9 +133,9 @@ pub struct Layout {
     // ---- offsets of z' (5_Building_Blocks.tex:177-186) ----
     /// Start of $\hat{\mathbf w}$ (always 0).
     pub w: usize,
-    /// Start of $\hat{\mathbf w}\_0 = (\hat{\mathbf w}\_{0,1}, \dots, \hat{\mathbf w}\_{0,n})$.
+    /// Start of $\hat{\mathbf w}\_0$, the $L$ digit vectors $\hat{\mathbf w}\_{0,p}^j$ of every prover.
     pub w0: usize,
-    /// Start of $\hat{\mathbf t}\_0 = (\hat{\mathbf t}\_{0,1}, \dots, \hat{\mathbf t}\_{0,n})$.
+    /// Start of $\hat{\mathbf t}\_0$, the $L$ digit vectors $\hat{\mathbf t}\_{0,p}^j$ of every prover.
     pub t0: usize,
     /// Start of $\boldsymbol\rho^v = (\boldsymbol\rho^v\_1, \dots, \boldsymbol\rho^v\_n)$.
     pub rho_v: usize,
@@ -148,11 +156,13 @@ pub struct Layout {
     pub row_b: usize,
     /// The row $\mathbf b^T \mathbf G\_{2^r} \mid \cdots \mid -1$ ($= n\_D + n\_B$).
     pub row_bg: usize,
-    /// The row $\mathbf c^T \otimes \mathbf G\_1 \mid \mathbf 1\_n^T \otimes \mathbf G\_1 \mid \cdots
-    /// \mid -\mathbf a^T \mathbf G\_{2^m} \mathbf J\_{\delta 2^m}$ ($= n\_D + n\_B + 1$).
+    /// The row $\mathbf c^T \otimes \mathbf G\_1 \mid \mathbf 1\_n^T \otimes \hat{\mathbf e}\_{j^\ast}^T
+    /// \otimes \mathbf G\_1 \mid \cdots \mid -\mathbf a^T \mathbf G\_{2^m} \mathbf J\_{\delta 2^m}$
+    /// ($= n\_D + n\_B + 1$).
     pub row_c: usize,
-    /// First of the $n\_A$ rows $\mathbf 1\_n^T \otimes \mathbf G\_{n\_A} \mid \mathbf c^T \otimes
-    /// \mathbf G\_{n\_A} \mid -\mathbf A \mathbf J\_{\delta 2^m}$ ($= n\_D + n\_B + 2$).
+    /// First of the $n\_A$ rows $\mathbf 1\_n^T \otimes \hat{\mathbf e}\_{j^\ast}^T \otimes
+    /// \mathbf G\_{n\_A} \mid \mathbf c^T \otimes \mathbf G\_{n\_A} \mid -\mathbf A
+    /// \mathbf J\_{\delta 2^m}$ ($= n\_D + n\_B + 2$).
     pub row_a: usize,
 }
 
@@ -238,6 +248,7 @@ impl Layout {
         let n_d = to_usize(c.n_d, "n_D")?;
         let m_u = to_usize(c.m_u, "m_u")?;
         let m_v = to_usize(c.m_v, "m_v")?;
+        let rej_iterations = to_usize(params.rej_iterations, "L")?;
         let width_a = to_usize(params.width_a, "the width of A")?;
         let width_b = to_usize(params.width_b, "the width of B")?;
         let width_d = to_usize(params.width_d, "the width of D")?;
@@ -260,6 +271,9 @@ impl Layout {
         if d < 2 || !d.is_power_of_two() {
             return fail(format!("d = {d} is not a power of two >= 2"));
         }
+        if rej_iterations == 0 {
+            return fail("L = 0: the rejection sampling needs at least one iteration".into());
+        }
         if r < log_n {
             return fail(format!(
                 "r = {r} < ceil(log n) = {log_n} (6_Collaborative_Hachi.tex:276)"
@@ -271,10 +285,11 @@ impl Layout {
 
         // Offsets of z' (5_Building_Blocks.tex:177-186).
         let w = 0;
+        let n_l = mul(n, rej_iterations, "n L")?;
         let w0 = add(w, mul(n_blocks, delta, "2^r delta")?, "w0")?;
-        let t0 = add(w0, mul(n, delta, "n delta")?, "t0")?;
-        let n_na_delta = mul(mul(n, n_a, "n n_A")?, delta, "n n_A delta")?;
-        let rho_v = add(t0, n_na_delta, "rho_v")?;
+        let t0 = add(w0, mul(n_l, delta, "n L delta")?, "t0")?;
+        let n_l_na_delta = mul(mul(n_l, n_a, "n L n_A")?, delta, "n L n_A delta")?;
+        let rho_v = add(t0, n_l_na_delta, "rho_v")?;
         let t = add(rho_v, mul(n, m_v, "n m_v")?, "t")?;
         let t_hat_len = mul(mul(n_blocks, n_a, "2^r n_A")?, delta, "2^r n_A delta")?;
         let rho_u = add(t, t_hat_len, "rho_u")?;
@@ -289,7 +304,7 @@ impl Layout {
         }
         if t != width_d {
             return fail(format!(
-                "t = {t} but the width of D is {width_d} (6_Collaborative_Hachi.tex:291)"
+                "t = {t} but the width of D is {width_d} (delta (2^r + n L + n L n_A) + n m_v)"
             ));
         }
         if z - t != width_b {
@@ -358,6 +373,7 @@ impl Layout {
             n_d,
             m_u,
             m_v,
+            rej_iterations,
             pad_rule: c.pad,
             n_blocks,
             block_len,
@@ -452,23 +468,46 @@ impl Layout {
         self.w + i * self.delta..self.w + (i + 1) * self.delta
     }
 
-    /// The $\delta$ positions of $\hat{\mathbf w}\_{0,p}$ (`5_Building_Blocks.tex`:125, 179);
-    /// empty for $p \notin \lbrace 1, \dots, n \rbrace$.
-    pub fn w0_hat_range(&self, p: PartyId) -> Range<usize> {
+    /// The $\delta$ positions of $\hat{\mathbf w}\_{0,p}^j = \mathbf G\_1^{-1}(w\_{0,p}^j)$ of
+    /// iteration $j$ (0-indexed; `fig:ring-to-linear`, step 3); empty for
+    /// $p \notin \lbrace 1, \dots, n \rbrace$ or $j \ge L$.
+    pub fn w0_hat_range(&self, p: PartyId, j: usize) -> Range<usize> {
+        if p == 0 || p > self.n || j >= self.rej_iterations {
+            return 0..0;
+        }
+        let first = self.w0 + ((p - 1) * self.rej_iterations + j) * self.delta;
+        first..first + self.delta
+    }
+
+    /// The $L\delta$ positions of prover $p$'s $\hat{\mathbf w}\_{0,p}^1, \dots,
+    /// \hat{\mathbf w}\_{0,p}^L$, contiguous; empty for $p \notin \lbrace 1, \dots, n \rbrace$.
+    pub fn w0_hat_block(&self, p: PartyId) -> Range<usize> {
         if p == 0 || p > self.n {
             return 0..0;
         }
-        self.w0 + (p - 1) * self.delta..self.w0 + p * self.delta
+        let len = self.rej_iterations * self.delta;
+        self.w0 + (p - 1) * len..self.w0 + p * len
     }
 
-    /// The $n\_A \delta$ positions of $\hat{\mathbf t}\_{0,p}$ (`5_Building_Blocks.tex`:124, 180),
-    /// row $a$ of $\mathbf t\_{0,p}$ at offset $a\delta$; empty for $p \notin \lbrace 1, \dots, n
-    /// \rbrace$.
-    pub fn t0_hat_range(&self, p: PartyId) -> Range<usize> {
-        if p == 0 || p > self.n {
+    /// The $n\_A \delta$ positions of $\hat{\mathbf t}\_{0,p}^j = \mathbf G\_{n\_A}^{-1}(\mathbf
+    /// t\_{0,p}^j)$ of iteration $j$ (0-indexed), row $a$ of $\mathbf t\_{0,p}^j$ at offset
+    /// $a\delta$; empty for $p \notin \lbrace 1, \dots, n \rbrace$ or $j \ge L$.
+    pub fn t0_hat_range(&self, p: PartyId, j: usize) -> Range<usize> {
+        if p == 0 || p > self.n || j >= self.rej_iterations {
             return 0..0;
         }
         let len = self.n_a * self.delta;
+        let first = self.t0 + ((p - 1) * self.rej_iterations + j) * len;
+        first..first + len
+    }
+
+    /// The $L n\_A \delta$ positions of prover $p$'s $\hat{\mathbf t}\_{0,p}^1, \dots,
+    /// \hat{\mathbf t}\_{0,p}^L$, contiguous; empty for $p \notin \lbrace 1, \dots, n \rbrace$.
+    pub fn t0_hat_block(&self, p: PartyId) -> Range<usize> {
+        if p == 0 || p > self.n {
+            return 0..0;
+        }
+        let len = self.rej_iterations * self.n_a * self.delta;
         self.t0 + (p - 1) * len..self.t0 + p * len
     }
 
@@ -517,8 +556,8 @@ impl Layout {
         let t_len = self.n_a * self.delta;
         [
             self.w + blocks.start * self.delta..self.w + blocks.end * self.delta,
-            self.w0_hat_range(p),
-            self.t0_hat_range(p),
+            self.w0_hat_block(p),
+            self.t0_hat_block(p),
             self.rho_v_range(p),
             self.t + blocks.start * t_len..self.t + blocks.end * t_len,
             self.rho_u_range(p),
@@ -530,7 +569,8 @@ impl Layout {
     /// of $\mathbf z'$ that prover $p$ holds, as sorted, disjoint, non-adjacent ranges in
     /// $\[0, \mu - 2)$ (adjacent pieces are merged, as in the fixture key
     /// `ring_to_linear/partition`). They are $p$'s blocks of $\hat{\mathbf w}$ and
-    /// $\hat{\mathbf t}$, its own $\hat{\mathbf w}\_{0,p}$, $\hat{\mathbf t}\_{0,p}$,
+    /// $\hat{\mathbf t}$, its own $\hat{\mathbf w}\_{0,p}^j$, $\hat{\mathbf t}\_{0,p}^j$ for every
+    /// iteration $j$ (`5_Building_Blocks.tex`, $\Pi\_C$, the example of $S\_1$),
     /// $\boldsymbol\rho^v\_p$ and $\boldsymbol\rho^u\_p$, and, for $p = 1$, $\hat{\mathbf z}$.
     /// Position $\mu - 2$ ($\langle u \rangle$) is in no $S\_p$. Empty for $p \notin \lbrace 1,
     /// \dots, n \rbrace$.

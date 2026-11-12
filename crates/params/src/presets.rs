@@ -8,7 +8,7 @@
 //! requires exact agreement.
 
 use crate::cascade::{Params, derive};
-use crate::choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, TauRule};
+use crate::choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, RejIterations, TauRule};
 use crate::error::{Error, Result};
 use crate::report::Report;
 use serde::{Deserialize, Serialize};
@@ -158,16 +158,19 @@ pub struct SecurePresetFile {
 
 /// The toy choices for $n$ provers (`docs/m0-spec.md`, "Toy presets"): $\ell = 6$, $\alpha = 4$,
 /// $\kappa = 2$, $b = 4$, $\omega = 2$ in the $\ell_1$ ball, $n_A = n_B = n_D = 1$,
-/// $m_u = m_v = 2$, the tight $\tau$, the smallest admissible $q$ and the draft's pad.
+/// $m_u = m_v = 2$, the tight $\tau$, [`TOY_REJ_ITERATIONS`] iterations of the rejection
+/// sampling, the smallest admissible $q$ and the draft's pad.
 ///
-/// The brief leaves $\lambda$ and $t$ open. They do not affect any derived value here; $t$ is
-/// the largest threshold below $n/2$, and $\lambda = 115$ as for the secure presets, so the
-/// report states plainly that the toys miss the knowledge-error target (a warning).
+/// The brief leaves $\lambda$ and $t$ open. $\lambda$ affects no derived value here; it is 115
+/// as for the secure presets, so the report states plainly that the toys miss the knowledge-error
+/// target and have fewer iterations than $L = \lambda$ (two warnings). $t = n - 1$, the largest
+/// threshold the draft allows since its commit `1096ea2` ($t < n$; it was $\lfloor (n-1)/2
+/// \rfloor$, the largest below $n/2$, before); the construction does not use it.
 pub fn toy_choices(n: u64) -> Choices {
     Choices {
         lambda: 115,
         n,
-        t: n.saturating_sub(1) / 2,
+        t: n.saturating_sub(1),
         ell: 6,
         alpha: 4,
         kappa: 2,
@@ -175,6 +178,7 @@ pub fn toy_choices(n: u64) -> Choices {
         omega: Omega::Fixed(2),
         challenge_set: ChallengeSet::L1Ball,
         tau_rule: TauRule::Tight,
+        rej_iterations: RejIterations::Fixed(TOY_REJ_ITERATIONS),
         n_a: 1,
         n_b: 1,
         n_d: 1,
@@ -184,6 +188,16 @@ pub fn toy_choices(n: u64) -> Choices {
         pad: PadRule::Field,
     }
 }
+
+/// The number $L$ of iterations of the rejection sampling of the toy, development and benchmark
+/// presets, in place of the draft's $L = \lambda$ ([`RejIterations`]). Each iteration is
+/// accepted by all $n$ provers with probability $M^{-n} \approx e^{-1/2}$ at these presets
+/// ($\ln M \approx 1/(2n)$ for $\gamma = 2nN\beta_1$), so all 16 fail with probability about
+/// $(1 - e^{-1/2})^{16} \approx 3 \cdot 10^{-7}$, and $\mathbf z'$ grows by
+/// $n (L - 1) \delta (1 + n_A)$ ring elements over the earlier single mask, at most one
+/// variable of the sumcheck's hypercube at the toys. With $L = 115$ the toy fixtures would grow
+/// several times over.
+pub const TOY_REJ_ITERATIONS: u32 = 16;
 
 /// The numbers of provers $n$ of the toy presets: `toy-n1`, `toy-n2`, `toy-n3` of
 /// `docs/m0-spec.md` ("Toy presets"), and `toy-n4`, `toy-n8`, added with the $n$-party tests.

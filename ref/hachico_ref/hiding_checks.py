@@ -24,12 +24,12 @@ def corruption_sets(n):
 
 
 def refresh_checks(res):
-    """tH Eq. hide-refresh: sum_{j in H} f~_j = f - sum_{c in C} f_c - sum_{i in H, c in C} sigma_{i,c}
-    + sum_{c in C, j in H} sigma_{c,j}, and Y_H of Eq. hide-YH from the permitted value f(x)."""
+    """tH Eq. hide-refresh without the resharing (Commit has none since the draft's commit 1096ea2, so every
+    sigma of the equation is zero, while tH at 1e6812f still states it with them): sum_{j in H} f~_j =
+    f - sum_{c in C} f_c, and Y_H of Eq. hide-YH from the permitted value f(x)."""
     ctx, inp, cd = res["ctx"], res["inp"], res["cdata"]
     P, F, S = ctx.P, ctx.F, ctx.S
     q = P.q
-    sigma = cd["reshare"]
     out = OrderedDict()
     mono = S.monomials([F.to_sub(xi) for xi in inp["x"]])
     for C in corruption_sets(P.n):
@@ -38,8 +38,6 @@ def refresh_checks(res):
         known = np.zeros_like(lhs)                  # everything on the right except f
         for c in C:
             known = known - inp["f_init"][c - 1]
-            for i in H:
-                known = known - sigma[i - 1, c - 1] + sigma[c - 1, i - 1]
         known %= q
         name = "C=%s" % (list(C),)
         out["hide-refresh " + name] = bool(np.array_equal(lhs, (inp["f"] + known) % q))
@@ -67,7 +65,7 @@ def honest_aggregates(res, C, seed):
     ctx = res["ctx"]
     P, R = ctx.P, ctx.R
     q, d = P.q, P.d
-    r2l, acc = res["r2l"], res["r2l"]["attempts"][-1]
+    r2l = res["r2l"]
     L = r2l["layout"]
     H = [p for p in range(1, P.n + 1) if p not in C]
     prg = Prg(ctx.seed, "hide/deviation/" + seed)
@@ -79,7 +77,7 @@ def honest_aggregates(res, C, seed):
         V_C, U_C = np.zeros((P.n_D, d), dtype=np.int64), np.zeros((P.n_B, d), dtype=np.int64)
         Z_C = np.zeros((P.width_A, d), dtype=np.int64)
     # the honest images and responses
-    D_slices = acc["D_input_slices"]
+    D_slices = r2l["D_input_slices"]
     V_H = R.matvec(res["pp"]["D"], D_slices[[p - 1 for p in H]].sum(axis=0) % q)
     w = P.n_A * P.delta
     t_rho = np.zeros((P.width_B, d), dtype=np.int64)
@@ -89,7 +87,7 @@ def honest_aggregates(res, C, seed):
         first = P.n_blocks * w + (p - 1) * P.m_u
         t_rho[first:first + P.m_u] = R.reduce(res["cdata"]["rho_u"][p - 1])
     U_H = R.matvec(res["pp"]["B"], t_rho)
-    Z_H = sum(acc["provers"][p]["z"] for p in H)
+    Z_H = sum(r2l["provers"][p]["iterations"][r2l["j_star"]]["z"] for p in H)
     # the public outputs of the functionalities
     v = (V_H + V_C) % q
     u = (U_H + U_C) % q

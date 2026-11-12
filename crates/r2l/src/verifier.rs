@@ -1,50 +1,60 @@
-//! The verifier's side of the ring-to-linear step: the challenges of the accepted attempt by
-//! Fiat-Shamir, and the public matrix $\mathbf M$ and vector $\mathbf y$ of the linear relation
-//! (`5_Building_Blocks.tex`:134-138, 167-193). The provers compute $\mathbf M$ and $\mathbf y$ the
-//! same way.
+//! The verifier's side of the ring-to-linear step: the challenges by Fiat-Shamir, the selected
+//! iteration $j^\ast$ from the provers' sets of accepted iterations, and the public matrix
+//! $\mathbf M$ and vector $\mathbf y$ of the linear relation (`5_Building_Blocks.tex`:134-138,
+//! 167-193; `fig:ring-to-linear`, steps 4-6, since the draft's commit `1096ea2`). The provers
+//! compute $\mathbf M$ and $\mathbf y$ the same way.
 //!
-//! These functions take proof data ($a^\ast$, $\mathbf v$, $\mathbf c$) and never panic on it:
+//! These functions take proof data ($\mathbf v$, the sets, $\mathbf c$) and never panic on it:
 //! every malformed or out-of-range value is an error.
 
+use crate::accept::select_iteration;
 use crate::local::{check_challenges, check_polys};
-use crate::{Error, LABEL_V, MAX_ATTEMPTS, Result};
+use crate::{Error, LABEL_ACCEPT, LABEL_V, Result};
 use hachi_co_core::{Challenger, Context, Matrix, Poly, PublicVectors, build_m, build_y};
 
-/// The challenges of the accepted attempt $a^\ast$ as a Fiat-Shamir verifier derives them:
-/// [`Challenger::begin_attempt`]`(a*)`, [`Challenger::absorb_polys`] of $\mathbf v$ under
-/// [`LABEL_V`], then [`Challenger::r2l_challenges`]`(a*, 2^r, d, ω)`, exactly the calls the
-/// provers make in attempt $a^\ast$ ([`crate::run`]); the result is checked to lie in
+/// The challenges as a Fiat-Shamir verifier derives them: [`Challenger::absorb_polys`] of
+/// $\mathbf v$ under [`LABEL_V`], then [`Challenger::r2l_challenges`]`(2^r, d, ω)`, exactly the
+/// calls the provers make ([`crate::run`]); the result is checked to lie in
 /// $\mathcal C^{2^r}$. With [`hachi_co_core::FsChallenger`] in the state the provers' challenger
-/// had before the step, it returns the provers' $\mathbf c$ (the documentation of
-/// [`Challenger`]: the challenges of attempt $a$ do not depend on the aborted attempts).
-///
-/// The attempt index is a proof value and is checked first: an index at or above the cap
-/// [`MAX_ATTEMPTS`] is refused before the challenger is called (honest provers stop after
-/// [`MAX_ATTEMPTS`] attempts, [`crate::run`]), so a refused call leaves the challenger as it was.
+/// had before the step, it returns the provers' $\mathbf c$.
 ///
 /// # Errors
-/// [`Error::AttemptOutOfRange`] if `attempt` $\ge$ [`MAX_ATTEMPTS`];
 /// [`Error::Shape`] or [`Error::NonCanonical`] unless $\mathbf v$ has $n\_D$ polynomials of $d$
-/// canonical residues; the challenger's errors; [`Error::ChallengeNotInC`].
+/// canonical residues (checked before the challenger is called); the challenger's errors;
+/// [`Error::ChallengeNotInC`].
 pub fn verifier_challenges<const K: usize, H: Challenger<K>>(
     ctx: &Context<K>,
     ch: &mut H,
-    attempt: u64,
     v: &[Poly],
 ) -> Result<Vec<Vec<i64>>> {
-    if attempt >= MAX_ATTEMPTS {
-        return Err(Error::AttemptOutOfRange {
-            attempt,
-            cap: MAX_ATTEMPTS,
-        });
-    }
     let l = &ctx.layout;
     check_polys("v", v, l.n_d, l.d, ctx.q())?;
-    ch.begin_attempt(attempt)?;
     ch.absorb_polys(LABEL_V, v);
-    let c = ch.r2l_challenges(attempt, l.n_blocks, l.d, ctx.omega())?;
+    let c = ch.r2l_challenges(l.n_blocks, l.d, ctx.omega())?;
     check_challenges(ctx, &c)?;
     Ok(c)
+}
+
+/// The selected iteration as the verifier computes it from the provers' sets of accepted
+/// iterations (`fig:ring-to-linear`, step 6): every set is checked
+/// ([`check_accept_set`](crate::check_accept_set)), the sets are absorbed under
+/// [`LABEL_ACCEPT`] (the provers' call after their broadcast, [`crate::run`]), and $j^\ast$ is
+/// the smallest iteration in every set ([`select_iteration`]). The sets are checked before the
+/// challenger is called, so a refused call leaves it as it was.
+///
+/// # Errors
+/// [`Error::Shape`] unless there are $n$ sets; [`Error::AcceptSet`] for a malformed set;
+/// [`Error::NoCommonIteration`] if no iteration is in every set (the verifier outputs $\bot$).
+pub fn verifier_iteration<const K: usize, H: Challenger<K>>(
+    ctx: &Context<K>,
+    ch: &mut H,
+    accept_sets: &[Vec<u64>],
+) -> Result<usize> {
+    let j_star = select_iteration(ctx, accept_sets)?;
+    ch.absorb_words(LABEL_ACCEPT, accept_sets);
+    j_star.ok_or(Error::NoCommonIteration {
+        iterations: ctx.layout.rej_iterations,
+    })
 }
 
 /// The linear relation $\mathbf M \mathbf z' = \mathbf y$ over $\mathcal R\_q$ produced by the
@@ -58,20 +68,22 @@ pub struct LinearRelation {
     pub y: Vec<Poly>,
 }
 
-/// $\mathbf M$ and $\mathbf y$ from public data (`5_Building_Blocks.tex`:170-193): the public
-/// vectors of $\Pi\_{\mathsf{conv}}$ ($\mathbf b$ and $\mathbf a$ in $\mathcal R\_q$), the
-/// accepted attempt's $\mathbf v$ and $\mathbf c$, and the commitment $\mathbf u$; after checking
-/// $\mathbf c \in \mathcal C^{2^r}$ ([`check_challenges`]) and the shapes and canonical residues
-/// of $\mathbf v$ and $\mathbf u$. [`build_m`] and [`build_y`] of `hachi-co-core` build them.
+/// $\mathbf M$ and $\mathbf y$ from public data (`5_Building_Blocks.tex`:170-193,
+/// `fig:ring-to-linear-2`): the public vectors of $\Pi\_{\mathsf{conv}}$ ($\mathbf b$ and
+/// $\mathbf a$ in $\mathcal R\_q$), $\mathbf v$, $\mathbf c$, the selected iteration $j^\ast$ and
+/// the commitment $\mathbf u$; after checking $\mathbf c \in \mathcal C^{2^r}$
+/// ([`check_challenges`]) and the shapes and canonical residues of $\mathbf v$ and $\mathbf u$.
+/// [`build_m`] and [`build_y`] of `hachi-co-core` build them.
 ///
 /// # Errors
-/// [`Error::Core`] if the public vectors have the wrong shape; [`Error::Shape`],
+/// [`Error::Core`] if the public vectors have the wrong shape or $j^\ast \ge L$; [`Error::Shape`],
 /// [`Error::NonCanonical`] or [`Error::ChallengeNotInC`] for malformed proof values.
 pub fn linear_relation<const K: usize>(
     ctx: &Context<K>,
     pv: &PublicVectors<K>,
     v: &[Poly],
     c: &[Vec<i64>],
+    j_star: usize,
     u_com: &[Poly],
 ) -> Result<LinearRelation> {
     let l = &ctx.layout;
@@ -80,16 +92,18 @@ pub fn linear_relation<const K: usize>(
     check_polys("v", v, l.n_d, l.d, ctx.q())?;
     check_polys("u (commitment)", u_com, l.n_b, l.d, ctx.q())?;
     Ok(LinearRelation {
-        m: build_m(ctx, &pv.b_ring, &pv.a_ring, c)?,
+        m: build_m(ctx, &pv.b_ring, &pv.a_ring, c, j_star)?,
         y: build_y(ctx, v, u_com)?,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    //! The attempt cap of [`verifier_challenges`] at its boundary, at toy-n1 with public
-    //! parameters from the seed `[7; 32]` and Fiat-Shamir on the domain [`DOMAIN`].
+    //! The verifier's Fiat-Shamir calls against the provers' calls, and the selection of
+    //! $j^\ast$ at its edges, at toy-n2 with public parameters from the seed `[7; 32]` and
+    //! Fiat-Shamir on the domain [`DOMAIN`].
     use super::*;
+    use crate::accept::encode_accept_set;
     use hachi_co_core::FsChallenger;
     use hachi_co_params::{derive, presets::toy_choices};
 
@@ -98,7 +112,7 @@ mod tests {
     const DOMAIN: &[u8] = b"hachi-co-r2l/verifier/unit-tests";
 
     fn context() -> Context<K> {
-        let (params, _) = derive(&toy_choices(1)).unwrap();
+        let (params, _) = derive(&toy_choices(2)).unwrap();
         Context::setup(params, &[7; 32]).unwrap()
     }
 
@@ -120,57 +134,83 @@ mod tests {
     }
 
     #[test]
-    fn every_attempt_below_the_cap_is_accepted() {
+    fn the_verifier_makes_the_provers_calls() {
         let ctx = context();
         let l = &ctx.layout;
-        for attempt in [0, 1, MAX_ATTEMPTS / 2, MAX_ATTEMPTS - 1] {
-            let (ch, v) = inputs(&ctx);
-            let c = verifier_challenges(&ctx, &mut ch.clone(), attempt, &v).unwrap();
-            // The provers' calls of attempt a (crate::run), made directly.
-            let mut provers = ch;
-            Challenger::<K>::begin_attempt(&mut provers, attempt).unwrap();
-            Challenger::<K>::absorb_polys(&mut provers, LABEL_V, &v);
-            let expected = Challenger::<K>::r2l_challenges(
-                &mut provers,
-                attempt,
-                l.n_blocks,
-                l.d,
-                ctx.omega(),
-            )
-            .unwrap();
-            assert_eq!(c, expected, "attempt {attempt}");
-            check_challenges(&ctx, &c).unwrap();
-        }
+        let (ch, v) = inputs(&ctx);
+        let mut verifier = ch.clone();
+        let c = verifier_challenges(&ctx, &mut verifier, &v).unwrap();
+        let mut provers = ch;
+        Challenger::<K>::absorb_polys(&mut provers, LABEL_V, &v);
+        let expected =
+            Challenger::<K>::r2l_challenges(&mut provers, l.n_blocks, l.d, ctx.omega()).unwrap();
+        assert_eq!(c, expected);
+        check_challenges(&ctx, &c).unwrap();
+        // The sets: iteration 3 is the first in both.
+        let set = |js: &[usize]| {
+            let flags: Vec<bool> = (0..l.rej_iterations).map(|j| js.contains(&j)).collect();
+            encode_accept_set(&ctx, &flags).unwrap()
+        };
+        let sets = vec![set(&[0, 3, 5]), set(&[1, 3, 4, 5])];
+        assert_eq!(verifier_iteration(&ctx, &mut verifier, &sets), Ok(3));
+        Challenger::<K>::absorb_words(&mut provers, LABEL_ACCEPT, &sets);
+        assert_eq!(verifier, provers);
     }
 
     #[test]
-    fn attempts_at_or_beyond_the_cap_are_refused_before_the_challenger_is_called() {
+    fn malformed_or_disjoint_sets_are_refused() {
         let ctx = context();
-        for attempt in [MAX_ATTEMPTS, MAX_ATTEMPTS + 1, 1 << 32, u64::MAX] {
-            let (ch, v) = inputs(&ctx);
+        let l = &ctx.layout;
+        assert!(l.rej_iterations < 64, "the toys have L = 16");
+        let (ch, _) = inputs(&ctx);
+        let full = (1u64 << l.rej_iterations) - 1;
+        let cases: [(Vec<Vec<u64>>, Error); 4] = [
+            (
+                vec![vec![1 << l.rej_iterations], vec![full]],
+                Error::AcceptSet {
+                    party: 1,
+                    what: "it names an iteration at or beyond L",
+                },
+            ),
+            (
+                vec![vec![full], vec![full, 0]],
+                Error::AcceptSet {
+                    party: 2,
+                    what: "it does not have ceil(L/64) words",
+                },
+            ),
+            (
+                vec![vec![full]],
+                Error::Shape {
+                    what: "accept sets (one per prover)",
+                    expected: 2,
+                    actual: 1,
+                },
+            ),
+            (
+                vec![vec![0b0101], vec![0b1010]],
+                Error::NoCommonIteration {
+                    iterations: l.rej_iterations,
+                },
+            ),
+        ];
+        for (sets, expected) in cases {
             let mut used = ch.clone();
-            assert_eq!(
-                verifier_challenges(&ctx, &mut used, attempt, &v),
-                Err(Error::AttemptOutOfRange {
-                    attempt,
-                    cap: MAX_ATTEMPTS
-                })
-            );
-            assert_eq!(used, ch, "attempt {attempt}: the challenger was called");
-            // The index is checked before v: a malformed v does not change the error.
-            assert_eq!(
-                verifier_challenges(&ctx, &mut used, attempt, &v[..0]),
-                Err(Error::AttemptOutOfRange {
-                    attempt,
-                    cap: MAX_ATTEMPTS
-                })
-            );
+            assert_eq!(verifier_iteration(&ctx, &mut used, &sets), Err(expected));
         }
-        // Below the cap a malformed v is still reported as before.
-        let (mut ch, v) = inputs(&ctx);
-        assert!(matches!(
-            verifier_challenges(&ctx, &mut ch, MAX_ATTEMPTS - 1, &v[..0]),
-            Err(Error::Shape { .. })
-        ));
+        // A malformed set leaves the challenger as it was; the empty intersection is decided
+        // after the absorb, like the provers' (both stop there).
+        let mut used = ch.clone();
+        assert!(
+            verifier_iteration(&ctx, &mut used, &[vec![full << 1 | 1 << 40], vec![full]]).is_err()
+        );
+        assert_eq!(used, ch);
+        // The last iteration is selected when it is the only common one.
+        let last = 1u64 << (l.rej_iterations - 1);
+        let mut used = ch.clone();
+        assert_eq!(
+            verifier_iteration(&ctx, &mut used, &[vec![last | 1], vec![last]]),
+            Ok(l.rej_iterations - 1)
+        );
     }
 }

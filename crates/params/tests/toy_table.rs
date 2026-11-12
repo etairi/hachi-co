@@ -3,7 +3,7 @@
 //! derived value is checked against a direct evaluation of the draft's formulas
 //! (6_Collaborative_Hachi.tex:276-292) with big integers.
 
-use hachi_co_params::presets::{TOY_NS, toy_choices, toy_presets};
+use hachi_co_params::presets::{TOY_NS, TOY_REJ_ITERATIONS, toy_choices, toy_presets};
 use hachi_co_params::{ConstraintId, PresetKind, Severity, derive, preset};
 use num_bigint::BigUint;
 
@@ -31,22 +31,25 @@ type Row = (
 /// 2026-11-02 for $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (the revised
 /// Setup): the rows are those of the oracle's `choose_q` and `derive`, which agree with this crate.
 /// $\beta_1$, $\gamma$ and $\beta$ halve, and at `toy-n3` $\tau$ drops to 10, so that $q$ drops to the
-/// smallest admissible prime of the band $\delta = 13$.
+/// smallest admissible prime of the band $\delta = 13$. Updated on 2026-11-12 for the $L = 16$
+/// iterations of the rejection sampling ([`TOY_REJ_ITERATIONS`]; the draft's $L$ masks per prover
+/// since its commit `1096ea2`): $\mu$ grows by $n (L - 1) \delta (1 + n\_A)$, that is by 360, 780,
+/// 1170, 1680 and 3600, and $\ell''$ by one at $n = 2, 3, 4, 8$.
 const TABLE: [Row; 5] = [
     (
-        "toy-n1", 1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 558, 15, 14,
+        "toy-n1", 1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 918, 15, 14,
     ),
     (
-        "toy-n2", 2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 790, 15, 14,
+        "toy-n2", 2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 1570, 16, 14,
     ),
     (
-        "toy-n3", 3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 1340, 16, 14,
+        "toy-n3", 3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 2510, 17, 14,
     ),
     (
-        "toy-n4", 4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 1586, 16, 14,
+        "toy-n4", 4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 3266, 17, 14,
     ),
     (
-        "toy-n8", 8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 2194, 17, 14,
+        "toy-n8", 8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 5794, 18, 14,
     ),
 ];
 
@@ -109,10 +112,12 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         assert_eq!(big(p.beta_bar), &two * &b_tau);
         assert_eq!(p.omega_bar, 4);
         assert_eq!(p.gamma_bar, 3); // b - 1 since the draft's commit 28721d6
+        assert_eq!(p.rej_iterations, u64::from(TOY_REJ_ITERATIONS));
+        let nl = &nn * big(u128::from(TOY_REJ_ITERATIONS));
         let mu = pow2(p.r) * &delta
-            + &nn * &delta
+            + &nl * &delta
             + pow2(p.r) * &n_a * &delta
-            + &nn * &n_a * &delta
+            + &nl * &n_a * &delta
             + &nn * &m_u
             + &nn * &m_v
             + pow2(p.m) * &delta * BigUint::from(p.tau)
@@ -130,15 +135,11 @@ fn toy_presets_match_the_formulas_with_big_integers() {
         assert_eq!(big(p.width_b), &n_a * &delta * pow2(p.r) + &nn * &m_u);
         assert_eq!(
             big(p.width_d),
-            &delta * (pow2(p.r) + &nn + &nn * &n_a) + &nn * &m_v
+            &delta * (pow2(p.r) + &nl + &nl * &n_a) + &nn * &m_v
         );
         assert_eq!(big(p.binding_guard), big(16) * &omega * &b_tau);
         assert_eq!(big(p.msis_bound_a), big(8) * &omega * &b_tau);
         assert_eq!(p.msis_bound_b, 6); // 2 gamma_bar
-        assert_eq!(
-            big(p.range_guard),
-            pow2(9) * &nn * &omega * &omega * &b + 1u8
-        );
         // log2 M = N log2((2 gamma + 1)/(2 gamma - 2 beta_1 + 1)), via the exact ratio.
         let ratio =
             (2.0 * p.gamma as f64 + 1.0) / (2.0 * p.gamma as f64 - 2.0 * p.beta1 as f64 + 1.0);
@@ -149,21 +150,23 @@ fn toy_presets_match_the_formulas_with_big_integers() {
 }
 
 #[test]
-fn toy_reports_pass_every_fatal_condition_and_warn_about_the_knowledge_error() {
+fn toy_reports_pass_every_fatal_condition_and_warn_about_the_knowledge_error_and_l() {
     for preset in toy_presets() {
         let (_, report) = preset.derive().unwrap();
         assert!(report.is_admissible(), "{}:\n{report}", preset.name);
         let violations: Vec<_> = report.violations().map(|c| c.id).collect();
         assert_eq!(
             violations,
-            [ConstraintId::KnowledgeError],
+            [
+                ConstraintId::KnowledgeError,
+                ConstraintId::RejIterationsLambda
+            ],
             "{}",
             preset.name
         );
-        assert_eq!(
-            report.get(ConstraintId::KnowledgeError).severity,
-            Severity::Warning
-        );
+        for id in violations {
+            assert_eq!(report.get(id).severity, Severity::Warning, "{id:?}");
+        }
     }
 }
 

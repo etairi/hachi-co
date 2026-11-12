@@ -10,8 +10,8 @@ use hachi_co_core::{
 
 const K: usize = 4;
 
-/// The inputs of `build_m` recorded in a fixture: b and a embedded, and the accepted attempt's c.
-fn inputs(fx: &Fixture, ctx: &Context<K>) -> (Vec<Poly>, Vec<Poly>, Vec<Vec<i64>>) {
+/// The inputs of `build_m` recorded in a fixture: b and a embedded, c and the selected iteration.
+fn inputs(fx: &Fixture, ctx: &Context<K>) -> (Vec<Poly>, Vec<Poly>, Vec<Vec<i64>>, usize) {
     let embed = |pointer: &str| -> Vec<Poly> {
         fx.exts::<K>(pointer)
             .unwrap()
@@ -19,11 +19,9 @@ fn inputs(fx: &Fixture, ctx: &Context<K>) -> (Vec<Poly>, Vec<Poly>, Vec<Vec<i64>
             .map(|x| ctx.sub.embed(x))
             .collect()
     };
-    let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
-    let c = fx
-        .int_rows(&format!("/ring_to_linear/attempts/{accepted}/c"))
-        .unwrap();
-    (embed("/conv/b"), embed("/conv/a"), c)
+    let c = fx.int_rows("/ring_to_linear/c").unwrap();
+    let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+    (embed("/conv/b"), embed("/conv/a"), c, j_star)
 }
 
 fn digest(m: &Matrix) -> String {
@@ -35,8 +33,8 @@ fn m_matches_the_digest_of_every_fixture() {
     for name in Fixture::TOY {
         let fx = Fixture::load(name).unwrap();
         let ctx = fx.context::<K>().unwrap();
-        let (b, a, c) = inputs(&fx, &ctx);
-        let m = build_m(&ctx, &b, &a, &c).unwrap();
+        let (b, a, c, j_star) = inputs(&fx, &ctx);
+        let m = build_m(&ctx, &b, &a, &c, j_star).unwrap();
         assert_eq!(m.len(), ctx.layout.n_prime);
         assert!(m.iter().all(|row| row.len() == ctx.layout.len_z));
         assert!(m.iter().flatten().all(|p| p.0.len() == ctx.layout.d));
@@ -64,17 +62,14 @@ fn y_matches_every_fixture_and_m_z_prime_equals_y() {
     for name in Fixture::TOY {
         let fx = Fixture::load(name).unwrap();
         let ctx = fx.context::<K>().unwrap();
-        let (b, a, c) = inputs(&fx, &ctx);
-        let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
-        let v = fx
-            .polys(&format!("/ring_to_linear/attempts/{accepted}/v"))
-            .unwrap();
+        let (b, a, c, j_star) = inputs(&fx, &ctx);
+        let v = fx.polys("/ring_to_linear/v").unwrap();
         let u_com = fx.polys("/commit/u").unwrap();
         let y = build_y(&ctx, &v, &u_com).unwrap();
         assert_eq!(y, fx.polys("/ring_to_linear/y").unwrap(), "{name}");
         // The draft's relation, checked directly on the recorded z' (ring.mat_vec is the exact RNS
         // product of hachi-co-math, independent of the oracle's numpy code).
-        let m = build_m(&ctx, &b, &a, &c).unwrap();
+        let m = build_m(&ctx, &b, &a, &c, j_star).unwrap();
         let z_prime = fx.polys("/ring_to_linear/z_prime").unwrap();
         assert_eq!(z_prime.len(), ctx.layout.len_z);
         assert_eq!(
@@ -82,13 +77,29 @@ fn y_matches_every_fixture_and_m_z_prime_equals_y() {
             y,
             "{name}: M z' = y"
         );
-        // The failure boundary: another challenge (an aborted attempt's, or one coefficient
-        // changed) gives another M, for which the recorded z' is no solution.
+        // The failure boundary: another challenge (one coefficient changed) or another iteration
+        // gives another M, for which the recorded z' is no solution.
         let mut c2 = c.clone();
         c2[0][0] += 1;
-        let m2 = build_m(&ctx, &b, &a, &c2).unwrap();
+        let m2 = build_m(&ctx, &b, &a, &c2, j_star).unwrap();
         assert_ne!(digest(&m2), digest(&m));
         assert_ne!(ctx.ring.mat_vec(&m2, &z_prime).unwrap(), y);
+        let l = &ctx.layout;
+        for other in [0, j_star + 1, l.rej_iterations - 1] {
+            if other == j_star || other >= l.rej_iterations {
+                continue;
+            }
+            let m3 = build_m(&ctx, &b, &a, &c, other).unwrap();
+            assert_ne!(
+                ctx.ring.mat_vec(&m3, &z_prime).unwrap(),
+                y,
+                "{name}: j = {other}"
+            );
+        }
+        assert!(matches!(
+            build_m(&ctx, &b, &a, &c, l.rej_iterations),
+            Err(Error::Layout(_))
+        ));
         let mut v2 = v.clone();
         v2[0].0[0] = (v2[0].0[0] + 1) % ctx.q();
         assert_ne!(
@@ -117,8 +128,8 @@ fn the_shares_of_the_layout_add_up_to_the_witness() {
                 "{name}"
             );
         }
-        let (b, a, c) = inputs(&fx, &ctx);
-        let m = build_m(&ctx, &b, &a, &c).unwrap();
+        let (b, a, c, j_star) = inputs(&fx, &ctx);
+        let m = build_m(&ctx, &b, &a, &c, j_star).unwrap();
         let mut sum = LinearShare::zero(l);
         let mut residual = vec![ring.zero(); l.n_prime];
         for p in 1..=l.n {
@@ -195,18 +206,18 @@ fn the_shares_of_the_layout_add_up_to_the_witness() {
 fn wrong_shapes_are_errors() {
     let fx = Fixture::load("toy-n2").unwrap();
     let ctx = fx.context::<K>().unwrap();
-    let (b, a, c) = inputs(&fx, &ctx);
+    let (b, a, c, j) = inputs(&fx, &ctx);
     let shape = |r: hachi_co_core::Result<Matrix>| matches!(r, Err(Error::Shape { .. }));
-    assert!(shape(build_m(&ctx, &b[1..], &a, &c)));
-    assert!(shape(build_m(&ctx, &b, &a[1..], &c)));
-    assert!(shape(build_m(&ctx, &b, &a, &c[1..])));
+    assert!(shape(build_m(&ctx, &b[1..], &a, &c, j)));
+    assert!(shape(build_m(&ctx, &b, &a[1..], &c, j)));
+    assert!(shape(build_m(&ctx, &b, &a, &c[1..], j)));
     let mut c_short = c.clone();
     c_short[2].pop();
-    assert!(shape(build_m(&ctx, &b, &a, &c_short)));
+    assert!(shape(build_m(&ctx, &b, &a, &c_short, j)));
     let mut b_short = b.clone();
     b_short[0].0.pop();
-    assert!(shape(build_m(&ctx, &b_short, &a, &c)));
-    let v = fx.polys("/ring_to_linear/attempts/0/v").unwrap();
+    assert!(shape(build_m(&ctx, &b_short, &a, &c, j)));
+    let v = fx.polys("/ring_to_linear/v").unwrap();
     let u = fx.polys("/commit/u").unwrap();
     assert!(matches!(build_y(&ctx, &[], &u), Err(Error::Shape { .. })));
     assert!(matches!(build_y(&ctx, &v, &[]), Err(Error::Shape { .. })));

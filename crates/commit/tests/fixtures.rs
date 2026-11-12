@@ -3,17 +3,16 @@
 //! equality residue by residue.
 //!
 //! Every party's local values are computed one party at a time, with the network emulated by
-//! hand (the exchange through the wire format, the F_AH(B) inputs summed here); the drivers are
-//! then run on the loopback (toy-n1) and on an in-memory network (n = 1, 2, 3) with the replayed
-//! randomness.
+//! hand (the F_AH(B) inputs summed here); the drivers are then run on the loopback (toy-n1) and on
+//! an in-memory network (n = 1, 2, 3) with the replayed randomness. Commit has no resharing since
+//! the draft's commit `1096ea2`: each party's share is its input share.
 mod common;
 
 use common::{K, load, run_parties};
 use hachi_co_commit::{
-    OpenChecks, block_state, c_star, commit, decode_received, f_hat_of_f_prime, fah_b_input,
-    fold_slots, open, party_state, pconv, pconv_blocks, reshare, sum_shares, t_hat_slice,
+    OpenChecks, block_state, c_star, commit, f_hat_of_f_prime, fah_b_input, fold_slots,
+    input_share, open, party_state, pconv, pconv_blocks, t_hat_slice,
 };
-use hachi_co_core::wire::flatten_exts;
 use hachi_co_core::{Context, Fixture, PartyState, ReplayRandomness, escape_key};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_mpc::Loopback;
@@ -46,44 +45,21 @@ fn recorded_blocks(fx: &Fixture) -> BTreeMap<usize, RecordedBlock> {
         .collect()
 }
 
-/// Every party's state, computed party by party with the exchange emulated, checking each local
-/// value against the fixture on the way. Returns the states and the F_AH(B) inputs.
+/// Every party's state, computed party by party, checking each local value against the fixture
+/// on the way. Returns the states and the F_AH(B) inputs.
 fn local_run(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Vec<Poly>>) {
     let name = fx.name().to_owned();
     let (l, ring) = (&ctx.layout, &ctx.ring);
     let n = l.n;
     let len = 1usize << l.ell;
-    // Step 1: every party's AS.Share of its initial share (replayed randomness).
-    let sent: Vec<Vec<Vec<Ext<K>>>> = (1..=n)
-        .map(|p| {
-            let mut rng = ReplayRandomness::new(fx, p).unwrap();
-            let shares = reshare(ctx, &mut rng, &f_init(fx, p)).unwrap();
-            let want = fx
-                .ext_rows::<K>(&format!("/commit/reshare/{}", p - 1))
-                .unwrap();
-            assert_eq!(shares, want, "{name} p = {p}: reshare");
-            // The shares add up to the initial share (AS.Share, 4_P:154).
-            let field = ctx.field();
-            for (t, x) in f_init(fx, p).iter().enumerate() {
-                let sum = shares
-                    .iter()
-                    .fold(field.zero(), |a, s| field.add(&a, &s[t]));
-                assert_eq!(sum, *x, "{name} p = {p}: AS.Share sums to f_p");
-            }
-            shares
-        })
-        .collect();
     let f_hat_rec = fx.exts::<K>("/commit/f_hat").unwrap();
     let f_prime_rec = fx.polys("/commit/f_prime").unwrap();
     let blocks_rec = recorded_blocks(fx);
     let mut states = Vec::new();
     let mut inputs = Vec::new();
     for p in 1..=n {
-        // The exchange, through the wire format: party p receives share p of every party i.
-        let incoming: Vec<Vec<u64>> = (1..=n).map(|i| flatten_exts(&sent[i - 1][p - 1])).collect();
-        let received = decode_received::<K>(ctx, &incoming).unwrap();
-        // Step 2: <f>_p.
-        let share = sum_shares(ctx, &received).unwrap();
+        // Step 1: <f>_p, the input share as it is.
+        let share = input_share(ctx, &f_init(fx, p)).unwrap();
         let want = fx
             .exts::<K>(&format!("/commit/f_shares/{}", p - 1))
             .unwrap();

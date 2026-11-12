@@ -1,6 +1,6 @@
 //! The inputs of the building blocks as the oracle recorded them (feature `fixtures`): every
 //! party's state after Commit, the public vectors and the shares of $\Pi\_{\mathsf{conv}}$, the
-//! commitment and the number of attempts. The block crates' tests build their inputs from
+//! commitment and the iterations of the rejection sampling. The block crates' tests build their inputs from
 //! these, so that each crate is tested on the oracle's values without running the blocks before
 //! it.
 
@@ -112,15 +112,20 @@ impl Fixture {
         self.polys("/commit/u")
     }
 
-    /// The number of recorded attempts of the ring-to-linear step
-    /// (`ring_to_linear/attempts`).
+    /// The number $L$ of iterations of the rejection sampling the oracle ran
+    /// (`ring_to_linear/iterations`).
     ///
     /// # Errors
-    /// [`Error::Fixture`] if the entry is not an array.
-    pub fn attempt_count(&self) -> Result<usize> {
-        self.get("/ring_to_linear/attempts")?
-            .as_array()
-            .map(Vec::len)
-            .ok_or_else(|| Error::Fixture("ring_to_linear/attempts is not an array".into()))
+    /// The decoder's errors.
+    pub fn iteration_count(&self) -> Result<usize> {
+        self.usize("/ring_to_linear/iterations")
+    }
+
+    /// The selected iteration $j^\ast$, 0-indexed (`ring_to_linear/j_star`).
+    ///
+    /// # Errors
+    /// The decoder's errors.
+    pub fn j_star(&self) -> Result<usize> {
+        self.usize("/ring_to_linear/j_star")
     }
 }

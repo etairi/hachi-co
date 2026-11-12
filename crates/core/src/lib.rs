@@ -11,15 +11,14 @@
 //! | [`build_m`], [`build_y`] | the linear relation $\mathbf M \mathbf z' = \mathbf y$ | `5_Building_Blocks.tex`:167-196 |
 //! | [`BlockState`], [`PartyState`], [`PublicVectors`], [`LinearShare`], [`Blinder`], [`SumcheckCoins`] | the values passed between blocks | `6_Collaborative_Hachi.tex`:400; `field-to-ring-rok.tex`:140-151; `5_Building_Blocks.tex`:177-193, 238-243, 275-282 |
 //! | [`SpillFile`] | the blocks of $\mathbf f'$ on disk, for large polynomials | |
-//! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `4_preliminaries.tex`:154; `5_Building_Blocks.tex`:122, 238-243 |
+//! | [`PartyRandomness`], [`PrgRandomness`] | a party's private randomness | `5_Building_Blocks.tex`:122 (`fig:ring-to-linear`, step 3), 238-243 |
 //! | [`Challenger`], [`FsChallenger`] | the verifier's public coins, by Fiat-Shamir, and the contexts of the base-PCS openings | `5_Building_Blocks.tex`:134-138, 275-282, 344, 346-358 |
 //! | [`BasePcs`], [`base_pcs`] | the base PCS of the sumcheck (commitments and openings of $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$), the Möbius transform, evaluations | `5_Building_Blocks.tex`:238-273, 346-365 |
 //! | [`short`], [`wire`] | exact short-polynomial products, norms and centered representatives; flat encodings for [`hachi_co_mpc::Comm`] | `4_preliminaries.tex`:86; `5_Building_Blocks.tex`:139-146 |
 //!
 //! The inter-block types are plain structs with public fields; each has a `validate` method that
 //! checks its shape (lengths, and $d$ coefficients per polynomial) against a [`Layout`], not its
-//! values. The call order of the coins, including Fiat-Shamir with aborts, is in the
-//! documentation of [`Challenger`].
+//! values. The call order of the coins is in the documentation of [`Challenger`].
 //!
 //! With the feature `fixtures` the crate also provides `fixture::Fixture` (the Sage oracle's
 //! fixtures `ref/fixtures/toy-n{1,2,3,4,8}.json` with typed decoders and `sha256_residues`) and
@@ -38,10 +37,9 @@
 //! element after the other; [`Matrix`] is row-major. Errors are values ([`Error`]).
 //!
 //! **Choices made here where the brief and the oracle are silent** (each is documented at its
-//! item): the extra arguments `field` of [`PartyRandomness::reshare`],
-//! [`PartyRandomness::blinder`], [`Challenger::sumcheck_coins`] and [`Challenger::round_coin`];
-//! [`BlinderKind`] for the brief's `which: 0 | 1`; [`Challenger::begin_attempt`] for Fiat-Shamir
-//! with aborts; the PRG domains and the reuse check of [`PrgRandomness`]; the absorb encodings,
+//! item): the extra arguments `field` of [`PartyRandomness::blinder`],
+//! [`Challenger::sumcheck_coins`] and [`Challenger::round_coin`]; [`BlinderKind`] for the brief's
+//! `which: 0 | 1`; the PRG domains and the reuse check of [`PrgRandomness`]; the absorb encodings,
 //! coin and context derivation of [`FsChallenger`] ([`Challenger::absorb_words`] and the forked
 //! squeeze of [`Challenger::context`]); the extra dimensions and position ranges of [`Layout`];
 //! the canonical-residue check of [`PublicParams::validate`]; the hash, word formats and context
@@ -86,8 +84,8 @@ pub use error::{Error, Result};
 pub use layout::{Layout, NamedBlock};
 pub use linear::{build_m, build_y};
 pub use randomness::{
-    DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RESHARE,
-    DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, PartyRandomness, PrgRandomness, ReshareStream,
+    DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RHO_U, DOMAIN_RHO_V,
+    DOMAIN_RHO_W, PartyRandomness, PrgRandomness,
 };
 pub use spill::SpillFile;
 

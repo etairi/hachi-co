@@ -1,112 +1,30 @@
-//! Steps 1 and 2 of Commit (`6_Collaborative_Hachi.tex`:308-313): every party $i$ reshares its
-//! initial share $\mathbf f\_i$ by $\mathsf{AS.Share}$ (`4_preliminaries.tex`:154), sends
-//! $\langle \mathbf f\_i \rangle\_j$ to party $j$, and every party $j$ adds what it received:
-//! $\langle \mathbf f \rangle\_j = \sum\_{i \in \[n\]} \langle \mathbf f\_i \rangle\_j$.
+//! The party's share of the committed polynomial. Since the draft's commit `1096ea2`, Commit
+//! starts from each party's additive share $\langle \mathbf f \rangle\_p$ of $\mathbf f$ as it
+//! is (`6_Collaborative_Hachi.tex`, Commit: "Each party $i \in \[n\]$ holds an additive share
+//! $\langle \mathbf f \rangle\_i$ of $\mathbf f$"); the resharing by $\mathsf{AS.Share}$ of the
+//! earlier drafts (lines 308-313 at `8834c9f`) is gone.
 
-use crate::error::{Error, Result, check_len, pow2};
-use hachi_co_core::{Context, PartyRandomness};
+use crate::error::{Result, check_len, pow2};
+use hachi_co_core::Context;
 use hachi_co_math::Ext;
 
-/// Step 1 for one party: $\langle \mathbf f\_i \rangle = \mathsf{AS.Share}(\mathbf f\_i, n)$
-/// (`6_Collaborative_Hachi.tex`:308-310; `4_preliminaries.tex`:154), drawn from `rng`
-/// ([`PartyRandomness::reshare`]: shares $1, \dots, n-1$ uniform, share $n$ the difference).
-/// Returns the $n$ shares in order; share $j$ goes to party $j$ (the party's own share
-/// included). The oracle's `commit.as_share`.
-///
-/// The coordinates of `f_init` are read modulo $q$.
+/// Party $p$'s share $\langle \mathbf f \rangle\_p \in \mathbb F\_{q^K}^{2^\ell}$ of its input
+/// `f_init`, the input itself with every coordinate read modulo $q$. The oracle's
+/// `f_shares[p - 1]`, which equals `input/f_init_shares[p - 1]` reduced.
 ///
 /// # Errors
-/// [`Error::Shape`] unless `f_init` has $2^\ell$ entries or if `rng` returns shares of the wrong
-/// shape; the errors of `rng` as [`Error::Core`].
-pub fn reshare<const K: usize, R: PartyRandomness<K>>(
-    ctx: &Context<K>,
-    rng: &mut R,
-    f_init: &[Ext<K>],
-) -> Result<Vec<Vec<Ext<K>>>> {
-    let l = &ctx.layout;
-    let len = pow2(l.ell, "2^l")?;
-    check_len("f_i (2^l coefficients)", len, f_init.len())?;
-    let shares = rng.reshare(ctx.field(), f_init, l.n)?;
-    check_len("AS.Share output (n shares)", l.n, shares.len())?;
-    for share in &shares {
-        check_len("AS.Share output share (2^l entries)", len, share.len())?;
-    }
-    Ok(shares)
+/// [`Error::Shape`](crate::Error::Shape) unless `f_init` has $2^\ell$ entries.
+pub fn input_share<const K: usize>(ctx: &Context<K>, f_init: &[Ext<K>]) -> Result<Vec<Ext<K>>> {
+    check_len(
+        "<f>_p (2^l coefficients)",
+        pow2(ctx.layout.ell, "2^l")?,
+        f_init.len(),
+    )?;
+    Ok(reduce_chunk(ctx, f_init))
 }
 
-/// Decodes what a party received in the exchange of step 1: `incoming[j - 1]` is
-/// $\langle \mathbf f\_j \rangle\_p$ from party $j$, as the $2^\ell K$ coordinates of its
-/// $2^\ell$ elements ([`hachi_co_core::wire::flatten_exts`]).
-///
-/// # Errors
-/// [`Error::Shape`] unless there are $n$ vectors of $2^\ell K$ entries; [`Error::NonCanonical`]
-/// (naming the sender) for a residue $\ge q$.
-pub fn decode_received<const K: usize>(
-    ctx: &Context<K>,
-    incoming: &[Vec<u64>],
-) -> Result<Vec<Vec<Ext<K>>>> {
-    decode_chunk(ctx, incoming, pow2(ctx.layout.ell, "2^l")?)
-}
-
-/// [`decode_received`] for chunks of `len` elements.
-pub(crate) fn decode_chunk<const K: usize>(
-    ctx: &Context<K>,
-    incoming: &[Vec<u64>],
-    len: usize,
-) -> Result<Vec<Vec<Ext<K>>>> {
-    let l = &ctx.layout;
-    let q = ctx.q();
-    check_len("received shares (one per party)", l.n, incoming.len())?;
-    incoming
-        .iter()
-        .enumerate()
-        .map(|(j, flat)| {
-            check_len(
-                "received share (2^l K coordinates)",
-                len.saturating_mul(K),
-                flat.len(),
-            )?;
-            if let Some(value) = flat.iter().find(|x| **x >= q) {
-                return Err(Error::NonCanonical {
-                    from: j + 1,
-                    what: "a reshared share",
-                    value: *value,
-                    q,
-                });
-            }
-            Ok(hachi_co_core::wire::unflatten_exts::<K>(flat, len)?)
-        })
-        .collect()
-}
-
-/// Step 2 for party $p$: $\langle \mathbf f \rangle\_p = \sum\_{i \in \[n\]}
-/// \langle \mathbf f\_i \rangle\_p$ (`6_Collaborative_Hachi.tex`:311-313), from the $n$ received
-/// shares (`received[i - 1]` from party $i$). The oracle's `f_shares[p - 1]`.
-///
-/// # Errors
-/// [`Error::Shape`] unless there are $n$ shares of $2^\ell$ entries.
-pub fn sum_shares<const K: usize>(
-    ctx: &Context<K>,
-    received: &[Vec<Ext<K>>],
-) -> Result<Vec<Ext<K>>> {
-    sum_chunk(ctx, received, pow2(ctx.layout.ell, "2^l")?)
-}
-
-/// [`sum_shares`] for chunks of `len` elements.
-pub(crate) fn sum_chunk<const K: usize>(
-    ctx: &Context<K>,
-    received: &[Vec<Ext<K>>],
-    len: usize,
-) -> Result<Vec<Ext<K>>> {
-    let l = &ctx.layout;
-    check_len("received shares (one per party)", l.n, received.len())?;
+/// The coordinates of `chunk` modulo $q$.
+pub(crate) fn reduce_chunk<const K: usize>(ctx: &Context<K>, chunk: &[Ext<K>]) -> Vec<Ext<K>> {
     let field = ctx.field();
-    let mut sum = vec![field.zero(); len];
-    for share in received {
-        check_len("received share (2^l entries)", len, share.len())?;
-        for (s, x) in sum.iter_mut().zip(share) {
-            *s = field.add(s, x);
-        }
-    }
-    Ok(sum)
+    chunk.iter().map(|x| field.reduce(x)).collect()
 }

@@ -97,8 +97,18 @@ def transcript_tests(res):
     yv = pub["y_vec"].copy()
     yv[0, 0] = (yv[0, 0] + 1) % P.q
     pub["y_vec"] = yv
-    _record(out, "tamper v (accepted attempt) coefficient 0 += 1", _verify(res, tr0, pub), ["round_01_H1"],
+    _record(out, "tamper v coefficient 0 += 1", _verify(res, tr0, pub), ["round_01_H1"],
             must_pass=["round_01_H0"], note="v enters y, hence the claimed sum a")
+    # the verifier selects another iteration than j* (a tampered set of accepted iterations): M selects other
+    # mask images in the rows c and A, and the sumcheck of the linear relation fails at its final check
+    from .r2l import build_M
+    js = res["r2l"]["j_star"]
+    other = js + 1 if js + 1 < P.rej_iterations else js - 1
+    if other >= 0:
+        pub = dict(res["public"])
+        pub["M"] = build_M(ctx, res["pp"], res["r2l"]["b_ring"], res["r2l"]["a_ring"], res["r2l"]["c"], other)
+        _record(out, "tamper the selected iteration j* -> %d" % other, _verify(res, tr0, pub), ["final_H1"],
+                must_pass=["round_01_H0"], note="M of another iteration does not fit z'")
     return out
 
 
@@ -276,7 +286,8 @@ def rej_boundary_toy(P):
 
 
 def abort_rate(P, trials=10000, seed=12345):
-    """Empirical abort rate of the n-prover Rej step versus the exact 1 - M^{-n} (numpy PCG64, fixed seed;
+    """Empirical rate of one iteration of the n-prover Rej step that some prover rejects, versus the exact
+    1 - M^{-n}; the step aborts only if all L iterations are rejected (numpy PCG64, fixed seed;
     folds at their worst-case norm beta1 in one coordinate — the rate does not depend on the fold)."""
     import math
     rng = np.random.default_rng(seed)
@@ -296,3 +307,20 @@ def abort_rate(P, trials=10000, seed=12345):
     rate = aborts / trials
     return dict(trials=trials, seed=seed, rng="numpy PCG64", aborts=aborts, rate=rate, exact=p_exact,
                 sigma=sigma, within_3_sigma=bool(abs(rate - p_exact) <= 3 * sigma))
+
+
+def empty_intersection(P, max_index=32):
+    """With L = 1 iteration, a run in which some prover rejects that iteration has no common iteration, and the
+    ring-to-linear step aborts (fig:ring-to-linear, step 6: "If the intersection is empty, then V outputs bot").
+    Tries the seeds of the preset with L = 1 in order and reports the first run that aborts."""
+    from .oracle import run_instance
+    from .params import TOY_COMMON, derive
+    from .r2l import NoCommonIteration
+    P1 = derive(P.name + "-L1", n=P.n, q=P.q, pad=P.pad, rej_iterations=1, **TOY_COMMON)
+    for s in range(max_index):
+        seed = "hachi-co-ref/%s/%d" % (P1.name, s)
+        try:
+            run_instance(P1, seed)
+        except NoCommonIteration as e:
+            return dict(passed=True, seed=seed, runs=s + 1, message=str(e))
+    return dict(passed=False, seed=None, runs=max_index, message="no run aborted")

@@ -37,12 +37,20 @@ fn dev_presets_are_the_toy_choices_at_larger_l() {
 }
 
 #[test]
-fn dev_reports_flag_only_the_knowledge_error() {
+fn dev_reports_flag_only_the_knowledge_error_and_l() {
     for p in dev_presets() {
         let (_, report) = p.derive().unwrap();
         assert!(report.is_admissible(), "{}:\n{report}", p.name);
         let violations: Vec<_> = report.violations().map(|c| c.id).collect();
-        assert_eq!(violations, [ConstraintId::KnowledgeError], "{}", p.name);
+        assert_eq!(
+            violations,
+            [
+                ConstraintId::KnowledgeError,
+                ConstraintId::RejIterationsLambda
+            ],
+            "{}",
+            p.name
+        );
     }
 }
 
@@ -144,10 +152,12 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         assert_eq!(x.tau, tight_tau(4, x.beta), "{}", p.name);
         let b_tau = b.pow(x.tau);
         assert_eq!(big(x.beta_bar), big(2) * &b_tau);
+        let nl = &n * big(u128::from(x.rej_iterations));
+        assert_eq!(x.rej_iterations, 16, "{}", p.name);
         let mu = pow2(x.r) * &delta
-            + &n * &delta
+            + &nl * &delta
             + pow2(x.r) * &n_a * &delta
-            + &n * &n_a * &delta
+            + &nl * &n_a * &delta
             + &n * &m_u
             + &n * &m_v
             + pow2(x.m) * &delta * BigUint::from(x.tau)
@@ -164,7 +174,7 @@ fn dev_presets_match_the_formulas_with_big_integers() {
         assert_eq!(big(x.width_b), &n_a * &delta * pow2(x.r) + &n * &m_u);
         assert_eq!(
             big(x.width_d),
-            &delta * (pow2(x.r) + &n + &n * &n_a) + &n * &m_v
+            &delta * (pow2(x.r) + &nl + &nl * &n_a) + &n * &m_v
         );
     }
     // The hypercube sizes of the rustdoc of `dev_choices`.

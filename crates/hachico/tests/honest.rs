@@ -90,12 +90,12 @@ fn honest_loopback_run(preset: &str, i: u64, instance: u64, repeat: bool) {
     assert_eq!(bytes.len(), out.proof.encoded_len());
     assert_eq!(EvalProof::from_bytes(&ctx, &bytes).unwrap(), out.proof);
     eprintln!(
-        "{preset} (setup {i}, instance {instance}): q = {}, l'' = {}, a* = {}, \
+        "{preset} (setup {i}, instance {instance}): q = {}, l'' = {}, j* = {}, \
          commit {commit_time:?}, prove {prove_time:?}, verify {verify_time:?}, proof {} bytes \
          ({} without the base PCS's items)",
         ctx.q(),
         ctx.layout.ell_pp,
-        out.proof.attempt,
+        out.r2l.j_star,
         bytes.len(),
         hachi_co_params::sizes(&ctx.params).unwrap().total
     );
@@ -177,8 +177,8 @@ fn honest_multi_party_runs_on_the_network() {
             assert_eq!(bytes.len(), encoded_len(&ctx.layout, &base).unwrap());
             assert_eq!(EvalProof::from_bytes(&ctx, &bytes).unwrap(), first.proof);
             eprintln!(
-                "{preset} (setup {i}): a* = {}, proof {} bytes",
-                first.proof.attempt,
+                "{preset} (setup {i}): j* = {}, proof {} bytes",
+                first.r2l.j_star,
                 bytes.len()
             );
         }
@@ -193,33 +193,12 @@ fn is_polys(call: &Call, label: &str, count: usize) -> bool {
     }
 }
 
-/// Removes the calls of the aborted attempts (`Begin(a)`, the absorb of v and `R2l(a, ..)` for
-/// every a below the accepted one) from a provers' log.
-fn without_aborted_attempts(log: &[Call], accepted: u64) -> Vec<Call> {
-    let mut out = Vec::with_capacity(log.len());
-    let mut skipping = false;
-    for call in log {
-        match call {
-            Call::Begin(a) => skipping = *a != accepted,
-            Call::R2l(a, ..) if *a != accepted => {
-                skipping = false;
-                continue;
-            }
-            _ => {}
-        }
-        if !skipping {
-            out.push(call.clone());
-        }
-    }
-    out
-}
-
-/// The provers and the verifier make the same challenger calls in the same order, the verifier
-/// replaying only the accepted attempt; the sequence is the one of the crate documentation,
-/// with the commitments absorbed after G and before the coins and the three contexts of the
-/// openings (in the order g0, g1, w) after the final values. The first toy-n1 instance (setup
-/// index 100 + j, instance seed 5000 + j) with an aborted attempt is used, so that the attempts
-/// are exercised; the absorb sequence is printed.
+/// The provers and the verifier make the same challenger calls in the same order; the sequence
+/// is the one of the crate documentation, with the provers' sets of accepted iterations absorbed
+/// after the challenges, the commitments after G and before the coins, and the three contexts of
+/// the openings (in the order g0, g1, w) after the final values. The first toy-n1 instance (setup
+/// index 100 + j, instance seed 5000 + j) whose first iteration is rejected is used, so that the
+/// selection of j* is exercised; the absorb sequence is printed.
 #[test]
 fn provers_and_verifier_make_the_same_challenger_calls() {
     for j in 0..32u64 {
@@ -231,63 +210,60 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
         let (u, state) = commit(&ctx, &mut comm, &mut rng, &f).unwrap();
         let mut ch = Recorder::new(FsChallenger::new(EVAL_DOMAIN));
         let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
-        if out.proof.attempt == 0 {
+        if out.r2l.j_star == 0 {
             continue;
         }
         let mut vch = Recorder::new(FsChallenger::new(EVAL_DOMAIN));
         let value = verify_with(&ctx, &pcs, &mut vch, &u, &x, &out.proof).unwrap();
         assert_eq!(value, y, "the verifier outputs f(x)");
-        assert_eq!(
-            vch.log,
-            without_aborted_attempts(&ch.log, out.proof.attempt)
-        );
+        assert_eq!(vch.log, ch.log);
         assert_eq!(
             vch.inner.transcript().digest(),
             ch.inner.transcript().digest()
         );
-        // The provers' log has one (Begin, v, R2l) triple per attempt.
-        let begins: Vec<u64> = ch
-            .log
-            .iter()
-            .filter_map(|c| match c {
-                Call::Begin(a) => Some(*a),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(begins, (0..=out.proof.attempt).collect::<Vec<_>>());
-        // The documented order: 17 parameter words, A, B, D, the digest of the base PCS's
+        // The documented order: 18 parameter words, A, B, D, the digest of the base PCS's
         // parameters, u, x, E(u), then the step (y is not absorbed: the verifier reads it from
         // E(u)).
         let l = &ctx.layout;
-        let head: Vec<String> = vch.log.iter().take(24).map(|c| format!("{c:?}")).collect();
+        let head: Vec<String> = vch.log.iter().take(25).map(|c| format!("{c:?}")).collect();
+        assert_eq!(LABELS_PARAMS.len(), 18);
         for (k, label) in LABELS_PARAMS.iter().enumerate() {
             assert!(
                 matches!(&vch.log[k], Call::U64(lab, _) if lab == label),
                 "{k}"
             );
         }
-        assert!(is_polys(&vch.log[17], LABEL_PP_A, l.n_a * l.width_a));
+        assert!(is_polys(&vch.log[18], LABEL_PP_A, l.n_a * l.width_a));
         let digest = pcs
             .params_digest()
             .as_chunks::<8>()
             .0
             .iter()
             .fold(0u64, |acc, b| acc.wrapping_add(u64::from_le_bytes(*b)));
-        assert_eq!(vch.log[20], Call::Words(LABEL_PP_BASE, 1, digest));
-        assert!(is_polys(&vch.log[21], hachi_co_commit::LABEL_U, l.n_b));
-        assert!(is_polys(&vch.log[23], hachi_co_conv::LABEL_E_U, 1));
-        assert_eq!(vch.log[24], Call::Begin(out.proof.attempt));
+        assert_eq!(vch.log[21], Call::Words(LABEL_PP_BASE, 1, digest));
+        assert!(is_polys(&vch.log[22], hachi_co_commit::LABEL_U, l.n_b));
+        assert!(is_polys(&vch.log[24], hachi_co_conv::LABEL_E_U, 1));
         assert!(is_polys(&vch.log[25], hachi_co_r2l::LABEL_V, l.n_d));
-        assert!(matches!(vch.log[26], Call::R2l(a, ..) if a == out.proof.attempt));
+        assert!(matches!(vch.log[26], Call::R2l(count, ..) if count == l.n_blocks));
+        let set_fp = out
+            .proof
+            .accept_sets
+            .iter()
+            .flatten()
+            .fold(0u64, |a, w| a.wrapping_add(*w));
+        assert_eq!(
+            vch.log[27],
+            Call::Words(hachi_co_r2l::LABEL_ACCEPT, l.n, set_fp)
+        );
         // G0, G1, the three commitments, coins, l'' x (H0, H1, a_r), three final absorbs, three
         // contexts.
-        assert_eq!(vch.log.len(), 27 + 6 + 3 * l.ell_pp + 3 + 3);
+        assert_eq!(vch.log.len(), 28 + 6 + 3 * l.ell_pp + 3 + 3);
         let words =
             |k: usize, label: &str| matches!(&vch.log[k], Call::Words(lab, 1, _) if *lab == label);
-        assert!(words(29, hachi_co_sumcheck::LABEL_COMMIT_W));
-        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_G0));
-        assert!(words(31, hachi_co_sumcheck::LABEL_COMMIT_G1));
-        assert!(matches!(vch.log[32], Call::Coins(..)));
+        assert!(words(30, hachi_co_sumcheck::LABEL_COMMIT_W));
+        assert!(words(31, hachi_co_sumcheck::LABEL_COMMIT_G0));
+        assert!(words(32, hachi_co_sumcheck::LABEL_COMMIT_G1));
+        assert!(matches!(vch.log[33], Call::Coins(..)));
         let tail = &vch.log[vch.log.len() - 3..];
         for (call, poly) in tail.iter().zip(ClaimedPoly::ORDER) {
             assert!(
@@ -296,12 +272,12 @@ fn provers_and_verifier_make_the_same_challenger_calls() {
             );
         }
         eprintln!(
-            "toy-n1 (setup {}, a* = {}): verifier's calls: {head:?} ... {:?}",
+            "toy-n1 (setup {}, j* = {}): verifier's calls: {head:?} ... {:?}",
             100 + j,
-            out.proof.attempt,
+            out.r2l.j_star,
             &vch.log[25..]
         );
         return;
     }
-    panic!("no instance with an aborted attempt among 32");
+    panic!("no instance with a rejected first iteration among 32");
 }

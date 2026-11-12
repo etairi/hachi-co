@@ -28,9 +28,35 @@ pub fn u_com(fx: &Fixture) -> Vec<Poly> {
     fx.commitment().unwrap()
 }
 
-/// The number of recorded attempts.
-pub fn attempts(fx: &Fixture) -> usize {
-    fx.attempt_count().unwrap()
+/// The number $L$ of recorded iterations of the rejection sampling.
+pub fn iterations(fx: &Fixture) -> usize {
+    fx.iteration_count().unwrap()
+}
+
+/// The selected iteration $j^\ast$ the oracle recorded.
+pub fn j_star(fx: &Fixture) -> usize {
+    fx.j_star().unwrap()
+}
+
+/// The provers' recorded sets of accepted iterations, as the words of
+/// [`hachi_co_r2l::encode_accept_set`].
+pub fn accept_sets(fx: &Fixture, ctx: &Context<K>) -> Vec<Vec<u64>> {
+    (0..fx.n())
+        .map(|p0| {
+            let listed: Vec<usize> = fx
+                .get(&format!("/ring_to_linear/accept_sets/{p0}"))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|j| j.as_u64().unwrap() as usize)
+                .collect();
+            let flags: Vec<bool> = (0..ctx.layout.rej_iterations)
+                .map(|j| listed.contains(&j))
+                .collect();
+            hachi_co_r2l::encode_accept_set(ctx, &flags).unwrap()
+        })
+        .collect()
 }
 
 /// The fixture, its context and every party's state.

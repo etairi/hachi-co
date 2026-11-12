@@ -3,7 +3,7 @@
 //! development presets have the sizes computed by hand. The `hachi-co` tests check the formula
 //! against real encodings.
 
-use hachi_co_params::sizes::{HEADER_BYTES, WORD_BYTES};
+use hachi_co_params::sizes::{HEADER_BYTES, WORD_BYTES, accept_set_words};
 use hachi_co_params::{BasePcsWords, presets, sizes, sizes_with_base};
 
 #[test]
@@ -19,7 +19,8 @@ fn components_follow_the_formula_for_every_preset() {
         );
         let ell_pp = u128::from(x.ell_dprime);
         let per_round = u128::from(x.d0 + 1 + x.d1 + 1) * k;
-        assert_eq!((s.header, s.attempt), (16, 8), "{}", p.name);
+        let accept = n * u128::from(accept_set_words(x.rej_iterations));
+        assert_eq!((s.header, s.accept_sets), (16, 8 * accept), "{}", p.name);
         assert_eq!(s.e_u, 8 * d, "{}", p.name);
         assert_eq!(s.v, 8 * n_d * d, "{}", p.name);
         assert_eq!(s.g_sums, 8 * 2 * n * k, "{}", p.name);
@@ -29,7 +30,7 @@ fn components_follow_the_formula_for_every_preset() {
         assert_eq!(s.total, sum, "{}", p.name);
         assert_eq!(
             s.total,
-            HEADER_BYTES + WORD_BYTES * (1 + s.residues),
+            HEADER_BYTES + WORD_BYTES * (accept + s.residues),
             "{}",
             p.name
         );
@@ -37,24 +38,25 @@ fn components_follow_the_formula_for_every_preset() {
         assert_eq!(s.bits_per_residue, 64 - x.q.leading_zeros(), "{}", p.name);
         assert!(x.q > 1 << (s.bits_per_residue - 1) && x.q < 1 << s.bits_per_residue);
         let packed = (s.residues * u128::from(s.bits_per_residue)).div_ceil(8);
-        assert_eq!(s.packed_total, 16 + 8 + packed, "{}", p.name);
+        assert_eq!(s.packed_total, 16 + 8 * accept + packed, "{}", p.name);
         assert!(s.packed_total < s.total, "{}", p.name);
     }
 }
 
-/// Hand-computed totals: toy-n1 (n = 1, l'' = 15, 2^23 < q < 2^24), toy-n2 (n = 2, l'' = 15,
-/// 2^25 < q < 2^26), toy-n3 (n = 3, l'' = 16, 2^25 < q < 2^26), toy-n4 (n = 4, l'' = 16,
-/// 2^27 < q < 2^28), toy-n8 (n = 8, l'' = 17, 2^29 < q < 2^30) and the development presets
-/// (n = 1, l'' = 18, 21, 23, q just above 2^29, 2^33, 2^37); d0 = 14 for all of them.
+/// Hand-computed totals: toy-n1 (n = 1, l'' = 15, 2^23 < q < 2^24), toy-n2 (n = 2, l'' = 16,
+/// 2^25 < q < 2^26), toy-n3 (n = 3, l'' = 17, 2^25 < q < 2^26), toy-n4 (n = 4, l'' = 17,
+/// 2^27 < q < 2^28), toy-n8 (n = 8, l'' = 18, 2^29 < q < 2^30) and the development presets
+/// (n = 1, l'' = 18, 21, 23, q just above 2^29, 2^33, 2^37); d0 = 14 and L = 16 (one word per
+/// accept set) for all of them.
 #[test]
 fn toy_and_dev_sizes_by_hand() {
-    // total = 16 + 8 (1 + 16 + 16 + 8n + 76 l'' + 12n); residues = 32 + 20n + 76 l''.
+    // total = 16 + 8 (n + 16 + 16 + 8n + 76 l'' + 12n); residues = 32 + 20n + 76 l''.
     let table: [(&str, u128, u128, u32); 8] = [
         ("toy-n1", 9560, 1192, 24),
-        ("toy-n2", 9720, 1212, 26),
-        ("toy-n3", 10488, 1308, 26),
-        ("toy-n4", 10648, 1328, 28),
-        ("toy-n8", 11896, 1484, 30),
+        ("toy-n2", 10336, 1288, 26),
+        ("toy-n3", 11112, 1384, 26),
+        ("toy-n4", 11280, 1404, 28),
+        ("toy-n8", 12560, 1560, 30),
         ("dev-l12", 11384, 1420, 30),
         ("dev-l16", 13208, 1648, 34),
         ("dev-l20", 14424, 1800, 38),
@@ -67,9 +69,10 @@ fn toy_and_dev_sizes_by_hand() {
             (total, residues, bits),
             "{name}"
         );
+        let n = u128::from(p.choices.n);
         assert_eq!(
             s.packed_total,
-            24 + (residues * u128::from(bits)).div_ceil(8),
+            16 + 8 * n + (residues * u128::from(bits)).div_ceil(8),
             "{name}"
         );
     }

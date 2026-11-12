@@ -18,7 +18,7 @@ const LABEL_SC_ROUND: &[u8] = b"hachi-co/sumcheck/a";
 /// The transcript label of a base-PCS context, squeezed from the fork of the context's label
 /// ([`FsChallenger`], [`Challenger::context`]).
 pub const FS_LABEL_CONTEXT: &str = "hachi-co/context";
-/// The PRG domain that expands the seed of the ring-to-linear challenges (index = attempt).
+/// The PRG domain that expands the seed of the ring-to-linear challenges (index 0).
 pub const FS_DOMAIN_R2L_C: &str = "hachi-co/fs/r2l/c";
 /// The PRG domain that expands the seed of the sumcheck coins (index 0).
 pub const FS_DOMAIN_SC_COINS: &str = "hachi-co/fs/sumcheck/coins";
@@ -35,12 +35,11 @@ pub const FS_DOMAIN_SC_ROUND: &str = "hachi-co/fs/sumcheck/a";
 ///
 /// **Call order.** Prover and verifier make the same calls in the same order. Absorb every public
 /// message, with a fixed label (a constant of the crate that sends the message), before drawing
-/// the coins that follow it. For the ring-to-linear step (`5_Building_Blocks.tex`:127-144), the
-/// provers, for attempt $a = 0, 1, \dots$ until no party aborts, call
-/// [`begin_attempt`](Self::begin_attempt)`(a)`, absorb that attempt's first message $\mathbf v$,
-/// and draw [`r2l_challenges`](Self::r2l_challenges)`(a, 2^r, d, ω)`. A verifier that replays
-/// the accepted attempt $a^\ast$ calls `begin_attempt(a*)` once, before absorbing $\mathbf v$ and
-/// drawing the challenges.
+/// the coins that follow it. For the ring-to-linear step (`fig:ring-to-linear`, since the draft's
+/// commit `1096ea2` one round with $L$ masks per prover in place of the earlier attempts), the
+/// provers and the verifier absorb the first message $\mathbf v$, draw
+/// [`r2l_challenges`](Self::r2l_challenges)`(2^r, d, ω)` and then absorb the provers' sets of
+/// accepted iterations.
 ///
 /// The base-PCS openings at the end of the sumcheck (`5_Building_Blocks.tex`:346-358) draw no
 /// coins of their own here: each one takes a 32-byte [`context`](Self::context) derived from
@@ -49,8 +48,8 @@ pub const FS_DOMAIN_SC_ROUND: &str = "hachi-co/fs/sumcheck/a";
 /// [`FsChallenger`] and `ReplayChallenger` implement the trait for every `K`. Generic code with a
 /// bound `H: Challenger<K>` calls the methods directly; on a concrete value, a method whose
 /// signature does not mention `K` (`absorb_polys`, `absorb_words`, `absorb_u64`,
-/// `begin_attempt`, `r2l_challenges`, `context`) needs it spelled out:
-/// `Challenger::<4>::begin_attempt(&mut ch, 0)`.
+/// `r2l_challenges`, `context`) needs it spelled out:
+/// `Challenger::<4>::absorb_u64(&mut ch, "label", 0)`.
 pub trait Challenger<const K: usize> {
     /// Absorbs a public message made of ring elements (or of polynomials of another length),
     /// under `label`.
@@ -78,20 +77,7 @@ pub trait Challenger<const K: usize> {
     /// transcript; `ReplayChallenger` returns a fixed hash of the label.
     fn context(&mut self, label: &str) -> [u8; 32];
 
-    /// Starts attempt `attempt` of the ring-to-linear step (Fiat-Shamir with aborts; the attempt
-    /// counter of `5_Building_Blocks.tex`:141, `6_Collaborative_Hachi.tex`:435 and
-    /// `ref/README.md`, choice 5). For [`FsChallenger`], the first call (whatever its index) saves
-    /// the current state as the base of the step, and every call restores that base and absorbs
-    /// the attempt index, so that the challenges of attempt $a$ depend on everything absorbed
-    /// before the step, on $a$ and on attempt $a$'s own messages, and not on earlier (aborted)
-    /// attempts. The provers call it with $a = 0, 1, \dots$; a verifier calls it once with the
-    /// accepted $a^\ast$ and reaches the same state.
-    ///
-    /// # Errors
-    /// Implementation-specific errors; [`FsChallenger`] never fails.
-    fn begin_attempt(&mut self, attempt: u64) -> Result<()>;
-
-    /// The challenges $\mathbf c = (c\_1, \dots, c\_{\mathrm{count}})$ of attempt `attempt`, each
+    /// The challenges $\mathbf c = (c\_1, \dots, c\_{\mathrm{count}})$ of the ring-to-linear step, each
     /// uniform in $\mathcal C = \lbrace c \in \mathcal R\_q : \Vert c \Vert\_1 \le \omega \rbrace$
     /// (`5_Building_Blocks.tex`:134-138; `ref/README.md`, choice 15), given by its $d$ signed
     /// coefficients. The ring-to-linear step draws `count` $= 2^r$ of them.
@@ -99,13 +85,7 @@ pub trait Challenger<const K: usize> {
     /// # Errors
     /// [`Error::Sampling`] if $\omega \gt 2^{63} - 1$ or the PRG fails, and
     /// implementation-specific errors.
-    fn r2l_challenges(
-        &mut self,
-        attempt: u64,
-        count: usize,
-        d: usize,
-        omega: u64,
-    ) -> Result<Vec<Vec<i64>>>;
+    fn r2l_challenges(&mut self, count: usize, d: usize, omega: u64) -> Result<Vec<Vec<i64>>>;
 
     /// The coins $\alpha, \rho \in \mathbb F\_{q^K}$, $\tau\_0 \in \mathbb F\_{q^K}^{\ell'' +
     /// \lceil \log n \rceil}$ and $\tau\_1 \in \mathbb F\_{q^K}^{\lceil \log \nu \rceil}$ of
@@ -201,20 +181,15 @@ fn encode_exts<const K: usize>(exts: &[Ext<K>]) -> Vec<u8> {
 ///
 /// | Method | seed label | PRG domain, index | sampler |
 /// |---|---|---|---|
-/// | `r2l_challenges` | `hachi-co/r2l/c` | [`FS_DOMAIN_R2L_C`], attempt | `count` draws of the exact $\ell\_1$-ball sampler [`L1Ball::sample`] |
+/// | `r2l_challenges` | `hachi-co/r2l/c` | [`FS_DOMAIN_R2L_C`], 0 | `count` draws of the exact $\ell\_1$-ball sampler [`L1Ball::sample`] |
 /// | `sumcheck_coins` | `hachi-co/sumcheck/coins` | [`FS_DOMAIN_SC_COINS`], 0 | $\alpha$, $\rho$, $\tau\_0$, $\tau\_1$ in this order |
 /// | `round_coin` | `hachi-co/sumcheck/a` | [`FS_DOMAIN_SC_ROUND`], round | one element |
 ///
 /// A field element is $K$ coordinates, each uniform in $\[0, q)$ by exact rejection
 /// ([`hachi_co_sampling::uniform::uniform_mod_q`]).
-///
-/// **Attempts.** [`begin_attempt`](Challenger::begin_attempt)`(0)` saves the state; every
-/// `begin_attempt(a)` restores the saved state and calls [`Transcript::append_attempt`]`(a)`
-/// (the attempt counter of Fiat-Shamir with aborts, plan `docs/hachi-co-plan.md`, finding F5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FsChallenger {
     transcript: Transcript,
-    attempt_base: Option<Transcript>,
 }
 
 impl FsChallenger {
@@ -224,12 +199,9 @@ impl FsChallenger {
         Self::from_transcript(Transcript::new(domain))
     }
 
-    /// A challenger that continues `transcript` (no attempt started).
+    /// A challenger that continues `transcript`.
     pub fn from_transcript(transcript: Transcript) -> Self {
-        Self {
-            transcript,
-            attempt_base: None,
-        }
+        Self { transcript }
     }
 
     /// The current transcript, e.g. to compare the provers' and the verifier's states
@@ -265,25 +237,10 @@ impl<const K: usize> Challenger<K> for FsChallenger {
             .challenge_seed(FS_LABEL_CONTEXT.as_bytes())
     }
 
-    fn begin_attempt(&mut self, attempt: u64) -> Result<()> {
-        let base = self
-            .attempt_base
-            .get_or_insert_with(|| self.transcript.clone());
-        self.transcript = base.clone();
-        self.transcript.append_attempt(attempt);
-        Ok(())
-    }
-
-    fn r2l_challenges(
-        &mut self,
-        attempt: u64,
-        count: usize,
-        d: usize,
-        omega: u64,
-    ) -> Result<Vec<Vec<i64>>> {
+    fn r2l_challenges(&mut self, count: usize, d: usize, omega: u64) -> Result<Vec<Vec<i64>>> {
         let ball = L1Ball::new(d, omega)?;
         let seed = self.transcript.challenge_seed(LABEL_R2L_C);
-        let mut prg = ShakePrg::new(&seed, FS_DOMAIN_R2L_C.as_bytes(), attempt);
+        let mut prg = ShakePrg::new(&seed, FS_DOMAIN_R2L_C.as_bytes(), 0);
         Ok((0..count)
             .map(|_| ball.sample(&mut prg))
             .collect::<hachi_co_sampling::Result<Vec<_>>>()?)

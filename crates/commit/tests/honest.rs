@@ -94,9 +94,10 @@ fn fresh_multi_party_runs_pass_open_on_the_network() {
             let u = outputs[0].0.clone();
             assert!(outputs.iter().all(|(v, _)| *v == u), "every party gets u");
             let states: Vec<_> = outputs.into_iter().map(|(_, st)| st).collect();
-            // The resharing is fresh: the shares differ from the initial ones but add up to f.
+            // No resharing since the draft's commit 1096ea2: the shares are the input shares,
+            // and they add up to f.
             let shares: Vec<_> = states.iter().map(|st| st.share.clone()).collect();
-            assert_ne!(shares, f_init, "n = {n}, seed {seed}");
+            assert_eq!(shares, f_init, "n = {n}, seed {seed}");
             let sum = f_hat(&ctx, &shares).unwrap();
             let total: Vec<Ext<K>> = (0..len)
                 .map(|t| (0..n).fold(field.zero(), |acc, p| field.add(&acc, &sum[p * len + t])))

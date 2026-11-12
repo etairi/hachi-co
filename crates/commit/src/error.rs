@@ -51,18 +51,6 @@ pub enum Error {
         /// The value of the network.
         actual: u64,
     },
-    /// A party sent a residue that is not below $q$ (every honest party sends reduced residues).
-    #[error("party {from} sent {what} with residue {value}, which is not below q = {q}")]
-    NonCanonical {
-        /// The sender.
-        from: PartyId,
-        /// What was received.
-        what: &'static str,
-        /// The residue.
-        value: u64,
-        /// The modulus.
-        q: u64,
-    },
     /// The same block of $\mathbf f'$ appears twice in a list of blocks that must hold each block
     /// at most once (a party's state, or the blocks whose slice of $\hat{\mathbf t}$ is formed).
     #[error("block {index} appears more than once")]

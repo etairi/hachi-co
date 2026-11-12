@@ -54,11 +54,28 @@ pub enum QChoice {
     /// A given modulus; [`derive`](fn@crate::derive) only checks it (the report flags what
     /// fails). Must be at least 2 so that $\delta$ is defined.
     Fixed(u64),
-    /// The smallest prime $p \equiv 5 \pmod 8$ with
-    /// $p > \max(16\omega b^\tau,\ 1 + 2^{\ell+3} n \omega^2 b,\ 2\beta + 1)$, where $\tau$ and
-    /// $\beta$ are computed with $\delta = \lceil \log_b p \rceil$ (`docs/m0-spec.md`,
-    /// "Choosing q"). This leaves no MSIS margin: secure presets fix $q$ from the Sage script.
+    /// The smallest prime $p \equiv 5 \pmod 8$ with $p > \max(16\omega b^\tau,\ 2\beta + 1)$,
+    /// where $\tau$ and $\beta$ are computed with $\delta = \lceil \log_b p \rceil$
+    /// (`docs/m0-spec.md`, "Choosing q"). The bound $1 + 2^{\ell+3} n \omega^2 b$ of the earlier
+    /// Setup is gone since the draft's commit `1096ea2` (its parameter table, `fig:parameters`,
+    /// keeps only $q > 4\bar\omega\bar\beta = 16\omega b^\tau$); it never fixed $q$ at a preset.
+    /// This leaves no MSIS margin: secure presets fix $q$ from the Sage script.
     Smallest,
+}
+
+/// The number $L$ of parallel iterations of the rejection sampling in $\Pi\_B$ (the draft since
+/// its commit `1096ea2`: `fig:parameters`, "$L = \lambda$", and `fig:ring-to-linear`, steps 3-6).
+/// All $n$ provers accept an iteration with probability $M^{-n} \ge 1/e$, independently, so all
+/// $L$ iterations fail with probability $(1 - M^{-n})^L$
+/// (`5_Building_Blocks.tex`, the paragraph before `fig:ring-to-linear`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RejIterations {
+    /// $L = \lambda$, the draft's rule. The default.
+    #[default]
+    Lambda,
+    /// A fixed $L \ge 1$, for the insecure toy, development and benchmark presets, whose
+    /// $\lambda = 115$ would make $\mathbf z'$ and the fixtures many times larger.
+    Fixed(u32),
 }
 
 /// The form of the witness pad $\rho^w_i$ of the collaborative sumcheck, which hides each
@@ -86,8 +103,9 @@ pub struct Choices {
     pub lambda: u32,
     /// The number of provers $n \ge 1$.
     pub n: u64,
-    /// The threshold $t$ (4_preliminaries.tex:131: $t \in [n-1]$, $t < n/2$). The construction
-    /// does not use it; it is recorded and not checked.
+    /// The threshold $t$ (4_preliminaries.tex:131: $t \in [n-1]$, and $t < n$ since the draft's
+    /// commit `1096ea2`, which had $t < n/2$). The construction does not use it; it is recorded
+    /// and not checked.
     pub t: u64,
     /// The number of variables $\ell$ of the committed polynomial ($2^\ell$ coefficients).
     pub ell: u32,
@@ -104,6 +122,10 @@ pub struct Choices {
     pub challenge_set: ChallengeSet,
     /// The rule for $\tau$.
     pub tau_rule: TauRule,
+    /// The number $L$ of iterations of the rejection sampling; absent from a file means the
+    /// draft's $L = \lambda$.
+    #[serde(default)]
+    pub rej_iterations: RejIterations,
     /// The height $n_A \ge 1$ of $\mathbf A$.
     pub n_a: u64,
     /// The height $n_B \ge 1$ of $\mathbf B$.

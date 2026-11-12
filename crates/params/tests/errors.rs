@@ -71,7 +71,7 @@ fn negative_exponents() {
 
 #[test]
 fn overflow_and_missing_modulus() {
-    // 2^(l+3) n omega^2 b and the mask width exceed u128 for l = 200.
+    // The mask width gamma = 2 n N beta_1 exceeds u128 for l = 200.
     let huge = Choices {
         ell: 200,
         ..toy_choices(2)
@@ -83,9 +83,11 @@ fn overflow_and_missing_modulus() {
         }),
         Err(Error::Overflow(_))
     ));
-    // With the smallest modulus the range guard 1 + 2^(l+3) n omega^2 b is computed first.
-    assert!(matches!(derive(&huge), Err(Error::Overflow(_))));
-    // l = 60: the range guard 1 + 2^63 * 2 * 4 * 4 is beyond 2^64.
+    // With the smallest modulus the band scan meets the overflow first, and reports that no
+    // modulus exists (the range guard that overflowed first before the draft's commit 1096ea2 is
+    // gone).
+    assert!(matches!(derive(&huge), Err(Error::NoModulus(_))));
+    // l = 60: 2 beta + 1 = 2^68 delta + 1 is beyond 2^64.
     assert!(matches!(
         derive(&Choices {
             ell: 60,

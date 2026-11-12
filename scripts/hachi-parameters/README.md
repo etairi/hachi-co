@@ -32,7 +32,9 @@ Steps, from the repository root:
    sage mlwe_ranks.sage crates/params/presets/secure.json > scripts/hachi-parameters/mlwe_ranks.txt
    ```
 
-3. The schedules and proof sizes of the candidates, for the secure presets as they are in `secure.json`:
+3. The schedules and proof sizes of the candidates, for the secure presets as they are in `secure.json`. The
+   candidates are b ∈ {4, 8, 16}, every ω from 8 to 32, n_A up to 8 rows (`-a8`) or 6 (`-a10`) and, with masks, the
+   height n_A0 of level 0 from n_A to 12. About 10 minutes:
 
    ```text
    cargo test --release -p hachi-co --test hachi_parameters hachi_layouts -- --ignored --nocapture \

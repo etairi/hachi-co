@@ -1,7 +1,8 @@
-//! Prover 1's steps after $\mathcal F\_{\mathsf{AH}}(1^n)$ (`5_Building_Blocks.tex`:142-146): the
-//! sum $\mathbf z = \sum\_p \mathbf z\_p$ as integers, the check
-//! $\Vert \mathbf z \Vert\_\infty \le \beta$ and $\hat{\mathbf z} =
-//! \mathbf J\_{\delta 2^m}^{-1}(\mathbf z)$.
+//! The steps after $\mathcal F\_{\mathsf{AH}}(1^n)$ (`5_Building_Blocks.tex`:142-146,
+//! `fig:ring-to-linear-2` steps 8-10): the sum $\mathbf z = \sum\_p \mathbf z\_p$ as integers
+//! and the check $\Vert \mathbf z \Vert\_\infty \le \beta$, which every prover runs (since the
+//! draft's commit `0337dfb`, before it only prover 1), and $\hat{\mathbf z} =
+//! \mathbf J\_{\delta 2^m}^{-1}(\mathbf z)$, which prover 1 computes.
 //!
 //! Every prover receives $\mathbf z$ from $\mathcal F\_{\mathsf{AH}}(1^n)$; it never reaches the
 //! verifier. These steps are not constant time (the norm and $\mathbf J^{-1}$ branch on the
@@ -37,10 +38,11 @@ pub fn z_of_sum<const K: usize>(ctx: &Context<K>, sum: &[u64]) -> Result<Vec<i64
     Ok(sum.iter().map(|x| zq.to_centered(*x)).collect())
 }
 
-/// Prover 1's check $\Vert \mathbf z \Vert\_\infty \le \beta = n\gamma$
-/// (`5_Building_Blocks.tex`:144; $\beta$ of `6_Collaborative_Hachi.tex`:279). Honest responses
-/// satisfy $\Vert \mathbf z\_p \Vert\_\infty \le \gamma - \beta\_1$, so the check never fails for
-/// honest provers (line 207).
+/// The provers' check $\Vert \mathbf z \Vert\_\infty \le \beta = n\gamma$
+/// (`5_Building_Blocks.tex`:144, run by every prover since the draft's commit `0337dfb`, with
+/// $\beta$ of `6_Collaborative_Hachi.tex`:279). Honest responses satisfy
+/// $\Vert \mathbf z\_p \Vert\_\infty \le \gamma - \beta\_1$, so the check never fails for honest
+/// provers (line 207).
 ///
 /// # Errors
 /// [`Error::NormCheck`] with the norm if it exceeds $\beta$.

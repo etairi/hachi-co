@@ -1,5 +1,6 @@
 //! Fresh honest runs of $\Pi\_{\mathsf{conv}}$ (random $f$ and $\mathbf x$, fresh public
-//! parameters, the parties' resharing from `PrgRandomness`): at toy-n1 on the loopback and at
+//! parameters, the parties' input shares as Commit uses them, without a resharing since the
+//! draft's commit `1096ea2`): at toy-n1 on the loopback and at
 //! toy-n2, n3, n4 and n8 on the in-memory network, V's check accepts $y = f(\mathbf x)$ and the
 //! relation checker holds; tampered witnesses break the relation where they should. Seeds are
 //! recorded in each test.
@@ -9,8 +10,7 @@ use common::{K, additive_shares, random_vector, run_parties, state_from_share};
 use hachi_co_conv::{
     VerifyError, check, check_relation, evaluate, pi_conv, public_vectors, u_share, verify,
 };
-use hachi_co_core::{Context, PartyRandomness, PrgRandomness};
-use hachi_co_math::Ext;
+use hachi_co_core::Context;
 use hachi_co_mpc::Loopback;
 use hachi_co_params::{derive, presets::toy_choices};
 use rand::{RngExt, SeedableRng};
@@ -24,39 +24,6 @@ fn context(n: u64, seed: u64) -> Context<K> {
     Context::setup(params, &setup_seed).unwrap()
 }
 
-fn party_seed(seed: u64, p: usize) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[..8].copy_from_slice(&seed.to_le_bytes());
-    out[8..16].copy_from_slice(&(p as u64).to_le_bytes());
-    out[16..26].copy_from_slice(b"conv-party");
-    out
-}
-
-/// The parties' shares after Commit's resharing with `PrgRandomness` (AS.Share of every initial
-/// share, then the local sums), computed here for all parties.
-fn reshared(ctx: &Context<K>, seed: u64, f_init: &[Vec<Ext<K>>]) -> Vec<Vec<Ext<K>>> {
-    let (n, field) = (f_init.len(), ctx.field());
-    let sent: Vec<Vec<Vec<Ext<K>>>> = f_init
-        .iter()
-        .enumerate()
-        .map(|(i, fi)| {
-            let mut prg = PrgRandomness::new(party_seed(seed, i + 1));
-            prg.reshare(field, fi, n).unwrap()
-        })
-        .collect();
-    (0..n)
-        .map(|p| {
-            (0..fi_len(f_init))
-                .map(|t| (0..n).fold(field.zero(), |acc, i| field.add(&acc, &sent[i][p][t])))
-                .collect()
-        })
-        .collect()
-}
-
-fn fi_len(f_init: &[Vec<Ext<K>>]) -> usize {
-    f_init[0].len()
-}
-
 #[test]
 fn fresh_runs_at_toy_n1_pass_the_check_on_the_loopback() {
     for seed in 0..8u64 {
@@ -65,9 +32,8 @@ fn fresh_runs_at_toy_n1_pass_the_check_on_the_loopback() {
         let f = random_vector(&mut rng, ctx.q(), 1 << ctx.layout.ell);
         let x = random_vector(&mut rng, ctx.q(), ctx.layout.ell);
         let y = evaluate(&ctx, &f, &x).unwrap();
-        let share = reshared(&ctx, seed, core::slice::from_ref(&f)).remove(0);
-        assert_eq!(share, f, "n = 1: the resharing is the identity");
-        let st = state_from_share(&ctx, 1, share);
+        // Commit has no resharing (the draft's commit 1096ea2): the share is the input.
+        let st = state_from_share(&ctx, 1, f.clone());
         let mut comm = Loopback::new(ctx.q()).unwrap();
         let out = pi_conv(&ctx, &mut comm, &st, &x).unwrap();
         assert_eq!(check(&ctx, &y, &out.e_u), Ok(()), "seed {seed}");
@@ -88,7 +54,7 @@ fn fresh_multi_party_runs_pass_the_check_on_the_network() {
             let x = random_vector(&mut rng, q, ctx.layout.ell);
             let y = evaluate(&ctx, &f, &x).unwrap();
             let f_init = additive_shares(&ctx, &mut rng, &f, n);
-            let states: Vec<_> = reshared(&ctx, seed, &f_init)
+            let states: Vec<_> = f_init
                 .into_iter()
                 .enumerate()
                 .map(|(i, share)| state_from_share(&ctx, i + 1, share))

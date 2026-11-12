@@ -4,7 +4,9 @@
 //! reach the target.
 
 use hachi_co_params::presets::{SecurePresetFile, secure_preset_file, secure_presets};
-use hachi_co_params::{ChallengeSet, Omega, Params, PresetKind, QChoice, TauRule, derive, presets};
+use hachi_co_params::{
+    ChallengeSet, Omega, Params, PresetKind, QChoice, RejIterations, TauRule, derive, presets,
+};
 
 /// Exact equality of every field, except the two floats (relative 1e-12).
 fn assert_same_params(expected: &Params, got: &Params, what: &str) {
@@ -85,7 +87,9 @@ fn secure_presets_have_the_documented_choices() {
         );
         assert_eq!(c.q, QChoice::Fixed(p.q), "{}", e.name);
         assert!(p.q < 1 << 63, "{}", e.name);
-        assert_eq!(c.t, (c.n - 1) / 2, "{}", e.name);
+        assert_eq!(c.t, c.n - 1, "{}", e.name);
+        assert_eq!(c.rej_iterations, RejIterations::Lambda, "{}", e.name);
+        assert_eq!(p.rej_iterations, u64::from(c.lambda), "{}", e.name);
         assert_eq!(e.name, format!("secure-l{}-n{}-a{}", c.ell, c.n, c.alpha));
     }
 }

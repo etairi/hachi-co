@@ -2,28 +2,26 @@
 //! the values the Sage oracle recorded in a [`Fixture`], so that the block drivers reproduce the
 //! fixture exactly (`docs/m1-spec.md`, "Randomness and coins").
 //!
-//! **Fixture keys** (JSON pointers; $p$ is the party, attempts and rounds as passed to the
+//! **Fixture keys** (JSON pointers; $p$ is the party, iterations and rounds as passed to the
 //! methods; every key is read and checked when the provider is built):
 //!
 //! | Method | Fixture key | Shape |
 //! |---|---|---|
-//! | `reshare` | `/commit/reshare/<p-1>/<j-1>` for $j = 1, \dots, n-1$ (share $n$ is recomputed) | $n \times 2^\ell \times k$ |
-//! | `mask(a, ..)` | `/ring_to_linear/attempts/<a>/provers/<p-1>/mask`, flattened | $\delta 2^m \times d$ |
+//! | `mask(j, ..)` | `/ring_to_linear/provers/<p-1>/masks/<j>`, flattened | $\delta 2^m \times d$, for $j \lt L$ |
 //! | `rho_u(..)` | `/commit/rho_u/<p-1>`, flattened | $m\_u \times d$ |
-//! | `rho_v(a, ..)` | `/ring_to_linear/attempts/<a>/provers/<p-1>/rho_v`, flattened | $m\_v \times d$ |
+//! | `rho_v(..)` | `/ring_to_linear/provers/<p-1>/rho_v`, flattened | $m\_v \times d$ |
 //! | `rho_w(..)` | `/sumcheck/rho_w/<p-1>` | $k$ |
 //! | `blinder(G0, ..)` | `/sumcheck/blinders/<p-1>/g0/s0` and `.../g0/s` | $k$; $\ell'' \times d\_0 \times k$ |
 //! | `blinder(G1, ..)` | `/sumcheck/blinders/<p-1>/g1/s0` and `.../g1/s` | $k$; $\ell'' \times d\_1 \times k$ |
-//! | `r2l_challenges(a, ..)` | `/ring_to_linear/attempts/<a>/c` | $2^r \times d$ |
+//! | `r2l_challenges(..)` | `/ring_to_linear/c` | $2^r \times d$ |
 //! | `sumcheck_coins` | `/sumcheck/coins/alpha`, `rho`, `tau0`, `tau1` | $k$; $k$; $(\ell'' + \lceil \log n \rceil) \times k$; $\lceil \log \nu \rceil \times k$ |
 //! | `round_coin(r)` | `/sumcheck/coins/a/<r-1>` | $k$ |
 //! | `context(label)` | none (the oracle does not model the base PCS): a fixed hash of the label, see [`ReplayChallenger`] | 32 bytes |
 //! | `base_pcs(index)` | none (the oracle does not model the base PCS): a fixed hash of the party and the index, see [`REPLAY_BASE_PCS_TAG`] | 32 bytes |
 //!
-//! (`/ring_to_linear/attempts/<a>/provers/<p-1>/prover` is checked to be $p$.) The oracle's
-//! resharing of party $p$ is `commit/reshare[p-1]` $= (\langle \mathbf f\_p \rangle\_1, \dots,
-//! \langle \mathbf f\_p \rangle\_n)$ of its initial share `input/f_init_shares[p-1]`
-//! (`ref/hachico_ref/commit.py`, `commit`).
+//! (`/ring_to_linear/provers/<p-1>/prover` is checked to be $p$.) Commit draws nothing: since the
+//! draft's commit `1096ea2` party $p$ commits to its input share `input/f_init_shares[p-1]` as it
+//! is (`ref/hachico_ref/commit.py`, `commit`).
 
 use crate::data::{Blinder, BlinderKind, SumcheckCoins};
 use crate::fixture::Fixture;
@@ -80,25 +78,20 @@ impl RecordedBlinder {
 /// The [`PartyRandomness`] of party $p$ replayed from a fixture (key mapping in the
 /// [module documentation](self)).
 ///
-/// It serves the recorded draws and checks that each request matches the recording (the number of
-/// parties, $\gamma$, $b$, the lengths and shapes, the modulus); a request that does not match,
-/// or an attempt the oracle did not run, is an [`Error::Replay`]. `reshare` replays shares
-/// $1, \dots, n-1$ and recomputes share $n = \mathbf x - \sum\_{j \lt n} \langle \mathbf x
-/// \rangle\_j$ from the input it is given, exactly as [`crate::PrgRandomness`] does; for the
-/// recorded input `input/f_init_shares[p-1]` this is the recorded share $n$. Unlike
-/// [`crate::PrgRandomness`], a value may be requested any number of times.
+/// It serves the recorded draws and checks that each request matches the recording ($\gamma$,
+/// $b$, the lengths and shapes, the modulus); a request that does not match, or an iteration the
+/// oracle did not draw, is an [`Error::Replay`]. Unlike [`crate::PrgRandomness`], a value may be
+/// requested any number of times.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplayRandomness {
     party: PartyId,
-    n: usize,
     q: u64,
     gamma: u64,
     b: u64,
-    /// `reshare[j][t]`: coordinates of element $t$ of share $j + 1$.
-    reshare: Vec<Vec<Vec<u64>>>,
+    /// `masks[j]`: the mask of iteration $j$.
     masks: Vec<Vec<i64>>,
     rho_u: Vec<i64>,
-    rhos_v: Vec<Vec<i64>>,
+    rho_v: Vec<i64>,
     rho_w: Vec<u64>,
     g0: RecordedBlinder,
     g1: RecordedBlinder,
@@ -116,41 +109,25 @@ impl ReplayRandomness {
             return Err(Error::InvalidParty { party, n });
         }
         let p0 = party - 1;
-        let reshare = (0..n)
-            .map(|j| fixture.residue_rows(&format!("/commit/reshare/{p0}/{j}")))
-            .collect::<Result<Vec<_>>>()?;
-        if reshare.iter().any(|s| s.len() != reshare[0].len()) {
+        let prefix = format!("/ring_to_linear/provers/{p0}");
+        let recorded = fixture.usize(&format!("{prefix}/prover"))?;
+        if recorded != party {
             return Err(Error::Fixture(format!(
-                "/commit/reshare/{p0}: the shares have different lengths"
+                "{prefix}/prover is {recorded}, expected {party}"
             )));
         }
-        let attempts = fixture
-            .get("/ring_to_linear/attempts")?
-            .as_array()
-            .map_or(0, Vec::len);
-        let mut masks = Vec::with_capacity(attempts);
-        let mut rhos_v = Vec::with_capacity(attempts);
-        for a in 0..attempts {
-            let prefix = format!("/ring_to_linear/attempts/{a}/provers/{p0}");
-            let recorded = fixture.usize(&format!("{prefix}/prover"))?;
-            if recorded != party {
-                return Err(Error::Fixture(format!(
-                    "{prefix}/prover is {recorded}, expected {party}"
-                )));
-            }
-            masks.push(fixture.ints(&format!("{prefix}/mask"))?);
-            rhos_v.push(fixture.ints(&format!("{prefix}/rho_v"))?);
-        }
+        let iterations = fixture.usize("/ring_to_linear/iterations")?;
+        let masks = (0..iterations)
+            .map(|j| fixture.ints(&format!("{prefix}/masks/{j}")))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             party,
-            n,
             q: fixture.q(),
             gamma: fixture.u64("/params/gamma")?,
             b: fixture.u64("/params/b")?,
-            reshare,
             masks,
             rho_u: fixture.ints(&format!("/commit/rho_u/{p0}"))?,
-            rhos_v,
+            rho_v: fixture.ints(&format!("{prefix}/rho_v"))?,
             rho_w: fixture.residues(&format!("/sumcheck/rho_w/{p0}"))?,
             g0: RecordedBlinder::load(fixture, &format!("/sumcheck/blinders/{p0}/g0"))?,
             g1: RecordedBlinder::load(fixture, &format!("/sumcheck/blinders/{p0}/g1"))?,
@@ -162,74 +139,42 @@ impl ReplayRandomness {
         self.party
     }
 
-    /// The number of recorded attempts of the ring-to-linear step.
-    pub fn attempts(&self) -> usize {
+    /// The number $L$ of recorded masks (iterations of the rejection sampling).
+    pub fn iterations(&self) -> usize {
         self.masks.len()
-    }
-
-    fn recorded<'a>(
-        &self,
-        values: &'a [Vec<i64>],
-        what: &str,
-        attempt: u64,
-        len: usize,
-    ) -> Result<&'a Vec<i64>> {
-        let v = usize::try_from(attempt)
-            .ok()
-            .and_then(|a| values.get(a))
-            .ok_or_else(|| {
-                Error::Replay(format!(
-                    "no {what} recorded for attempt {attempt} (the oracle ran {} attempts)",
-                    values.len()
-                ))
-            })?;
-        if v.len() != len {
-            return Err(Error::Replay(format!(
-                "{what} of attempt {attempt} has {} entries, requested {len}",
-                v.len()
-            )));
-        }
-        Ok(v)
     }
 }
 
-impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
-    fn reshare(&mut self, field: &Fqk<K>, input: &[Ext<K>], n: usize) -> Result<Vec<Vec<Ext<K>>>> {
-        check_modulus(field.modulus(), self.q)?;
-        if n != self.n {
-            return Err(Error::Replay(format!(
-                "resharing among {n} parties, the recording has {}",
-                self.n
-            )));
-        }
-        let len = self.reshare.first().map_or(0, Vec::len);
-        if input.len() != len {
-            return Err(Error::Replay(format!(
-                "resharing {} elements, the recording has {len}",
-                input.len()
-            )));
-        }
-        let mut shares = Vec::with_capacity(n);
-        let mut last: Vec<Ext<K>> = input.iter().map(|x| field.reduce(x)).collect();
-        for recorded in &self.reshare[..n - 1] {
-            let share = to_exts::<K>(recorded)?;
-            for (l, s) in last.iter_mut().zip(&share) {
-                *l = field.sub(l, s);
-            }
-            shares.push(share);
-        }
-        shares.push(last);
-        Ok(shares)
+/// `Err(Replay)` unless the recorded `values` have `len` entries.
+fn check_recorded_len(values: &[i64], what: &str, len: usize) -> Result<()> {
+    if values.len() != len {
+        return Err(Error::Replay(format!(
+            "{what} has {} entries, requested {len}",
+            values.len()
+        )));
     }
+    Ok(())
+}
 
-    fn mask(&mut self, attempt: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
+impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
+    fn mask(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
         if gamma != self.gamma {
             return Err(Error::Replay(format!(
                 "mask width {gamma}, the recording has gamma = {}",
                 self.gamma
             )));
         }
-        Ok(self.recorded(&self.masks, "mask", attempt, len)?.clone())
+        let mask = usize::try_from(iteration)
+            .ok()
+            .and_then(|j| self.masks.get(j))
+            .ok_or_else(|| {
+                Error::Replay(format!(
+                    "no mask recorded for iteration {iteration} (the oracle drew {})",
+                    self.masks.len()
+                ))
+            })?;
+        check_recorded_len(mask, &format!("the mask of iteration {iteration}"), len)?;
+        Ok(mask.clone())
     }
 
     fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
@@ -243,14 +188,15 @@ impl<const K: usize> PartyRandomness<K> for ReplayRandomness {
         Ok(self.rho_u.clone())
     }
 
-    fn rho_v(&mut self, attempt: u64, b: u64, len: usize) -> Result<Vec<i64>> {
+    fn rho_v(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {
         if b != self.b {
             return Err(Error::Replay(format!(
                 "rho^v over S_{b}, the recording has b = {}",
                 self.b
             )));
         }
-        Ok(self.recorded(&self.rhos_v, "rho_v", attempt, len)?.clone())
+        check_recorded_len(&self.rho_v, "rho^v", len)?;
+        Ok(self.rho_v.clone())
     }
 
     fn rho_w(&mut self, field: &Fqk<K>) -> Result<Ext<K>> {
@@ -316,10 +262,9 @@ pub const REPLAY_BASE_PCS_TAG: &str = "hachi-co/replay/base-pcs";
 pub const REPLAY_CONTEXT_TAG: &str = "hachi-co/replay/context";
 
 /// The verifier's coins replayed from a fixture (key mapping in the
-/// [module documentation](self)). The absorbs and
-/// [`begin_attempt`](Challenger::begin_attempt) are ignored: the oracle's coins are public coins
+/// [module documentation](self)). The absorbs are ignored: the oracle's coins are public coins
 /// that do not depend on the messages (`ref/README.md`, choice 14). A request that does not match
-/// the recording (shape, $\omega$, the modulus, an attempt or round the oracle did not run) is an
+/// the recording (shape, $\omega$, the modulus, a round the oracle did not run) is an
 /// [`Error::Replay`].
 ///
 /// The oracle does not model the base PCS (its `IdealPCS`, `ref/README.md`, choice 13), so it
@@ -331,7 +276,7 @@ pub const REPLAY_CONTEXT_TAG: &str = "hachi-co/replay/context";
 pub struct ReplayChallenger {
     q: u64,
     omega: u64,
-    challenges: Vec<Vec<Vec<i64>>>,
+    challenges: Vec<Vec<i64>>,
     alpha: Vec<u64>,
     rho: Vec<u64>,
     tau0: Vec<Vec<u64>>,
@@ -345,28 +290,16 @@ impl ReplayChallenger {
     /// # Errors
     /// [`Error::Fixture`] if a key is missing or malformed.
     pub fn new(fixture: &Fixture) -> Result<Self> {
-        let attempts = fixture
-            .get("/ring_to_linear/attempts")?
-            .as_array()
-            .map_or(0, Vec::len);
-        let challenges = (0..attempts)
-            .map(|a| fixture.int_rows(&format!("/ring_to_linear/attempts/{a}/c")))
-            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             q: fixture.q(),
             omega: fixture.u64("/params/omega")?,
-            challenges,
+            challenges: fixture.int_rows("/ring_to_linear/c")?,
             alpha: fixture.residues("/sumcheck/coins/alpha")?,
             rho: fixture.residues("/sumcheck/coins/rho")?,
             tau0: fixture.residue_rows("/sumcheck/coins/tau0")?,
             tau1: fixture.residue_rows("/sumcheck/coins/tau1")?,
             rounds: fixture.residue_rows("/sumcheck/coins/a")?,
         })
-    }
-
-    /// The number of recorded attempts of the ring-to-linear step.
-    pub fn attempts(&self) -> usize {
-        self.challenges.len()
     }
 
     /// The number of recorded sumcheck rounds ($\ell''$).
@@ -393,26 +326,8 @@ impl<const K: usize> Challenger<K> for ReplayChallenger {
         h.finalize().into()
     }
 
-    fn begin_attempt(&mut self, _attempt: u64) -> Result<()> {
-        Ok(())
-    }
-
-    fn r2l_challenges(
-        &mut self,
-        attempt: u64,
-        count: usize,
-        d: usize,
-        omega: u64,
-    ) -> Result<Vec<Vec<i64>>> {
-        let c = usize::try_from(attempt)
-            .ok()
-            .and_then(|a| self.challenges.get(a))
-            .ok_or_else(|| {
-                Error::Replay(format!(
-                    "no challenges recorded for attempt {attempt} (the oracle ran {} attempts)",
-                    self.challenges.len()
-                ))
-            })?;
+    fn r2l_challenges(&mut self, count: usize, d: usize, omega: u64) -> Result<Vec<Vec<i64>>> {
+        let c = &self.challenges;
         if omega != self.omega {
             return Err(Error::Replay(format!(
                 "challenges with omega = {omega}, the recording has omega = {}",
@@ -421,7 +336,7 @@ impl<const K: usize> Challenger<K> for ReplayChallenger {
         }
         if c.len() != count || c.iter().any(|ci| ci.len() != d) {
             return Err(Error::Replay(format!(
-                "challenges of attempt {attempt} requested as {count} x {d}, recorded as {} x {}",
+                "challenges requested as {count} x {d}, recorded as {} x {}",
                 c.len(),
                 c.first().map_or(0, Vec::len)
             )));

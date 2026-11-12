@@ -1,5 +1,6 @@
-//! `FsChallenger`: deterministic, sensitive to every absorbed byte, label and the domain;
-//! Fiat-Shamir with aborts through `begin_attempt`; challenges in C; canonical field coins.
+//! `FsChallenger`: deterministic, sensitive to every absorbed byte, label and the domain; the
+//! provers' and the verifier's calls of the ring-to-linear step agree; challenges in C; canonical
+//! field coins.
 
 use hachi_co_core::{Challenger, Error, Ext, Fqk, FsChallenger, Poly, SumcheckCoins};
 use hachi_co_sampling::l1ball;
@@ -44,7 +45,7 @@ impl Script {
         }
     }
 
-    /// Absorb everything, then draw the challenges of attempt 0, the sumcheck coins and a round
+    /// Absorb everything, then draw the ring-to-linear challenges, the sumcheck coins and a round
     /// coin.
     fn run(&self) -> Outcome {
         let f = field();
@@ -52,8 +53,7 @@ impl Script {
         Challenger::<K>::absorb_polys(&mut ch, self.labels[0], &self.polys);
         ch.absorb_exts(self.labels[1], &self.exts);
         Challenger::<K>::absorb_u64(&mut ch, self.labels[2], self.value);
-        Challenger::<K>::begin_attempt(&mut ch, 0).unwrap();
-        let c = Challenger::<K>::r2l_challenges(&mut ch, 0, COUNT, D, OMEGA).unwrap();
+        let c = Challenger::<K>::r2l_challenges(&mut ch, COUNT, D, OMEGA).unwrap();
         let coins = ch.sumcheck_coins(&f, ELL_PP, LOG_N, LOG_NU).unwrap();
         let a1 = ch.round_coin(&f, 1).unwrap();
         (c, coins, a1, ch.transcript().digest())
@@ -171,67 +171,52 @@ fn framing_separates_messages() {
 }
 
 #[test]
-fn attempts_restart_from_the_state_before_the_ring_to_linear_step() {
+fn the_verifier_reaches_the_provers_state_through_the_ring_to_linear_step() {
     let f = field();
     let v = |x: u64| vec![Poly(vec![x; D])];
     let mut prefix = FsChallenger::new(DOMAIN);
     Challenger::<K>::absorb_polys(&mut prefix, "statement", &v(42));
-    // The provers: attempt 0 (aborted), attempt 1 (aborted), attempt 2 (accepted), then coins.
+    // The provers: v, the challenges, the sets of accepted iterations, then coins.
+    let sets = vec![vec![0b1011u64], vec![0b0110u64]];
     let mut provers = prefix.clone();
-    let mut cs = Vec::new();
-    for a in 0..3u64 {
-        Challenger::<K>::begin_attempt(&mut provers, a).unwrap();
-        Challenger::<K>::absorb_polys(&mut provers, "r2l/v", &v(100 + a));
-        cs.push(Challenger::<K>::r2l_challenges(&mut provers, a, COUNT, D, OMEGA).unwrap());
-    }
+    Challenger::<K>::absorb_polys(&mut provers, "r2l/v", &v(100));
+    let c = Challenger::<K>::r2l_challenges(&mut provers, COUNT, D, OMEGA).unwrap();
+    Challenger::<K>::absorb_words(&mut provers, "r2l/accept-sets", &sets);
     let after_provers = provers.sumcheck_coins(&f, ELL_PP, LOG_N, LOG_NU).unwrap();
-    // The verifier replays only the accepted attempt.
+    // The verifier makes the same calls with the proof's v and sets.
     let mut verifier = prefix.clone();
-    Challenger::<K>::begin_attempt(&mut verifier, 0).unwrap();
-    Challenger::<K>::begin_attempt(&mut verifier, 2).unwrap();
-    Challenger::<K>::absorb_polys(&mut verifier, "r2l/v", &v(102));
-    let c2 = Challenger::<K>::r2l_challenges(&mut verifier, 2, COUNT, D, OMEGA).unwrap();
-    assert_eq!(c2, cs[2]);
+    Challenger::<K>::absorb_polys(&mut verifier, "r2l/v", &v(100));
+    assert_eq!(
+        Challenger::<K>::r2l_challenges(&mut verifier, COUNT, D, OMEGA).unwrap(),
+        c
+    );
+    Challenger::<K>::absorb_words(&mut verifier, "r2l/accept-sets", &sets);
     assert_eq!(
         verifier.sumcheck_coins(&f, ELL_PP, LOG_N, LOG_NU).unwrap(),
         after_provers
     );
     assert_eq!(verifier.transcript(), provers.transcript());
-    // A verifier may also start the accepted attempt directly, without attempt 0.
-    let mut direct = prefix.clone();
-    Challenger::<K>::begin_attempt(&mut direct, 2).unwrap();
-    Challenger::<K>::absorb_polys(&mut direct, "r2l/v", &v(102));
-    assert_eq!(
-        Challenger::<K>::r2l_challenges(&mut direct, 2, COUNT, D, OMEGA).unwrap(),
-        cs[2]
+    // Another v gives other challenges, and other sets give other coins afterwards.
+    let mut other_v = prefix.clone();
+    Challenger::<K>::absorb_polys(&mut other_v, "r2l/v", &v(101));
+    assert_ne!(
+        Challenger::<K>::r2l_challenges(&mut other_v, COUNT, D, OMEGA).unwrap(),
+        c
     );
-    assert_eq!(
-        direct.sumcheck_coins(&f, ELL_PP, LOG_N, LOG_NU).unwrap(),
+    let mut other_sets = prefix;
+    Challenger::<K>::absorb_polys(&mut other_sets, "r2l/v", &v(100));
+    Challenger::<K>::r2l_challenges(&mut other_sets, COUNT, D, OMEGA).unwrap();
+    Challenger::<K>::absorb_words(
+        &mut other_sets,
+        "r2l/accept-sets",
+        &[vec![0b1011], vec![0b0111]],
+    );
+    assert_ne!(
+        other_sets
+            .sumcheck_coins(&f, ELL_PP, LOG_N, LOG_NU)
+            .unwrap(),
         after_provers
     );
-    // Aborted attempts leave no trace: other first messages in attempts 0 and 1 give the same
-    // challenges in attempt 2.
-    let mut other = prefix.clone();
-    for a in 0..2u64 {
-        Challenger::<K>::begin_attempt(&mut other, a).unwrap();
-        Challenger::<K>::absorb_polys(&mut other, "r2l/v", &v(7 + a));
-        Challenger::<K>::r2l_challenges(&mut other, a, COUNT, D, OMEGA).unwrap();
-    }
-    Challenger::<K>::begin_attempt(&mut other, 2).unwrap();
-    Challenger::<K>::absorb_polys(&mut other, "r2l/v", &v(102));
-    assert_eq!(
-        Challenger::<K>::r2l_challenges(&mut other, 2, COUNT, D, OMEGA).unwrap(),
-        cs[2]
-    );
-    // The attempt index matters: the same message in attempt 0 gives other challenges.
-    let mut zero = prefix;
-    Challenger::<K>::begin_attempt(&mut zero, 0).unwrap();
-    Challenger::<K>::absorb_polys(&mut zero, "r2l/v", &v(102));
-    assert_ne!(
-        Challenger::<K>::r2l_challenges(&mut zero, 0, COUNT, D, OMEGA).unwrap(),
-        cs[2]
-    );
-    assert_ne!(cs[0], cs[1]);
 }
 
 #[test]
@@ -239,8 +224,8 @@ fn challenges_lie_in_the_l1_ball() {
     let mut ch = FsChallenger::new(DOMAIN);
     let (mut support1, mut support2) = (false, false);
     for a in 0..200u64 {
-        Challenger::<K>::begin_attempt(&mut ch, a).unwrap();
-        let c = Challenger::<K>::r2l_challenges(&mut ch, a, COUNT, D, OMEGA).unwrap();
+        Challenger::<K>::absorb_u64(&mut ch, "test/draw", a);
+        let c = Challenger::<K>::r2l_challenges(&mut ch, COUNT, D, OMEGA).unwrap();
         assert_eq!(c.len(), COUNT);
         for ci in &c {
             assert_eq!(ci.len(), D);
@@ -258,19 +243,19 @@ fn challenges_lie_in_the_l1_ball() {
     );
     // Other radii and degrees, and the empty request.
     for (d, omega) in [(64, 10), (256, 60), (1, 1)] {
-        let c = Challenger::<K>::r2l_challenges(&mut ch, 0, 3, d, omega).unwrap();
+        let c = Challenger::<K>::r2l_challenges(&mut ch, 3, d, omega).unwrap();
         assert!(
             c.iter()
                 .all(|ci| ci.len() == d && l1ball::contains(ci, omega))
         );
     }
     assert!(
-        Challenger::<K>::r2l_challenges(&mut ch, 0, 0, D, OMEGA)
+        Challenger::<K>::r2l_challenges(&mut ch, 0, D, OMEGA)
             .unwrap()
             .is_empty()
     );
     assert!(matches!(
-        Challenger::<K>::r2l_challenges(&mut ch, 0, 1, D, u64::MAX),
+        Challenger::<K>::r2l_challenges(&mut ch, 1, D, u64::MAX),
         Err(Error::Sampling(_))
     ));
 }

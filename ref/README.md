@@ -13,11 +13,22 @@ Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (c
   `unheld_blocks_zero` (which holds by the assembly). The check `no_block_in_several_states` is gone.
 - Since `c071784` the verifier of Π_A reads y from E(u) and Eval outputs it. The oracle still records the input's y and
   checks y = E(u) (`conv.verify_conv`), which is the comparison with an expected value.
+- Since `1096ea2` (the oracle follows the draft at `1e6812f`): Commit has no resharing, so each party's share
+  `commit/f_shares` is its input share `input/f_init_shares`; the ring-to-linear step runs L iterations of the
+  rejection sampling in parallel (`fig:ring-to-linear`): every prover draws L masks and one ρᵛ, v commits to
+  the images of all of them, one c is drawn, every prover runs Rej with each mask, the sets R_p of accepted
+  iterations are broadcast, j* is the smallest iteration in all of them, and only the responses of j* are summed.
+  z′ and the width of D hold n L masks (μ grows by n (L − 1) δ (1 + n_A)), and M selects the masks of j*. The
+  toys have L = 16 (the draft's L = λ would make the fixtures many times larger); an empty intersection aborts.
+  The bound 1 + 2^{ℓ+3} n ω² b on q is gone from Setup; it never fixed q at a toy.
+  `hiding_checks` evaluates the refresh identity of tH (181-194) with every σ zero, since there is no resharing
+  (tH at `1e6812f` still states it with the shares of the resharing).
 Line references use the short names `4_P` (4_preliminaries.tex), `5_BB` (5_Building_Blocks.tex),
 `6_CH` (6_Collaborative_Hachi.tex), `F2R` (field-to-ring-rok.tex) and `tH` (t-hiding.tex).
 
 Implemented: Setup, Commit with ρᵘ, Open (6_CH:265-421), PConv and Πconv (F2R:65-198), the ring-to-linear step
-with masks, ρᵛ, rejection sampling, aborts and retries (5_BB:98-207), the collaborative sumcheck with the pad
+with L masks per prover, ρᵛ, rejection sampling, the sets of accepted iterations and j* (5_BB:98-207,
+`fig:ring-to-linear`), the collaborative sumcheck with the pad
 and its verifier (5_BB:209-367), and numerical checks of the formulas of the t-hiding proof (tH). Hachi as the
 base PCS is deferred: its openings are checked by evaluating the committed polynomials directly.
 
@@ -45,7 +56,13 @@ development machine with Sage 10.9, Python 3.14.3 and numpy 2.4.4 (one default r
 
 The fixtures regenerated for the revised β₁ (2026-11-02, one default run of 270 s) are 189, 334, 525, 779 and
 1490 KB. The full default run takes about 200 s (197 s measured), including the self-tests and the runs tried by the
-seed selection (15 s for toy-n4, 27 s for toy-n8). Two runs produce byte-identical fixtures: toy-n1..n3 as
+seed selection (15 s for toy-n4, 27 s for toy-n8).
+
+With the L = 16 iterations of 2026-11-12 (one default run of 1247 s on the same machine, the parameter search of
+`parameters.sage` running alongside on one core): one honest run takes 1.8, 3.8, 10.2, 13.2 and 67.7 s, the
+negative tests 9.2, 27.9, 77.6, 142.5 and 586.0 s, and the fixtures are 347, 715, 1315, 1898 and 4074 KB for
+toy-n1, n2, n3, n4 and n8. The sumcheck dominates: ℓ″ grows to 15, 16, 17, 17 and 18, and z′ holds the images of
+all L masks. Two runs produce byte-identical fixtures: toy-n1..n3 as
 regenerated after adding n = 4 and 8 are identical to the previous ones (`cmp`), and a second run of n = 4 and 8
 reproduces their fixtures.
 
@@ -124,9 +141,10 @@ reproduces their fixtures.
 4. **u stays shared.** F2R:129 and F2R:195 list u as public, but only E(u) is opened (F2R:189-193), and the
    author comment at F2R:129 asks for u to stay secret-shared. Πconv outputs ⟨u⟩, not u, and ⟨u⟩ is the last
    entry of z′ (5_BB:185).
-5. **Aborts and retries (6_CH:435, 5_BB:129).** An abort ends Eval with (⊥, ⊥), and the caller restarts it.
-   Πconv is deterministic, so the oracle re-runs only the ring-to-linear step, with fresh masks, ρᵛ and c
-   (attempt index in the PRG domain). Every attempt is recorded.
+5. **Iterations (`fig:ring-to-linear`, since the draft's commit `1096ea2`).** Iteration j (0-indexed, the
+   draft's j + 1) uses the mask `Prg(seed, "r2l/mask/p<p>", j)`; ρᵛ is `Prg(seed, "r2l/rho_v/p<p>", 0)` and c is
+   drawn once. If no iteration is in every R_p, the step raises `NoCommonIteration` and Eval ends with (⊥, ⊥); the
+   negative test `empty_intersection` finds such a run at L = 1. Every iteration's values are recorded.
 6. **S_i when n is not a power of two (5_BB:226).** The draft calls (S_1..S_n) a partition of [μ−2]. For n = 3
    the positions of the unowned zero blocks (ŵ and t̂ of blocks 6 and 7) belong to no prover. We leave them in
    no S_i, so F_{0,i} forces every prover's share there to be zero. The S_i together with these positions form
@@ -163,13 +181,14 @@ reproduces their fixtures.
     accepts iff ‖z_i‖∞ ≤ γ − β₁ (4_P:119), and ẑ = J⁻¹(z) of the integer z.
 18. **Open's slack space (6_CH:404).** c ∈ Z is tested as ‖c_i‖₁ ≤ ω̄ and gcd(c_i, X^d+1) = 1. Open is run
     with c* = (1, …, 1).
-19. **Fixture seed.** The fixture uses the smallest seed index whose run contains an aborted attempt, so that
-    the fixtures cover the abort-and-retry path. This is test coverage, not selection of results: every run
-    tried on the way is fully checked, printed and listed under `seeds.selection.tried`. All of them passed.
-    Fixture seeds since the revised beta_1 of 2026-11-02: toy-n1 index 4 (two aborts), toy-n2 index 9 (one
-    abort, by prover 2), toy-n3 index 1 (one abort, by prover 1), toy-n4 index 0 (two aborts, by prover 3, then
-    prover 2), toy-n8 index 2 (one abort, by prover 4). Before it: toy-n1 index 3, toy-n2 index 1, toy-n3 index 1,
-    toy-n4 index 3, toy-n8 index 1.
+19. **Fixture seed.** The fixture uses the smallest seed index whose run selects an iteration j* > 0, that is,
+    some prover rejected the first iteration, so that the fixtures cover the selection beyond the first
+    iteration. This is test coverage, not selection of results: every run tried on the way is fully checked,
+    printed and listed under `seeds.selection.tried`. All of them passed. Fixture seeds since the L iterations of
+    2026-11-12: toy-n1 index 4 (j* = 2), toy-n2 index 9 (j* = 1), toy-n3 index 1 (j* = 1), toy-n4 index 0
+    (j* = 2), toy-n8 index 1 (j* = 2). Before it, with the attempts and the revised beta_1 of 2026-11-02:
+    toy-n1 index 4, toy-n2 index 9, toy-n3 index 1, toy-n4 index 0, toy-n8 index 2; earlier still: toy-n1
+    index 3, toy-n2 index 1, toy-n3 index 1, toy-n4 index 3, toy-n8 index 1.
 
 ### Observations about the draft (no effect on correctness)
 
@@ -223,13 +242,14 @@ reproduces their fixtures.
 
 **Top-level keys.**
 
-- `params`: every derived parameter, plus ln M, the acceptance probability per prover and the abort probability.
+- `params`: every derived parameter (L as `rej_iterations`), plus ln M, the acceptance probability per prover,
+  the probability 1 − M^{−n} that some prover rejects an iteration, and the abort probability (1 − M^{−n})^L.
 - `seeds`: the instance seed, the setup seed and the seed-selection record.
 - `conventions`: the conventions above, as text.
 - `setup`: A, B, D.
 - `input`: f, the initial shares f_i, x, y = f(x) (computed with `subfield.py`), and y as a ring element.
 - `commit`:
-  - `reshare[i][j]` = ⟨f_i⟩_j, and the summed shares ⟨f⟩_j;
+  - the shares ⟨f⟩_j (the input shares, as Commit has no resharing);
   - f̂ and f′;
   - the owner of each block, and per owned block: s, t and t̂;
   - the full t̂, ρᵘ per prover, and u.
@@ -238,9 +258,10 @@ reproduces their fixtures.
   check.
 - `ring_to_linear`:
   - w and ŵ;
-  - per attempt: for each prover the mask, ρᵛ, t₀, t̂₀, w₀, ŵ₀, ‖fold‖∞, ‖z_i‖∞ and accept; then v, c,
-    abort, and the aborting provers;
-  - the accepted attempt, the inputs z_i of F_AH(1ⁿ), z, ‖z‖∞ and the norm check;
+  - `iterations` = L; for each prover ρᵛ, and per iteration the mask, t₀, t̂₀, w₀, ŵ₀, ‖z_i‖∞ and accept,
+    and ‖fold‖∞; then v, c and whether c ∈ C;
+  - the sets of accepted iterations (0-indexed lists), j*, the inputs z_i^{j*} of F_AH(1ⁿ), z, ‖z‖∞ and the
+    norm check;
   - the layout and row indices, the partition (as [start, end) ranges), the unowned positions;
   - z′, y, and the digest of M.
 - `sumcheck`:
@@ -295,8 +316,10 @@ seeds (`--sweep`).
   z of the box is output by exactly one mask; for all 24 v with ‖v‖∞ = β₁+1 the accepted set differs. At the
   toy parameters, exactly: with v₁ = β₁+1 the first coordinate reaches 2γ−2β₁ of the 2γ−2β₁+1 box values, so
   Rej(v) is not distributed as SimRej.
-- **Abort rate.** 10⁴ attempts with numpy PCG64 masks (seed 12345) through the oracle's Rej fall within 3σ of
-  the exact 1 − M^{−n} (≈ 0.3935) for each preset.
+- **Rejection rate of one iteration.** 10⁴ iterations with numpy PCG64 masks (seed 12345) through the oracle's
+  Rej fall within 3σ of the exact 1 − M^{−n} (≈ 0.3935) for each preset.
+- **No common iteration.** With L = 1, a run in which a prover rejects the only iteration aborts the step.
+- **Another iteration.** The verifier with M of another iteration than j* rejects (the final check of H₁).
 
 **Self-tests.**
 - The toy table and q rule are re-derived (all five rows).

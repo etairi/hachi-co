@@ -1,17 +1,15 @@
-//! The Commit driver of one party (`6_Collaborative_Hachi.tex`:305-401), run against a
-//! [`Comm`].
+//! The Commit driver of one party (`6_Collaborative_Hachi.tex`:305-401, without the resharing
+//! of lines 308-313 since the draft's commit `1096ea2`), run against a [`Comm`].
 
 use crate::error::{Error, Result};
 use crate::inner::{block_state, fah_b_input, party_state, sample_rho_u};
-use crate::share::{decode_chunk, decode_received, reshare, sum_chunk, sum_shares};
-use hachi_co_core::wire::{flatten_exts, flatten_polys, unflatten_polys};
+use crate::share::{input_share, reduce_chunk};
+use hachi_co_core::wire::{flatten_polys, unflatten_polys};
 use hachi_co_core::{Context, PartyRandomness, PartyState, SpillFile};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_mpc::Comm;
 use std::path::Path;
 
-/// The [`Comm::exchange`] label of the resharing (step 1, `6_Collaborative_Hachi.tex`:308-310).
-pub const LABEL_RESHARE: &str = "hachi-co/commit/reshare";
 /// The [`Comm::fah`] label of $\mathcal F\_{\mathsf{AH}}(\mathbf B)$ (step 6,
 /// `6_Collaborative_Hachi.tex`:383-397).
 pub const LABEL_FAH_B: &str = "hachi-co/commit/F_AH(B)";
@@ -46,21 +44,19 @@ pub(crate) fn check_comm<const K: usize, C: Comm>(ctx: &Context<K>, comm: &C) ->
     Ok(())
 }
 
-/// $\mathsf{Commit}\langle \mathcal P\_1(\mathbf f\_1), \dots, \mathcal P\_n(\mathbf f\_n)
-/// \rangle(\mathsf{pp})$ for the party $p$ = `comm.id()` with initial share `f_init`
-/// $= \mathbf f\_p \in \mathbb F\_{q^k}^{2^\ell}$ (`6_Collaborative_Hachi.tex`:305-401). Every
-/// party calls it with its own `comm` and `rng`; the collective calls are, in order:
+/// $\mathsf{Commit}\langle \mathcal P\_1(\langle \mathbf f \rangle\_1), \dots,
+/// \mathcal P\_n(\langle \mathbf f \rangle\_n) \rangle(\mathsf{pp})$ for the party $p$ =
+/// `comm.id()` with its share `f_init` $= \langle \mathbf f \rangle\_p \in
+/// \mathbb F\_{q^k}^{2^\ell}$ (`6_Collaborative_Hachi.tex`:305-401 as the draft's commit
+/// `1096ea2` revises it: no resharing). Every party calls it with its own `comm` and `rng`:
 ///
-/// 1. [`reshare`] with `rng` ($\mathsf{AS.Share}$), then [`Comm::exchange`] with
-///    [`LABEL_RESHARE`]: share $j$ goes to party $j$ (lines 308-310), and the received shares are
-///    checked ([`decode_received`]);
-/// 2. [`sum_shares`]: $\langle \mathbf f \rangle\_p = \sum\_i \langle \mathbf f\_i \rangle\_p$
-///    (lines 311-313);
-/// 3. [`sample_rho_u`] and [`party_state`]: $\boldsymbol\rho^u\_p$ (line 382), $\mathsf{PConv}$
+/// 1. [`input_share`]: the share, its coordinates modulo $q$;
+/// 2. [`sample_rho_u`] and [`party_state`]: $\boldsymbol\rho^u\_p$ (line 382), $\mathsf{PConv}$
 ///    of $p$'s blocks and their inner commitments
 ///    $\mathbf s\_i, \mathbf t\_i, \hat{\mathbf t}\_i$ (lines 315-381);
-/// 4. [`fah_b_input`] and [`Comm::fah`] with [`LABEL_FAH_B`]: every party receives
-///    $\mathbf u = \mathbf B (\hat{\mathbf t}, \boldsymbol\rho^u)$ (lines 383-397).
+/// 3. [`fah_b_input`] and [`Comm::fah`] with [`LABEL_FAH_B`], the only collective call: every
+///    party receives $\mathbf u = \mathbf B (\hat{\mathbf t}, \boldsymbol\rho^u)$
+///    (lines 383-397).
 ///
 /// Returns the commitment $\mathbf u \in \mathcal R\_q^{n\_B}$ and $p$'s state $\mathsf{st}\_p$
 /// (line 400, with $\mathbf t\_i$ and the share; [`PartyState`]). With [`hachi_co_mpc::Loopback`]
@@ -68,8 +64,7 @@ pub(crate) fn check_comm<const K: usize, C: Comm>(ctx: &Context<K>, comm: &C) ->
 ///
 /// # Errors
 /// [`Error::Network`] or [`Error::InvalidParty`] if `comm` does not match the context;
-/// [`Error::Shape`] for an `f_init` without $2^\ell$ entries; [`Error::NonCanonical`] or
-/// [`Error::Shape`] for malformed shares from another party; the errors of `rng` and `comm`.
+/// [`Error::Shape`] for an `f_init` without $2^\ell$ entries; the errors of `rng` and `comm`.
 pub fn commit<const K: usize, C: Comm, R: PartyRandomness<K>>(
     ctx: &Context<K>,
     comm: &mut C,
@@ -77,14 +72,8 @@ pub fn commit<const K: usize, C: Comm, R: PartyRandomness<K>>(
     f_init: &[Ext<K>],
 ) -> Result<(Vec<Poly>, PartyState<K>)> {
     check_comm(ctx, comm)?;
-    // Step 1: AS.Share and the pairwise exchange.
-    let shares = reshare(ctx, rng, f_init)?;
-    let outgoing = shares.iter().map(|s| flatten_exts(s)).collect();
-    let incoming = comm.exchange(LABEL_RESHARE, outgoing)?;
-    let received = decode_received(ctx, &incoming)?;
-    // Step 2: the local sum.
-    let share = sum_shares(ctx, &received)?;
-    // Steps 3-4: PConv of the party's blocks and the inner commitments.
+    let share = input_share(ctx, f_init)?;
+    // PConv of the party's blocks and the inner commitments.
     let rho_u = sample_rho_u(ctx, rng)?;
     let state = party_state(ctx, comm.id(), share, rho_u)?;
     let u = fah_b(ctx, comm, &state)?;
@@ -112,9 +101,7 @@ fn fah_b<const K: usize, C: Comm>(
 /// disk ([`SpillFile`], in the directory `dir`). `input(j)` returns the $j$-th chunk of
 /// $\mathbf f\_p$, of $2^m d/k$ elements, $j \lt$ `blocks_per_party`; its entries are the
 /// coefficients of the $j$-th of the party's blocks. Every chunk goes through the steps of
-/// [`commit`] on its own, so that memory holds one block of $\mathbf s\_i$ at a time; `exchange`
-/// runs once per chunk, and with [`PartyRandomness::reshare_stream`] the shares do not depend on
-/// the chunks.
+/// [`commit`] on its own, so that memory holds one block of $\mathbf s\_i$ at a time.
 ///
 /// The state has no `share` and no `f_prime` or `s` in its blocks
 /// ([`PartyState::for_each_block`]).
@@ -132,20 +119,12 @@ pub fn commit_streaming<const K: usize, C: Comm, R: PartyRandomness<K>>(
     let (l, party) = (&ctx.layout, comm.id());
     let g = l.d / l.k.max(1);
     let chunk_len = l.block_len * g;
-    let mut stream = rng.reshare_stream(ctx.field(), l.n)?;
     let spill = SpillFile::create(dir, party, l)?;
     let mut blocks = Vec::with_capacity(l.blocks_per_party);
     for (slot, index) in l.blocks_of(party).enumerate() {
         let chunk = input(slot)?;
-        crate::error::check_len("a chunk of f_p (2^m d/k entries)", chunk_len, chunk.len())?;
-        let outgoing = stream
-            .next_chunk(&chunk)?
-            .iter()
-            .map(|s| flatten_exts(s))
-            .collect();
-        let incoming = comm.exchange(LABEL_RESHARE, outgoing)?;
-        let received = decode_chunk(ctx, &incoming, chunk_len)?;
-        let share = sum_chunk(ctx, &received, chunk_len)?;
+        crate::error::check_len("a chunk of <f>_p (2^m d/k entries)", chunk_len, chunk.len())?;
+        let share = reduce_chunk(ctx, &chunk);
         let f_prime = share
             .chunks_exact(g)
             .map(|c| ctx.sub.psi(c))

@@ -94,8 +94,13 @@ fn forge<P: BasePcs<K>>(
     );
     let pv = hachi_co_conv::public_vectors(ctx, x).unwrap();
     let v = vec![Poly(vec![0; l.d]); l.n_d];
-    let c = hachi_co_r2l::verifier_challenges(ctx, &mut ch, 0, &v).unwrap();
-    let rel = hachi_co_r2l::linear_relation(ctx, &pv, &v, &c, u).unwrap();
+    let c = hachi_co_r2l::verifier_challenges(ctx, &mut ch, &v).unwrap();
+    // Every prover claims to accept every iteration, so j* = 0.
+    let full: Vec<bool> = vec![true; l.rej_iterations];
+    let accept_sets = vec![hachi_co_r2l::encode_accept_set(ctx, &full).unwrap(); l.n];
+    let j_star = hachi_co_r2l::verifier_iteration(ctx, &mut ch, &accept_sets).unwrap();
+    assert_eq!(j_star, 0);
+    let rel = hachi_co_r2l::linear_relation(ctx, &pv, &v, &c, j_star, u).unwrap();
     let zero = field.zero();
     let (g0_sums, g1_sums) = (vec![zero; l.n], vec![zero; l.n]);
     ch.absorb_exts(LABEL_G0, &g0_sums);
@@ -139,7 +144,7 @@ fn forge<P: BasePcs<K>>(
     Forged {
         proof: EvalProof {
             e_u,
-            attempt: 0,
+            accept_sets,
             v,
             sumcheck: SumcheckTranscript {
                 g0_sums,

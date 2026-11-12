@@ -5,8 +5,12 @@ Source: draft 6_Collaborative_Hachi.tex (6_CH) lines 265-303, with the conventio
   * tau rule "tight" (user decision 2026-10-17): the least tau with
     (ceil(b/2) - 1) * (b^tau - 1)/(b - 1) >= beta.  The draft's tau = ceil(log_b beta) + 1 (6_CH:280) is
     available as tau_rule="draft".
-  * q is the smallest prime p = 5 (mod 8) with p > max(16 omega b^tau, 1 + 2^(ell+3) n omega^2 b, 2 beta + 1),
-    iterated from q = 2^20 until delta = ceil(log_b q) is stable (m0-spec "Choosing q").
+  * q is the smallest prime p = 5 (mod 8) with p > max(16 omega b^tau, 2 beta + 1), iterated from q = 2^20 until
+    delta = ceil(log_b q) is stable (m0-spec "Choosing q").  The bound 1 + 2^(ell+3) n omega^2 b of the earlier
+    Setup is gone since the draft's commit 1096ea2 (its parameter table, fig:parameters); it never fixed q here.
+  * L, the number of parallel iterations of the rejection sampling (fig:parameters since 1096ea2: L = lambda):
+    TOY_REJ_ITERATIONS = 16 at the toy presets, as in crates/params (TOY_REJ_ITERATIONS).  The L masks per
+    prover enter mu and the width of D.
 
 All quantities are exact integers; the rejection constant M is reported through log(M) only.
 """
@@ -78,6 +82,7 @@ class Params:
     q: int
     tau_rule: str
     pad: str            # "field": one element of F_{q^k} (5_BB:252-256); "residues": 2k entries of Z_q in row mu
+    rej_iterations: int  # L, the parallel iterations of the rejection sampling (fig:ring-to-linear since 1096ea2)
     # derived (6_CH:267-285)
     d: int
     k: int
@@ -105,7 +110,7 @@ class Params:
     log_nu: int         # ceil(log nu), the length of tau_1
     width_A: int        # delta 2^m
     width_B: int        # n_A delta 2^r + n m_u
-    width_D: int        # delta (2^r + n + n n_A) + n m_v
+    width_D: int        # delta (2^r + n L + n L n_A) + n m_v
     ln_M: float         # ln of M = ((2 gamma + 1)/(2 gamma - 2 beta1 + 1))^N
 
     def as_dict(self):
@@ -143,9 +148,19 @@ class Params:
         """1/M as a float."""
         return math.exp(-self.ln_M)
 
+    def abort_probability(self):
+        """(1 - M^{-n})^L: no iteration is accepted by every prover (5_BB, before fig:ring-to-linear)."""
+        return (1 - self.acceptance_per_prover() ** self.n) ** self.rej_iterations
 
-def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau_rule="tight", pad="field"):
+
+TOY_REJ_ITERATIONS = 16
+
+
+def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau_rule="tight", pad="field",
+           rej_iterations=TOY_REJ_ITERATIONS):
     q = int(q)
+    L = int(rej_iterations)
+    assert L >= 1, "L >= 1"
     assert Integer(q).is_prime() and q % 8 == 5, "q must be a prime = 5 mod 8"
     assert b >= 3 and m_u > n_B and m_v > n_D
     assert pad in ("field", "residues")
@@ -169,7 +184,7 @@ def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau
     else:
         raise ValueError(tau_rule)
     beta_bar, omega_bar, gamma_bar = 2 * b ** tau, 2 * omega, b - 1   # gamma_bar = b - 1 since the draft's 28721d6
-    mu = (2 ** r * delta + n * delta + 2 ** r * n_A * delta + n * n_A * delta + n * m_u + n * m_v
+    mu = (2 ** r * delta + n * L * delta + 2 ** r * n_A * delta + n * L * n_A * delta + n * m_u + n * m_v
           + 2 ** m * delta * tau + 2)
     n_prime = n_A + n_B + n_D + 2
     ell_U = ceil_log2(mu + n_prime)
@@ -181,12 +196,12 @@ def derive(name, n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, q, tau
     ln_M = float(N * (RR(2 * gamma + 1) / RR(2 * gamma - 2 * beta1 + 1)).log())
     return Params(
         name=name, n=n, ell=ell, alpha=alpha, kappa=kappa, b=b, omega=omega, n_A=n_A, n_B=n_B, n_D=n_D,
-        m_u=m_u, m_v=m_v, q=q, tau_rule=tau_rule, pad=pad, d=d, k=k, delta=delta, logn=logn,
+        m_u=m_u, m_v=m_v, q=q, tau_rule=tau_rule, pad=pad, rej_iterations=L, d=d, k=k, delta=delta, logn=logn,
         ell_prime=ell_prime, r=r, m=m,
         beta1=beta1, N=N, gamma=gamma, beta=beta, tau=tau, beta_bar=beta_bar, omega_bar=omega_bar,
         gamma_bar=gamma_bar, mu=mu, n_prime=n_prime, ell_U=ell_U, ell_L=ell_L, ell_pp=ell_pp, d0=d0, d1=d1,
         nu=nu, log_nu=ceil_log2(nu), width_A=delta * 2 ** m, width_B=n_A * delta * 2 ** r + n * m_u,
-        width_D=delta * (2 ** r + n + n * n_A) + n * m_v, ln_M=ln_M)
+        width_D=delta * (2 ** r + n * L + n * L * n_A) + n * m_v, ln_M=ln_M)
 
 
 def choose_q(n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, tau_rule="tight", start=2 ** 20):
@@ -203,7 +218,7 @@ def choose_q(n, ell, alpha, kappa, b, omega, n_A, n_B, n_D, m_u, m_v, tau_rule="
         N = d * delta * 2 ** m
         beta = n * 2 * n * N * beta1
         tau = tight_tau(beta, b) if tau_rule == "tight" else draft_tau(beta, b)
-        bound = max(16 * omega * b ** tau, 1 + 2 ** (ell + 3) * n * omega ** 2 * b, 2 * beta + 1)
+        bound = max(16 * omega * b ** tau, 2 * beta + 1)
         p = bound + 1
         while not (p % 8 == 5 and Integer(p).is_prime()):
             p += 1
@@ -219,13 +234,14 @@ TOY_COMMON = dict(ell=6, alpha=4, kappa=2, b=4, omega=2, n_A=1, n_B=1, n_D=1, m_
 # choices with n = 4 and 8, every number produced by choose_q and derive below.  check_toy_table re-derives
 # every row.  The rows have the revised beta_1 (2026-11-02), so their numbers no longer match that table: toy-n2
 # and toy-n3 share a modulus (both have tau = 10, so the binding guard 16 omega b^tau = 2^25 is the largest
-# bound for both), and toy-n4 has tau = 11 and the guard 2^27.
+# bound for both), and toy-n4 has tau = 11 and the guard 2^27.  Since 2026-11-12 they have the L = 16 masks
+# per prover of the draft's commit 1096ea2 (mu grows by n (L - 1) delta (1 + n_A), l'' by one at n = 2, 3, 4, 8).
 TOY_TABLE = {
-    "toy-n1": (1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 558, 15, 14),
-    "toy-n2": (2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 790, 15, 14),
-    "toy-n3": (3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 1340, 16, 14),
-    "toy-n4": (4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 1586, 16, 14),
-    "toy-n8": (8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 2194, 17, 14),
+    "toy-n1": (1, 8388637, 12, 2, 2, 16, 768, 24576, 24576, 9, 918, 15, 14),
+    "toy-n2": (2, 33554501, 13, 3, 2, 16, 832, 53248, 106496, 10, 1570, 16, 14),
+    "toy-n3": (3, 33554501, 13, 3, 3, 8, 1664, 79872, 239616, 10, 2510, 17, 14),
+    "toy-n4": (4, 134217757, 14, 3, 3, 8, 1792, 114688, 458752, 11, 3266, 17, 14),
+    "toy-n8": (8, 536871029, 15, 4, 3, 8, 1920, 245760, 1966080, 12, 5794, 18, 14),
 }
 
 

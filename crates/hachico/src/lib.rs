@@ -73,41 +73,40 @@
 //! One [`hachi_co_core::FsChallenger`] per proof, on a fresh transcript with the domain
 //! [`EVAL_DOMAIN`] = `hachi-co/eval/v1`. The provers ([`eval_with`]) and the verifier
 //! ([`verify_with`]) make exactly the same challenger calls in the same order, except that the
-//! verifier replays only the accepted attempt of the ring-to-linear step and derives the
-//! contexts of every party's openings, each prover only its own:
+//! verifier derives the contexts of every party's openings, each prover only its own:
 //!
 //! | # | Call | Label | Data |
 //! |---|---|---|---|
-//! | 1 | `absorb_u64` × 17 | `hachi-co/eval/params/<name>` ([`LABELS_PARAMS`]) | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega, $ challenge set, $\tau$ rule, $n\_A, n\_B, n\_D, m\_\rho, q$ ([`statement_words`]) |
+//! | 1 | `absorb_u64` × 18 | `hachi-co/eval/params/<name>` ([`LABELS_PARAMS`]) | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega, $ challenge set, $\tau$ rule, $L$, $n\_A, n\_B, n\_D, m\_u, m\_v$, pad, $q$ ([`statement_words`]) |
 //! | 2 | `absorb_polys` × 3 | [`LABEL_PP_A`], [`LABEL_PP_B`], [`LABEL_PP_D`] | $\mathbf A$, $\mathbf B$, $\mathbf D$, row-major |
 //! | 3 | `absorb_words` | [`LABEL_PP_BASE`] | the digest of the base PCS's parameters ([`BasePcs::params_digest`]), as four little-endian words |
 //! | 4 | `absorb_polys` | [`hachi_co_commit::LABEL_U`] | $\mathbf u$ |
 //! | 5 | `absorb_exts` | [`LABEL_X`] | $\mathbf x$ |
 //! | 6 | `absorb_polys` | [`hachi_co_conv::LABEL_E_U`] | $E(u)$ |
-//! | 7 | per attempt $a$ (provers: $0, \dots, a^\ast$; verifier: $a^\ast$): `begin_attempt(a)`, `absorb_polys`, `r2l_challenges(a, 2^r, d, ω)` | [`hachi_co_r2l::LABEL_V`] | $\mathbf v$ of attempt $a$ |
+//! | 7 | `absorb_polys`, `r2l_challenges(2^r, d, ω)`, `absorb_words` | [`hachi_co_r2l::LABEL_V`], [`hachi_co_r2l::LABEL_ACCEPT`] | $\mathbf v$; the provers' sets of accepted iterations, one word vector per prover |
 //! | 8 | `absorb_exts` × 2, `absorb_words` × 3, `sumcheck_coins` | [`hachi_co_sumcheck::LABEL_G0`], [`hachi_co_sumcheck::LABEL_G1`], [`hachi_co_sumcheck::LABEL_COMMIT_W`], `..._G0`, `..._G1` | $G\_{0,1..n}$; $G\_{1,1..n}$; the base-PCS commitments to $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$, one word vector per party each |
 //! | 9 | per round $r = 1, \dots, \ell''$: `absorb_exts` × 2, `round_coin(r)` | [`hachi_co_sumcheck::LABEL_H0`], [`hachi_co_sumcheck::LABEL_H1`] | $H\_{0,r}(1..d\_0+1)$; $H\_{1,r}(1..d\_1+1)$ |
 //! | 10 | `absorb_exts` × 3 | [`hachi_co_sumcheck::LABEL_FINAL_W`], `..._G0`, `..._G1` | the final values |
 //! | 11 | `context` per opening (each prover: its 3; the verifier: all $3n$), party by party in the order $g\_0, g\_1, \widetilde w$ | [`hachi_co_sumcheck::opening_label`] | — |
 //!
-//! Rows 1-5 are [`absorb_statement`]; row 7 is made by [`hachi_co_r2l::run`] and
-//! [`hachi_co_r2l::verifier_challenges`] (with [`hachi_co_core::Challenger::begin_attempt`], the
-//! challenges of attempt $a$ depend on the statement, $E(u)$, $a$ and that attempt's $\mathbf v$
-//! only); rows 8-11 by [`hachi_co_sumcheck::prove`] and [`hachi_co_sumcheck::verify`]. A context
+//! Rows 1-5 are [`absorb_statement`]; row 7 is made by [`hachi_co_r2l::run`] and by
+//! [`hachi_co_r2l::verifier_challenges`] and [`hachi_co_r2l::verifier_iteration`] (one round with
+//! $L$ masks per prover since the draft's commit `1096ea2`, in place of the earlier attempts of
+//! Fiat-Shamir with aborts); rows 8-11 by [`hachi_co_sumcheck::prove`] and [`hachi_co_sumcheck::verify`]. A context
 //! is squeezed from a fork of the transcript ([`hachi_co_core::FsChallenger`]) and leaves the
 //! transcript unchanged, so after an honest run the provers' and the verifier's transcripts end
 //! in the same state (tested). The opening proofs are not absorbed: no coin follows them.
 //!
 //! # The proof and its size
 //!
-//! [`EvalProof`] holds $E(u)$, $a^\ast$, $\mathbf v$ and the sumcheck transcript ($G\_{0,p},
-//! G\_{1,p}$, the base-PCS commitments, the round messages, the final values, the base-PCS
-//! opening proofs), not the challenges. Its encoding ([`EvalProof::to_bytes`], format
-//! [`VERSION`] 2) is a 16-byte header ([`MAGIC`], [`VERSION`]) and little-endian `u64` words,
-//! with the lengths of the $6n$ base-PCS items first, so that [`EvalProof::from_bytes`] knows
-//! the exact length before reading the rest; it accepts exactly the canonical encodings (exact
-//! length, residues below $q$, $a^\ast$ below [`hachi_co_r2l::MAX_ATTEMPTS`]; the base PCS's
-//! words are judged by the verifier). The size is [`hachi_co_params::sizes_with_base`] for the
+//! [`EvalProof`] holds $E(u)$, the provers' sets of accepted iterations, $\mathbf v$ and the
+//! sumcheck transcript ($G\_{0,p}, G\_{1,p}$, the base-PCS commitments, the round messages, the
+//! final values, the base-PCS opening proofs), not the challenges or $j^\ast$. Its encoding
+//! ([`EvalProof::to_bytes`], format [`VERSION`] 4) is a 16-byte header ([`MAGIC`], [`VERSION`])
+//! and little-endian `u64` words, with the accept sets and the lengths of the $6n$ base-PCS
+//! items first, so that [`EvalProof::from_bytes`] knows the exact length before reading the
+//! rest; it accepts exactly the canonical encodings (exact length, residues below $q$, accept
+//! sets naming only iterations below $L$; the base PCS's words are judged by the verifier). The size is [`hachi_co_params::sizes_with_base`] for the
 //! word counts of the base PCS's items ([`encoded_len`] computes it from the layout);
 //! [`hachi_co_params::sizes`](fn@hachi_co_params::sizes) is the Hachi-Co part alone.
 //!
@@ -139,9 +138,9 @@
 //!   $\mathcal F\_{\mathsf{AH}}(E)$ and the verifier reads it as $y \in \mathbb F\_{q^k}$
 //!   ([`verify`] returns it), as $\Pi\_A$ does since the draft's commit `c071784`. No claimed
 //!   value enters the statement; [`verify_value`] compares the output with an expected one.
-//! - The proof format: the order of the components, the 64-bit words, the header and the table
-//!   of the base-PCS lengths ([`EvalProof::to_bytes`]); an index $a^\ast$ at or beyond the
-//!   attempt cap of `hachi-co-r2l` is malformed.
+//! - The proof format: the order of the components, the 64-bit words, the header, the bit masks
+//!   of the accept sets and the table of the base-PCS lengths ([`EvalProof::to_bytes`]); an
+//!   accept set with a bit at or beyond $L$ is malformed.
 //! - [`eval_with`] and [`verify_with`] take the challenger, so that the fixture tests can replay
 //!   the oracle's coins; [`eval_with`] also returns the party's private data ([`EvalOutput`]);
 //!   [`verify_claims_with`] also returns the checked claims.

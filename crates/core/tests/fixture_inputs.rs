@@ -39,7 +39,8 @@ fn every_fixture_yields_valid_inputs_for_every_party() {
         );
         fx.public_vectors(&ctx).unwrap();
         assert_eq!(fx.commitment().unwrap().len(), l.n_b, "{name}");
-        assert!(fx.attempt_count().unwrap() >= 1, "{name}");
+        assert_eq!(fx.iteration_count().unwrap(), l.rej_iterations, "{name}");
+        assert!(fx.j_star().unwrap() < l.rej_iterations, "{name}");
         assert!(fx.party_state(&ctx, n + 1).is_err(), "{name}: party n + 1");
         assert!(fx.u_share(n + 1).is_err(), "{name}: share n + 1");
         assert!(fx.u_share(0).is_err(), "{name}: share 0");

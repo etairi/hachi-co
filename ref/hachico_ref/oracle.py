@@ -12,19 +12,21 @@ from .conv import e_matrix, pi_conv, public_vectors, verify_conv
 from .r2l import Coins, build_M, build_y, check_linear_relation, ring_to_linear
 
 
-def verifier_public(ctx, pp, u_com, x, y, r2l_transcript):
-    """Everything V needs, recomputed from public data: pp, comm = u, x, y, and the accepted attempt's
-    (v, c).  Returns dict(M, y_vec, E_mat, y_eval_ring, partition)."""
+def verifier_public(ctx, pp, u_com, x, y, r2l):
+    """Everything V needs, recomputed from public data: pp, comm = u, x, y, v, c and the provers' sets of
+    accepted iterations, from which V computes j* (fig:ring-to-linear, step 6).  Returns dict(M, y_vec, E_mat,
+    y_eval_ring, partition, j_star)."""
     pub = public_vectors(ctx, x)
     a_ring = np.array([ctx.embed(t) for t in pub["a"]])
     b_ring = np.array([ctx.embed(t) for t in pub["b"]])
-    acc = r2l_transcript[-1]
-    assert not acc["abort"]
-    M = build_M(ctx, pp, b_ring, a_ring, acc["c"])
+    common = sorted(set.intersection(*[set(r) for r in r2l["accept_sets"]]))
+    assert common, "an empty intersection aborts before the verifier gets a transcript"
+    j_star = common[0]
+    M = build_M(ctx, pp, b_ring, a_ring, r2l["c"], j_star)
     from .r2l import Layout
     S, _ = Layout(ctx.P).partition()
-    return dict(M=M, y_vec=build_y(ctx, acc["v"], u_com), E_mat=e_matrix(ctx, pub["v_point"]),
-                y_eval_ring=ctx.embed(y), partition=S)
+    return dict(M=M, y_vec=build_y(ctx, r2l["v"], u_com), E_mat=e_matrix(ctx, pub["v_point"]),
+                y_eval_ring=ctx.embed(y), partition=S, j_star=j_star)
 
 
 def run_instance(P, seed, setup_seed=None, log=print):
@@ -60,8 +62,9 @@ def run_instance(P, seed, setup_seed=None, log=print):
     t = time.time()
     coins = Coins(ctx)
     r2l = ring_to_linear(ctx, pp, states, cdata["rho_u"], conv, u_com, coins)
-    rel["r2l.challenges_in_C"] = all(a["c_in_C"] for a in r2l["attempts"])
-    rel["r2l.prover1_norm_check_z_le_beta"] = r2l["z_norm_ok"]
+    rel["r2l.challenges_in_C"] = r2l["c_in_C"]
+    rel["r2l.j_star_in_every_accept_set"] = all(r2l["j_star"] in r for r in r2l["accept_sets"])
+    rel["r2l.norm_check_z_le_beta"] = r2l["z_norm_ok"]
     rel["r2l.J_z_hat_eq_z"] = bool(np.array_equal(ctx.R.j_apply_int(r2l["z_hat"], P.b, P.tau), r2l["z"]))
     rel["r2l.z_eq_sum_c_s_plus_sum_masks"] = check_z_decomposition(ctx, states, r2l)
     rel["r2l.M_z'_eq_y (Sage)"] = check_linear_relation(ctx, r2l["M"], r2l["z_prime"], r2l["y_vec"])
@@ -92,8 +95,9 @@ def run_instance(P, seed, setup_seed=None, log=print):
     T["relation_checks"] = time.time() - t
 
     t = time.time()
-    public = verifier_public(ctx, pp, u_com, inp["x"], inp["y"], r2l["attempts"])
+    public = verifier_public(ctx, pp, u_com, inp["x"], inp["y"], r2l)
     rel["verifier.M_equals_provers_M"] = bool(np.array_equal(public["M"], r2l["M"]))
+    rel["verifier.j_star_equals_provers_j_star"] = public["j_star"] == r2l["j_star"]
     pcs = sc.IdealPCS(ctx, priv)
     vchecks, vinfo = sc.verify(ctx, public, tr, coins, pcs)
     conv_ok = verify_conv(ctx, inp["y"], conv["E_u"])
@@ -111,16 +115,16 @@ def run_instance(P, seed, setup_seed=None, log=print):
 
 
 def check_z_decomposition(ctx, states, r2l):
-    """z = sum_{i'} c_{i'} s_{i'} + sum_p r_p over the integers (5_BB:143), recomputed block by block."""
+    """z = sum_{i'} c_{i'} s_{i'} + sum_p r_p^j* over the integers (5_BB:143, fig:ring-to-linear-2), recomputed
+    block by block."""
     from .r2l import int_ring_mul_rows
     P, R = ctx.P, ctx.R
-    acc = r2l["attempts"][-1]
     tot = np.zeros((P.width_A, P.d), dtype=np.int64)
     for p in states:
         for i, st in states[p].items():
-            tot += int_ring_mul_rows(acc["c"][i], R.centered(st["s"]), P.d)
+            tot += int_ring_mul_rows(r2l["c"][i], R.centered(st["s"]), P.d)
     for p in range(1, P.n + 1):
-        tot += acc["provers"][p]["mask"]
+        tot += r2l["provers"][p]["iterations"][r2l["j_star"]]["mask"]
     return bool(np.array_equal(tot, r2l["z"]))
 
 
@@ -128,7 +132,8 @@ def row_block_checks(ctx, pp, states, conv, u_com, r2l):
     """The meaning of each row block of M (5_BB:196), checked directly on the unpacked values."""
     P, R = ctx.P, ctx.R
     out = OrderedDict()
-    acc = r2l["attempts"][-1]
+    js = r2l["j_star"]
+    c = r2l["c"]
     q = P.q
     # row 3: b^T G w_hat = u
     lhs = R.zero()
@@ -139,21 +144,21 @@ def row_block_checks(ctx, pp, states, conv, u_com, r2l):
     # row 4: sum c_i w_i + sum_p w0_p = a^T G z
     lhs = R.zero()
     for i in range(P.n_blocks):
-        lhs = (lhs + R.mul(R.reduce(acc["c"][i]), r2l["w"][i])) % q
+        lhs = (lhs + R.mul(R.reduce(c[i]), r2l["w"][i])) % q
     for p in range(1, P.n + 1):
-        lhs = (lhs + acc["provers"][p]["w0"]) % q
+        lhs = (lhs + r2l["provers"][p]["iterations"][js]["w0"]) % q
     g = R.g_apply(R.reduce(r2l["z"]), P.b, P.delta)
     rhs = R.zero()
     for j in range(P.block_len):
         rhs = (rhs + R.mul(r2l["a_ring"][j], g[j])) % q
-    out["r2l.row_c: sum c_i w_i + sum w0_p = a^T G z"] = bool(np.array_equal(lhs, rhs))
-    # row 5: sum c_i t_i + sum t0_p = A z
+    out["r2l.row_c: sum c_i w_i + sum w0_p^j* = a^T G z"] = bool(np.array_equal(lhs, rhs))
+    # row 5: sum c_i t_i + sum t0_p^j* = A z
     lhs = R.zero(P.n_A)
     for p in states:
         for i, st in states[p].items():
             for a_ in range(P.n_A):
-                lhs[a_] = (lhs[a_] + R.mul(R.reduce(acc["c"][i]), st["t"][a_])) % q
+                lhs[a_] = (lhs[a_] + R.mul(R.reduce(c[i]), st["t"][a_])) % q
     for p in range(1, P.n + 1):
-        lhs = (lhs + acc["provers"][p]["t0"]) % q
-    out["r2l.row_A: sum c_i t_i + sum t0_p = A z"] = bool(np.array_equal(lhs, R.matvec(pp["A"], R.reduce(r2l["z"]))))
+        lhs = (lhs + r2l["provers"][p]["iterations"][js]["t0"]) % q
+    out["r2l.row_A: sum c_i t_i + sum t0_p^j* = A z"] = bool(np.array_equal(lhs, R.matvec(pp["A"], R.reduce(r2l["z"]))))
     return out

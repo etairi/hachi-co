@@ -9,7 +9,7 @@ use hachi_co_core::{Fixture, LinearShare, Poly, ReplayChallenger, ReplayRandomne
 use hachi_co_r2l::{
     Error, LinearRelation, block_w, check_challenges, d_slice, fah_d_input, fold, linear_relation,
     mask_images, norm_check, owned_w, relation_holds, residual, respond, response_len,
-    sample_attempt, sum_shares, y_share, z_hat, z_of_sum, z_prime_share,
+    sample_masks, sum_shares, y_share, z_hat, z_of_sum, z_prime_share,
 };
 use hachi_co_sampling::Error as SamplingError;
 
@@ -24,7 +24,7 @@ fn party_local_functions_refuse_malformed_inputs() {
     let q = ctx.q();
     let n_len = response_len(&ctx);
     let mut rng = ReplayRandomness::new(&fx, 2).unwrap();
-    let secrets = sample_attempt(&ctx, &pv, &mut rng, 0).unwrap();
+    let secrets = sample_masks(&ctx, &pv, &mut rng).unwrap();
     let w2 = owned_w(&ctx, &pv, &states[1]).unwrap();
     d_slice(&ctx, 2, &w2, &secrets).unwrap();
 
@@ -40,7 +40,7 @@ fn party_local_functions_refuse_malformed_inputs() {
     ));
 
     // mask_images: length, and the support [-gamma, gamma] at its boundary.
-    assert!(shape(mask_images(&ctx, &pv, &secrets.mask[1..])));
+    assert!(shape(mask_images(&ctx, &pv, &secrets.masks[0][1..])));
     let gamma = ctx.gamma() as i64;
     let mut mask = vec![0i64; n_len];
     mask[n_len - 1] = gamma;
@@ -81,7 +81,7 @@ fn party_local_functions_refuse_malformed_inputs() {
     assert!(shape(fah_d_input(&ctx, &vec![ctx.ring.zero(); l.t - 1])));
 
     // check_challenges and fold: count, length, the l1 ball at its boundary.
-    let c = fx.int_rows("/ring_to_linear/attempts/0/c").unwrap();
+    let c = fx.int_rows("/ring_to_linear/c").unwrap();
     check_challenges(&ctx, &c).unwrap();
     assert!(shape(check_challenges(&ctx, &c[1..])));
     assert!(shape(fold(&ctx, &states[0], &c[1..])));
@@ -119,7 +119,7 @@ fn party_local_functions_refuse_malformed_inputs() {
     let big = fold(&ctx, &st, &c).unwrap();
     assert!(short::inf_norm(&big) > ctx.beta1());
     assert_eq!(
-        respond(&ctx, &big, &secrets.mask),
+        respond(&ctx, &big, &secrets.masks[0]),
         Err(Error::Sampling(SamplingError::SecretTooLarge))
     );
 }
@@ -173,13 +173,13 @@ fn share_assembly_and_relation_checkers_refuse_malformed_inputs() {
     let (fx, ctx, pv, states) = load(name);
     let l = &ctx.layout;
     let q = ctx.q();
-    let a = fx.usize("/ring_to_linear/accepted_attempt").unwrap() as u64;
+    let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
     let mut rngs: Vec<_> = (1..=l.n)
         .map(|p| ReplayRandomness::new(&fx, p).unwrap())
         .collect();
     let secrets: Vec<_> = rngs
         .iter_mut()
-        .map(|rng| sample_attempt(&ctx, &pv, rng, a).unwrap())
+        .map(|rng| sample_masks(&ctx, &pv, rng).unwrap())
         .collect();
     let w: Vec<_> = states
         .iter()
@@ -254,9 +254,7 @@ fn share_assembly_and_relation_checkers_refuse_malformed_inputs() {
     ));
 
     // y_share: the party, and v and u for every party.
-    let v = fx
-        .polys(&format!("/ring_to_linear/attempts/{a}/v"))
-        .unwrap();
+    let v = fx.polys("/ring_to_linear/v").unwrap();
     let u = u_com(&fx);
     assert_eq!(
         y_share(&ctx, 2, &v, &u).unwrap(),
@@ -276,10 +274,8 @@ fn share_assembly_and_relation_checkers_refuse_malformed_inputs() {
     assert!(shape(y_share(&ctx, 1, &v, &u[..0])));
 
     // The relation checkers.
-    let c = fx
-        .int_rows(&format!("/ring_to_linear/attempts/{a}/c"))
-        .unwrap();
-    let rel = linear_relation(&ctx, &pv, &v, &c, &u).unwrap();
+    let c = fx.int_rows("/ring_to_linear/c").unwrap();
+    let rel = linear_relation(&ctx, &pv, &v, &c, j_star, &u).unwrap();
     assert!(relation_holds(&ctx, &rel, &z_prime_rec).unwrap());
     assert!(shape(residual(&ctx, &rel, &z_prime_rec[1..])));
     let mut rel_bad = rel.clone();
@@ -302,10 +298,16 @@ fn share_assembly_and_relation_checkers_refuse_malformed_inputs() {
         sum_shares(&ctx, &[bad_share]),
         Err(Error::Core(_))
     ));
-    // The replayed challenger refuses an attempt the oracle did not run.
+    // The verifier refuses a malformed v before calling the replayed challenger, and serves the
+    // recorded challenges otherwise.
     let mut ch = ReplayChallenger::new(&fx).unwrap();
-    assert!(matches!(
-        hachi_co_r2l::verifier_challenges(&ctx, &mut ch, a + 1, &v),
-        Err(Error::Core(hachi_co_core::Error::Replay(_)))
-    ));
+    assert!(shape(hachi_co_r2l::verifier_challenges(
+        &ctx,
+        &mut ch,
+        &v[1..]
+    )));
+    assert_eq!(
+        hachi_co_r2l::verifier_challenges(&ctx, &mut ch, &v).unwrap(),
+        c
+    );
 }

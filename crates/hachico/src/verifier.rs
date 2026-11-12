@@ -10,7 +10,7 @@ use crate::proof::EvalProof;
 use crate::statement::{EVAL_DOMAIN, absorb_statement, check_statement};
 use hachi_co_conv::{LABEL_E_U, e_matrix, public_vectors};
 use hachi_co_core::{BasePcs, Challenger, Context, Ext, FsChallenger, Poly};
-use hachi_co_r2l::{linear_relation, verifier_challenges};
+use hachi_co_r2l::{linear_relation, verifier_challenges, verifier_iteration};
 use hachi_co_sumcheck::{FinalClaims, PublicInput};
 
 /// The verifier with Fiat-Shamir: [`verify_with`] on a fresh [`FsChallenger`] with the domain
@@ -72,18 +72,21 @@ pub fn verify_with<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
 /// The verifier of [`verify_with`], returning the value $y$, the point $\mathbf a$ and the $3n$
 /// final claims $g\_{0,p}(\mathbf a)$, $g\_{1,p}(\mathbf a)$, $\langle \widetilde w \rangle\_p(\mathbf a)$
 /// (party by party) that the base PCS checked: for tests and diagnostics. It makes exactly the
-/// challenger calls of the provers' [`eval_with`] for the accepted attempt:
+/// challenger calls of the provers' [`eval_with`]:
 ///
-/// 1. [`check_statement`] and [`EvalProof::validate`] (shapes, canonical residues,
-///    $a^\ast$ below the cap, one base-PCS commitment and proof per prover and polynomial), then
+/// 1. [`check_statement`] and [`EvalProof::validate`] (shapes, canonical residues, accept sets
+///    within $L$, one base-PCS commitment and proof per prover and polynomial), then
 ///    [`absorb_statement`];
 /// 2. the verifier's step of $\Pi\_{\mathsf{conv}}$ ($\Pi\_A$ at the draft's commit `c071784`):
 ///    $E(u) \in \mathcal R\_q^H$, read as $y \in \mathbb F\_{q^k}$ ([`hachi_co_conv::read_value`]);
 ///    $E(u)$ is absorbed under [`LABEL_E_U`];
-/// 3. the public vectors of $\mathbf x$ ([`public_vectors`]), the challenges of the accepted
-///    attempt ([`verifier_challenges`]: `begin_attempt(a*)`, absorb $\mathbf v$, draw
-///    $\mathbf c$, check $\mathbf c \in \mathcal C^{2^r}$), and $\mathbf M$, $\mathbf y$
-///    ([`linear_relation`], `5_Building_Blocks.tex`:170-193);
+/// 3. the public vectors of $\mathbf x$ ([`public_vectors`]), the challenges
+///    ([`verifier_challenges`]: absorb $\mathbf v$, draw $\mathbf c$, check
+///    $\mathbf c \in \mathcal C^{2^r}$), the selected iteration ([`verifier_iteration`]: absorb
+///    the provers' sets of accepted iterations, $j^\ast$ the smallest in all of them, and
+///    [`NoCommonIteration`](hachi_co_r2l::Error::NoCommonIteration) if there is none,
+///    `fig:ring-to-linear`, step 6), and $\mathbf M$, $\mathbf y$ ([`linear_relation`],
+///    `5_Building_Blocks.tex`:170-193);
 /// 4. the matrix of $E$ at the point $v$ ([`e_matrix`]) and $y$ embedded in $\mathcal R\_q^H$
 ///    (`ref/README.md`, choice 12);
 /// 5. the sumcheck verifier with the base PCS ([`hachi_co_sumcheck::verify_claims`],
@@ -116,9 +119,11 @@ pub fn verify_claims_with<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     let y = hachi_co_conv::read_value(ctx, &proof.e_u).map_err(VerifyError::Conv)?;
     ch.absorb_polys(LABEL_E_U, core::slice::from_ref(&proof.e_u));
     let pv = public_vectors(ctx, x).map_err(VerifyError::PublicVectors)?;
-    let c =
-        verifier_challenges(ctx, ch, proof.attempt, &proof.v).map_err(VerifyError::RingToLinear)?;
-    let rel = linear_relation(ctx, &pv, &proof.v, &c, u).map_err(VerifyError::RingToLinear)?;
+    let c = verifier_challenges(ctx, ch, &proof.v).map_err(VerifyError::RingToLinear)?;
+    let j_star =
+        verifier_iteration(ctx, ch, &proof.accept_sets).map_err(VerifyError::RingToLinear)?;
+    let rel =
+        linear_relation(ctx, &pv, &proof.v, &c, j_star, u).map_err(VerifyError::RingToLinear)?;
     let e = e_matrix(ctx, &pv.v_point).map_err(VerifyError::PublicVectors)?;
     let y_ring = ctx.sub.embed(&y);
     let public = PublicInput::new(ctx, &rel.m, &rel.y, &e, &y_ring);

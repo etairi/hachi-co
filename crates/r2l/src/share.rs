@@ -3,17 +3,18 @@
 //! "Shares").
 
 use crate::local::{BlockW, check_len, check_polys, fill_first_message_part};
-use crate::{AttemptSecrets, Error, Result};
+use crate::{Error, MaskSecrets, Result};
 use hachi_co_core::{Context, PartyId, PartyState, build_y};
 use hachi_co_math::Poly;
 
 /// Prover $p$'s share $\langle \mathbf z' \rangle\_p \in \mathcal R\_q^{\mu - 1}$ of
 /// $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0, \boldsymbol\rho^v,
-/// \hat{\mathbf t}, \boldsymbol\rho^u, \hat{\mathbf z}, u)$ (`5_Building_Blocks.tex`:177-186) for the accepted
-/// attempt: the values $p$ holds at their positions ([`hachi_co_core::Layout`]), namely its
+/// \hat{\mathbf t}, \boldsymbol\rho^u, \hat{\mathbf z}, u)$ (`5_Building_Blocks.tex`:177-186):
+/// the values $p$ holds at their positions ([`hachi_co_core::Layout`]), namely its
 /// blocks of $\hat{\mathbf w}$ (from `w`, [`crate::owned_w`]) and of $\hat{\mathbf t}$ with its
-/// $\boldsymbol\rho^u\_p$ (from the state), its own $\hat{\mathbf w}\_{0,p}$,
-/// $\hat{\mathbf t}\_{0,p}$ and $\boldsymbol\rho^v\_p$ (from `secrets`), $\hat{\mathbf z}$ for
+/// $\boldsymbol\rho^u\_p$ (from the state), its own $\hat{\mathbf w}\_{0,p}^j$ and
+/// $\hat{\mathbf t}\_{0,p}^j$ of all $L$ iterations and $\boldsymbol\rho^v\_p$ (from `secrets`;
+/// `fig:ring-to-linear-2` since the draft's commit `1096ea2`), $\hat{\mathbf z}$ for
 /// $p = 1$ (line 147:
 /// $\lbrace \hat{\mathbf z} \rbrace\_1 = \hat{\mathbf z}$, $\lbrace \hat{\mathbf z} \rbrace\_p
 /// = \mathbf 0$ otherwise), and $\langle u \rangle\_p$ (from $\Pi\_{\mathsf{conv}}$) at
@@ -30,7 +31,7 @@ pub fn z_prime_share<const K: usize>(
     ctx: &Context<K>,
     state: &PartyState<K>,
     w: &[BlockW],
-    secrets: &AttemptSecrets,
+    secrets: &MaskSecrets,
     z_hat: Option<&[Poly]>,
     u_share: &Poly,
 ) -> Result<Vec<Poly>> {

@@ -1,6 +1,6 @@
 //! The Setup cascade of the draft, 6_Collaborative_Hachi.tex:267-285, evaluated exactly.
 
-use crate::choices::{Choices, Omega, QChoice, TauRule};
+use crate::choices::{Choices, Omega, QChoice, RejIterations, TauRule};
 use crate::error::{Error, Result};
 use crate::report::Report;
 use crate::rules;
@@ -64,8 +64,12 @@ pub struct Params {
     /// $\bar\gamma = b - 1$ (line 281, which reads $b$ at `8834c9f` and $b - 1$ since the
     /// draft's commit `28721d6`).
     pub gamma_bar: u64,
-    /// $\mu = 2^r\delta + n\delta + 2^r n_A\delta + n n_A\delta + n m_u + n m_v + 2^m\delta\tau + 2$,
-    /// the length of $\mathbf z'$ (line 282; 5_Building_Blocks.tex:177-186).
+    /// $L$, the number of parallel iterations of the rejection sampling in $\Pi\_B$: $\lambda$
+    /// for [`RejIterations::Lambda`] (the draft's `fig:parameters` since its commit `1096ea2`).
+    pub rej_iterations: u64,
+    /// $\mu = 2^r\delta + nL\delta + 2^r n_A\delta + nLn_A\delta + n m_u + n m_v + 2^m\delta\tau + 2$,
+    /// the length of $\mathbf z'$ plus one (the draft's `fig:parameters` since its commit
+    /// `1096ea2`, which has $L$ masks per prover; line 282 at `8834c9f` had $L = 1$).
     pub mu: u128,
     /// $n' = n_A + n_B + n_D + 2$ (line 283).
     pub n_prime: u64,
@@ -81,14 +85,12 @@ pub struct Params {
     pub width_a: u128,
     /// The width of $\mathbf B \in \mathcal R_q^{n_B \times (n_A \delta 2^r + n m_u)}$ (line 290).
     pub width_b: u128,
-    /// The width of $\mathbf D \in \mathcal R_q^{n_D \times (\delta(2^r + n + n n_A) + n
-    /// m_v)}$ (line 291).
+    /// The width of $\mathbf D \in \mathcal R_q^{n_D \times (\delta(2^r + nL + nLn_A) + n
+    /// m_v)}$ (the draft's Setup since its commit `1096ea2`; line 291 at `8834c9f` had $L = 1$).
     pub width_d: u128,
     /// $4\bar\omega\bar\beta = 16\omega b^\tau$, the binding guard of line 274 ($q$ must exceed
     /// it).
     pub binding_guard: u128,
-    /// $1 + 2^{\ell+3} n \omega^2 b$, the other lower bound on $q$ of line 274.
-    pub range_guard: u128,
     /// $2\bar\omega\bar\beta = 8\omega b^\tau$, the $\infty$-norm bound of the
     /// $\mathsf{MSIS}$ instance for $\mathbf A$ (line 581).
     pub msis_bound_a: u128,
@@ -145,15 +147,15 @@ impl DeltaDependent {
         })
     }
 
-    /// $\max(16\omega b^\tau,\ 1 + 2^{\ell+3} n\omega^2 b,\ 2\beta + 1)$: [`QChoice::Smallest`]
-    /// picks the smallest prime $\equiv 5 \pmod 8$ above it.
-    fn q_lower_bound(&self, range_guard: u128) -> Result<u128> {
+    /// $\max(16\omega b^\tau,\ 2\beta + 1)$: [`QChoice::Smallest`] picks the smallest prime
+    /// $\equiv 5 \pmod 8$ above it.
+    fn q_lower_bound(&self) -> Result<u128> {
         let centered = self
             .beta
             .checked_mul(2)
             .and_then(|x| x.checked_add(1))
             .ok_or(Error::Overflow("2 beta + 1"))?;
-        Ok(self.binding_guard.max(range_guard).max(centered))
+        Ok(self.binding_guard.max(centered))
     }
 }
 
@@ -203,21 +205,8 @@ impl Structure {
     }
 }
 
-/// $1 + 2^{\ell+3} n \omega^2 b$ (line 274).
-fn range_guard(c: &Choices, omega: u64) -> Result<u128> {
-    let omega = u128::from(omega);
-    let ell3 = c.ell.checked_add(3).ok_or(Error::Overflow("l + 3"))?;
-    rules::checked_pow(2, ell3, "2^(l+3)")?
-        .checked_mul(u128::from(c.n))
-        .and_then(|x| x.checked_mul(omega.checked_mul(omega)?))
-        .and_then(|x| x.checked_mul(u128::from(c.b)))
-        .and_then(|x| x.checked_add(1))
-        .ok_or(Error::Overflow("1 + 2^(l+3) n omega^2 b"))
-}
-
-/// The smallest prime $q \equiv 5 \pmod 8$ with $q > \max(16\omega b^\tau,\ 1 + 2^{\ell+3} n
-/// \omega^2 b,\ 2\beta + 1)$, where $\tau$ and $\beta$ use $\delta = \lceil \log_b q \rceil$
-/// ([`QChoice::Smallest`]).
+/// The smallest prime $q \equiv 5 \pmod 8$ with $q > \max(16\omega b^\tau,\ 2\beta + 1)$,
+/// where $\tau$ and $\beta$ use $\delta = \lceil \log_b q \rceil$ ([`QChoice::Smallest`]).
 ///
 /// The bounds depend on $q$ only through $\delta$, so the candidates with a given $\delta$ form
 /// the band $b^{\delta-1} < q \le b^\delta$ with fixed bounds. The function scans
@@ -226,7 +215,7 @@ fn range_guard(c: &Choices, omega: u64) -> Result<u128> {
 /// prime overall. (`docs/m0-spec.md` describes the equivalent fixed-point iteration from
 /// $q_0 = 2^{20}$; started below the answer that iteration never overshoots it, so the two agree
 /// whenever the answer is at least $2^{20}$, as the tests check.)
-fn smallest_q(c: &Choices, s: &Structure, omega: u64, range_guard: u128) -> Result<(u64, u32)> {
+fn smallest_q(c: &Choices, s: &Structure, omega: u64) -> Result<(u64, u32)> {
     let b = u128::from(c.b);
     let mut band_low: u128 = 1; // b^(delta - 1)
     for delta in 1u32.. {
@@ -236,7 +225,7 @@ fn smallest_q(c: &Choices, s: &Structure, omega: u64, range_guard: u128) -> Resu
         let band_high = band_low.saturating_mul(b); // b^delta
         // Bounds beyond u128 mean that no u64 modulus exists; other errors are passed on.
         let bound = DeltaDependent::new(c, s, omega, delta)
-            .and_then(|dd| dd.q_lower_bound(range_guard))
+            .and_then(|dd| dd.q_lower_bound())
             .map_err(|e| match e {
                 Error::Overflow(what) => Error::NoModulus(format!(
                     "at delta = {delta} the bound overflows while computing {what}"
@@ -276,7 +265,7 @@ fn smallest_q(c: &Choices, s: &Structure, omega: u64, range_guard: u128) -> Resu
 /// # Errors
 ///
 /// Only when the cascade cannot be evaluated: $n = 0$, $b < 2$, $n_A$, $n_B$ or $n_D$ zero,
-/// [`Omega::Fixed`]`(0)`, [`QChoice::Fixed`] below 2 ([`Error::InvalidChoice`]); the tight rule
+/// [`Omega::Fixed`]`(0)`, $L = 0$, [`QChoice::Fixed`] below 2 ([`Error::InvalidChoice`]); the tight rule
 /// with $b = 2$ ([`Error::TightTauUndefined`]); $\alpha - \kappa > \ell$
 /// ([`Error::NegativeExponent`]); a quantity beyond `u128` ([`Error::Overflow`]); no radius or
 /// no modulus found ([`Error::NoOmega`], [`Error::NoModulus`]).
@@ -288,10 +277,13 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
         Omega::Fixed(w) => w,
         Omega::MinForTarget => rules::min_omega(c.challenge_set, s.d, s.r, c.lambda)?,
     };
-    let range_guard = range_guard(c, omega)?;
     let (q, delta) = match c.q {
         QChoice::Fixed(q) => (q, rules::ceil_log(u128::from(c.b), u128::from(q))?),
-        QChoice::Smallest => smallest_q(c, &s, omega, range_guard)?,
+        QChoice::Smallest => smallest_q(c, &s, omega)?,
+    };
+    let rej_iterations = match c.rej_iterations {
+        RejIterations::Lambda => u64::from(c.lambda),
+        RejIterations::Fixed(l) => u64::from(l),
     };
     let dd = DeltaDependent::new(c, &s, omega, delta)?;
 
@@ -299,6 +291,9 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
     let n = u128::from(c.n);
     let n_a = u128::from(c.n_a);
     let delta128 = u128::from(delta);
+    let n_l = n
+        .checked_mul(u128::from(rej_iterations))
+        .ok_or(Error::Overflow("n L"))?;
     let overflow = |what| move || Error::Overflow(what);
 
     let b_tau = rules::checked_pow(b, dd.tau, "b^tau")?;
@@ -309,12 +304,12 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
 
     let two_r = rules::checked_pow(2, s.r, "2^r")?;
     let two_m = rules::checked_pow(2, s.m, "2^m")?;
-    // mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_u + n m_v + 2^m delta tau + 2.
+    // mu = 2^r delta + n L delta + 2^r n_A delta + n L n_A delta + n m_u + n m_v + 2^m delta tau + 2.
     let mu_terms = [
         two_r.checked_mul(delta128),
-        n.checked_mul(delta128),
+        n_l.checked_mul(delta128),
         two_r.checked_mul(n_a).and_then(|x| x.checked_mul(delta128)),
-        n.checked_mul(n_a).and_then(|x| x.checked_mul(delta128)),
+        n_l.checked_mul(n_a).and_then(|x| x.checked_mul(delta128)),
         n.checked_mul(u128::from(c.m_u)),
         n.checked_mul(u128::from(c.m_v)),
         two_m
@@ -356,11 +351,11 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
         .and_then(|x| x.checked_mul(two_r))
         .and_then(|x| x.checked_add(n.checked_mul(u128::from(c.m_u))?))
         .ok_or_else(overflow("width of B"))?;
-    // delta (2^r + n + n n_A) + n m_v.
-    let width_d = n
+    // delta (2^r + n L + n L n_A) + n m_v.
+    let width_d = n_l
         .checked_mul(n_a)
         .and_then(|x| x.checked_add(two_r))
-        .and_then(|x| x.checked_add(n))
+        .and_then(|x| x.checked_add(n_l))
         .and_then(|x| x.checked_mul(delta128))
         .and_then(|x| x.checked_add(n.checked_mul(u128::from(c.m_v))?))
         .ok_or_else(overflow("width of D"))?;
@@ -395,6 +390,7 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
         beta_bar,
         omega_bar,
         gamma_bar,
+        rej_iterations,
         mu,
         n_prime,
         ell_dprime,
@@ -405,7 +401,6 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
         width_b,
         width_d,
         binding_guard: dd.binding_guard,
-        range_guard,
         msis_bound_a,
         msis_bound_b,
         j_inv_capacity,
@@ -431,6 +426,13 @@ fn validate(c: &Choices) -> Result<()> {
     }
     if c.omega == Omega::Fixed(0) {
         return invalid("the challenge radius omega must be at least 1");
+    }
+    let no_iterations = match c.rej_iterations {
+        RejIterations::Lambda => c.lambda == 0,
+        RejIterations::Fixed(l) => l == 0,
+    };
+    if no_iterations {
+        return invalid("the number L of iterations of the rejection sampling must be at least 1");
     }
     if let QChoice::Fixed(q) = c.q
         && q < 2

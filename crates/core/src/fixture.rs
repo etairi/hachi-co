@@ -4,7 +4,7 @@
 //!
 //! [`Fixture`] loads a fixture, derives and cross-checks its parameters, builds its [`Context`]
 //! with the recorded $\mathbf A, \mathbf B, \mathbf D$, and decodes values by JSON pointer
-//! (RFC 6901: `/ring_to_linear/attempts/0/c`; a key containing `~` or `/` is escaped as `~0`
+//! (RFC 6901: `/ring_to_linear/provers/0/masks/0`; a key containing `~` or `/` is escaped as `~0`
 //! resp. `~1`, see [`escape_key`]). The decoders check the shape and that every residue is in
 //! $\[0, q)$. [`sha256_residues`] is the fixtures' digest convention.
 
@@ -235,7 +235,7 @@ impl Fixture {
                 other => bad.push(format!("{key}: fixture {other:?}, Rust {got}")),
             }
         };
-        let ints: [(&'static str, u128); 39] = [
+        let ints: [(&'static str, u128); 40] = [
             ("n", c.n.into()),
             ("ell", c.ell.into()),
             ("alpha", c.alpha.into()),
@@ -247,6 +247,7 @@ impl Fixture {
             ("n_D", c.n_d.into()),
             ("m_u", c.m_u.into()),
             ("m_v", c.m_v.into()),
+            ("rej_iterations", params.rej_iterations.into()),
             ("q", params.q.into()),
             ("d", params.d.into()),
             ("k", params.k.into()),
@@ -300,7 +301,10 @@ impl Fixture {
         text("pad", pad.to_owned());
         let ln_m = params.log2_rejection_m * core::f64::consts::LN_2;
         let acceptance = (-ln_m).exp();
-        let abort = 1.0 - acceptance.powi(i32::try_from(n).unwrap_or(i32::MAX));
+        let per_iteration = 1.0 - acceptance.powi(i32::try_from(n).unwrap_or(i32::MAX));
+        // No iteration accepted by every prover (the step's abort since the draft's commit
+        // `1096ea2`).
+        let abort = per_iteration.powi(i32::try_from(params.rej_iterations).unwrap_or(i32::MAX));
         let mut float = |key: &'static str, got: f64| {
             known.push(key);
             match section.get(key).and_then(Value::as_f64) {
@@ -310,6 +314,7 @@ impl Fixture {
         };
         float("ln_M", ln_m);
         float("acceptance_per_prover", acceptance);
+        float("abort_probability_per_iteration", per_iteration);
         float("abort_probability", abort);
         known.push("l1ball_size");
         let ball = hachi_co_sampling::l1ball::count(layout.d, params.omega).to_string();
@@ -551,7 +556,7 @@ impl Fixture {
     }
 
     /// A list of lists of elements of $\mathbb F\_{q^K}$ (for example a blinder's $s$,
-    /// $\ell'' \times D$, or the reshared shares of one party, $n \times 2^\ell$).
+    /// $\ell'' \times D$).
     ///
     /// # Errors
     /// As [`Fixture::ext`], for any entry.

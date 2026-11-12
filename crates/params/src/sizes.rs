@@ -3,9 +3,10 @@
 //!
 //! The proof (`hachi_co::EvalProof` in `crates/hachico`) consists of what the provers send to
 //! the verifier in $\mathsf{Eval}$ (6_Collaborative_Hachi.tex:426-437): $E(u) \in \mathcal R\_q$
-//! of $\Pi\_{\mathsf{conv}}$ (field-to-ring-rok.tex:189-193), the index $a^\ast$ of the accepted
-//! attempt and its first message $\mathbf v \in \mathcal R\_q^{n\_D}$ of the ring-to-linear step
-//! (5_Building_Blocks.tex:127-133, 141), and the sumcheck transcript: $G\_{0,p}, G\_{1,p}$ for
+//! of $\Pi\_{\mathsf{conv}}$ (field-to-ring-rok.tex:189-193), the first message
+//! $\mathbf v \in \mathcal R\_q^{n\_D}$ and the provers' sets $R\_1, \dots, R\_n \subseteq \[L\]$
+//! of accepted iterations of the ring-to-linear step (5_Building_Blocks.tex:127-133, and
+//! `fig:ring-to-linear`, step 6, since the draft's commit `1096ea2`), and the sumcheck transcript: $G\_{0,p}, G\_{1,p}$ for
 //! every prover (5_Building_Blocks.tex:273), the $\ell''$ round messages $H\_{0,r}(1..d\_0+1)$,
 //! $H\_{1,r}(1..d\_1+1)$ (lines 298-305) and the final values
 //! $\langle \widetilde w \rangle\_p(\mathbf a), g\_{0,p}(\mathbf a), g\_{1,p}(\mathbf a)$
@@ -14,9 +15,10 @@
 //! opening proofs (lines 321-325). The challenges are not part of it: the verifier re-derives
 //! them.
 //!
-//! **The encoding** (format version 2) is a 16-byte header ([`HEADER_BYTES`]) followed by
-//! little-endian 64-bit words ([`WORD_BYTES`]): one for $a^\ast$, one per length of a base-PCS
-//! item ($6n$), one per residue (an element of $\mathbb F\_{q^k}$ taking $k$ residues), and the
+//! **The encoding** (format version 4) is a 16-byte header ([`HEADER_BYTES`]) followed by
+//! little-endian 64-bit words ([`WORD_BYTES`]): $\lceil L/64 \rceil$ per prover for its set
+//! $R\_p$ (a bit mask, [`accept_set_words`]), one per length of a base-PCS item ($6n$), one per
+//! residue (an element of $\mathbb F\_{q^k}$ taking $k$ residues), and the
 //! base-PCS items' own words. [`sizes`] counts the Hachi-Co part alone (every component but the
 //! base PCS's, as in format version 1); [`sizes_with_base`] counts the whole encoding, given the
 //! number of words of each base-PCS item ([`BasePcsWords`]), which depends on the base PCS. The
@@ -30,9 +32,16 @@ use crate::rules;
 /// (`hachi_co::EvalProof::to_bytes`).
 pub const HEADER_BYTES: u128 = 16;
 
-/// The bytes of every other entry of the encoding (the attempt index, each length, each residue
-/// and each word of the base PCS): one little-endian `u64`.
+/// The bytes of every other entry of the encoding (each word of an accept set, each length, each
+/// residue and each word of the base PCS): one little-endian `u64`.
 pub const WORD_BYTES: u128 = 8;
+
+/// The words of one prover's set $R\_p \subseteq \[L\]$ of accepted iterations in the encoding:
+/// $\lceil L/64 \rceil$, bit $j \bmod 64$ of word $\lfloor j/64 \rfloor$ for iteration $j$
+/// (0-indexed, the draft's $j + 1$).
+pub const fn accept_set_words(rej_iterations: u64) -> u64 {
+    rej_iterations.div_ceil(64)
+}
 
 /// The number of 64-bit words of each base-PCS item of one prover
 /// (`BasePcs::commitment_to_words`, `BasePcs::proof_to_words` in `hachi-co-core`). They depend
@@ -65,7 +74,7 @@ pub struct BasePcsWords {
 /// | Component | Words | Bytes |
 /// |---|---|---|
 /// | header | — | $16$ |
-/// | $a^\ast$ | $1$ | $8$ |
+/// | $R\_1, \dots, R\_n$ | $n \lceil L/64 \rceil$ | $8n \lceil L/64 \rceil$ |
 /// | lengths of the base-PCS items | $6n$ | $48n$ |
 /// | $E(u)$ | $d$ residues | $8d$ |
 /// | $\mathbf v$ | $n\_D d$ residues | $8 n\_D d$ |
@@ -80,8 +89,8 @@ pub struct BasePcsWords {
 pub struct ProofSizes {
     /// The header, [`HEADER_BYTES`].
     pub header: u128,
-    /// The attempt index $a^\ast$: one word.
-    pub attempt: u128,
+    /// The provers' sets of accepted iterations: $n \lceil L/64 \rceil$ words.
+    pub accept_sets: u128,
     /// The lengths of the $6n$ base-PCS items: $6n$ words (0 for [`sizes`]).
     pub pcs_lengths: u128,
     /// $E(u)$: $d$ residues.
@@ -107,20 +116,20 @@ pub struct ProofSizes {
     /// $\lceil \log\_2 q \rceil$, the bits a residue in $\[0, q)$ needs.
     pub bits_per_residue: u32,
     /// For reference: the size if every residue took $\lceil \log\_2 q \rceil$ bits instead of
-    /// 64, i.e. the header, the word of $a^\ast$, $\lceil \mathrm{residues} \cdot \lceil \log\_2
+    /// 64, i.e. the header, the accept sets, $\lceil \mathrm{residues} \cdot \lceil \log\_2
     /// q \rceil / 8 \rceil$ bytes and the base-PCS components as they are. The encoding does not
     /// pack; this only shows the overhead of the word layout.
     pub packed_total: u128,
 }
 
 impl ProofSizes {
-    /// The components with their names, in the order of the encoding: `header`, `attempt`,
+    /// The components with their names, in the order of the encoding: `header`, `accept sets`,
     /// `PCS lengths`, `E(u)`, `v`, `G`, `PCS commitments`, `rounds`, `finals`,
     /// `PCS openings`. Their bytes add up to [`ProofSizes::total`].
     pub fn components(&self) -> [(&'static str, u128); 10] {
         [
             ("header", self.header),
-            ("attempt", self.attempt),
+            ("accept sets", self.accept_sets),
             ("PCS lengths", self.pcs_lengths),
             ("E(u)", self.e_u),
             ("v", self.v),
@@ -147,7 +156,7 @@ pub fn sizes(params: &Params) -> Result<ProofSizes> {
     sizes_of(params, None)
 }
 
-/// The size of the whole Eval proof's encoding (format version 2) for `params` and a base PCS
+/// The size of the whole Eval proof's encoding (format version 4) for `params` and a base PCS
 /// whose items have the words `base` ([`ProofSizes`]; the formula is in its documentation): the
 /// Hachi-Co part of [`sizes`] and the base PCS's $6n$ lengths, $3n$ commitments and $3n$ opening
 /// proofs.
@@ -192,9 +201,10 @@ fn sizes_of(params: &Params, base: Option<&BasePcsWords>) -> Result<ProofSizes> 
         ),
     };
     let bytes = |words: u128| mul(words, WORD_BYTES);
+    let accept_sets = mul(n, u128::from(accept_set_words(params.rej_iterations)))?;
     let sizes = ProofSizes {
         header: HEADER_BYTES,
-        attempt: WORD_BYTES,
+        accept_sets: bytes(accept_sets)?,
         pcs_lengths: bytes(lengths)?,
         e_u: bytes(e_u)?,
         v: bytes(v)?,
@@ -217,7 +227,7 @@ fn sizes_of(params: &Params, base: Option<&BasePcsWords>) -> Result<ProofSizes> 
         add(sizes.pcs_lengths, sizes.pcs_commitments)?,
         sizes.pcs_openings,
     )?;
-    let packed_total = add(add(add(HEADER_BYTES, WORD_BYTES)?, packed)?, pcs)?;
+    let packed_total = add(add(add(HEADER_BYTES, sizes.accept_sets)?, packed)?, pcs)?;
     Ok(ProofSizes {
         total,
         packed_total,
@@ -232,7 +242,7 @@ mod tests {
     use crate::presets::toy_choices;
 
     /// toy-n1 by hand: d = 16, k = 4, n = n_D = 1, l'' = 15, d0 = 14, d1 = 3, q = 8388637
-    /// (24 bits).
+    /// (24 bits), L = 16 (one word for the accept set).
     #[test]
     fn toy_n1_by_hand() {
         let (params, _) = derive(&toy_choices(1)).unwrap();
@@ -241,7 +251,7 @@ mod tests {
             s.components(),
             [
                 ("header", 16),
-                ("attempt", 8),
+                ("accept sets", 8),
                 ("PCS lengths", 0),
                 ("E(u)", 8 * 16),
                 ("v", 8 * 16),

@@ -63,24 +63,21 @@ struct Block {
 struct RingToLinear {
     w: Vec<Vec<u64>>,
     w_hat: Vec<Vec<u64>>,
-    attempts: Vec<Attempt>,
+    provers: Vec<ProverIterations>,
     z: Vec<Vec<i64>>,
     z_prime: Vec<Vec<u64>>,
     layout: Layout,
 }
 
+/// One prover's images of its L masks (the L iterations of the rejection sampling since the
+/// draft's commit `1096ea2`), one entry per iteration.
 #[derive(Deserialize)]
-struct Attempt {
-    provers: Vec<ProverAttempt>,
-}
-
-#[derive(Deserialize)]
-struct ProverAttempt {
+struct ProverIterations {
     prover: usize,
-    t0: Vec<Vec<u64>>,
-    t0_hat: Vec<Vec<u64>>,
-    w0: Vec<u64>,
-    w0_hat: Vec<Vec<u64>>,
+    t0: Vec<Vec<Vec<u64>>>,
+    t0_hat: Vec<Vec<Vec<u64>>>,
+    w0: Vec<Vec<u64>>,
+    w0_hat: Vec<Vec<Vec<u64>>>,
 }
 
 #[derive(Deserialize)]
@@ -132,7 +129,7 @@ fn decompositions_and_commitments_agree_with_the_protocol_oracle() {
             );
         }
 
-        // Ring-to-linear: w_hat, and per attempt and prover t0_hat and w0_hat.
+        // Ring-to-linear: w_hat, and per prover and iteration t0_hat and w0_hat.
         let r2l = &fx.ring_to_linear;
         assert_eq!(
             g_inv(&ring, b, delta, &polys(&r2l.w)).unwrap(),
@@ -140,25 +137,25 @@ fn decompositions_and_commitments_agree_with_the_protocol_oracle() {
             "toy-n{n}: w_hat"
         );
         let mut checked = 0;
-        for attempt in &r2l.attempts {
-            for prover in &attempt.provers {
-                let label = format!("toy-n{n} prover {}", prover.prover);
-                let t0 = polys(&prover.t0);
+        for prover in &r2l.provers {
+            for j in 0..prover.t0.len() {
+                let label = format!("toy-n{n} prover {} iteration {j}", prover.prover);
+                let t0 = polys(&prover.t0[j]);
                 assert_eq!(
                     g_inv(&ring, b, delta, &t0).unwrap(),
-                    polys(&prover.t0_hat),
+                    polys(&prover.t0_hat[j]),
                     "{label}: t0_hat"
                 );
-                let w0 = vec![Poly(prover.w0.clone())];
+                let w0 = vec![Poly(prover.w0[j].clone())];
                 assert_eq!(
                     g_inv(&ring, b, delta, &w0).unwrap(),
-                    polys(&prover.w0_hat),
+                    polys(&prover.w0_hat[j]),
                     "{label}: w0_hat"
                 );
                 checked += 1;
             }
         }
-        assert!(checked >= n);
+        assert!(checked >= 16 * n);
 
         // z_hat = J^{-1}(z), read from its block of z'.
         let (_, start, len) = r2l

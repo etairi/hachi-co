@@ -4,7 +4,9 @@
 
 use hachi_co_params::presets::toy_choices;
 use hachi_co_params::rules::is_prime_u64;
-use hachi_co_params::{Choices, ConstraintId, Omega, QChoice, Report, Severity, TauRule, derive};
+use hachi_co_params::{
+    Choices, ConstraintId, Omega, QChoice, RejIterations, Report, Severity, TauRule, derive,
+};
 
 fn report(c: &Choices) -> Report {
     derive(c).expect("the cascade is defined").1
@@ -21,11 +23,12 @@ fn with_q(c: Choices, q: u64) -> Choices {
     }
 }
 
-/// The toy preset n = 1 with a target its challenge set meets (2^3/545 <= 2^-6), so that its
-/// report is clean and each test below flips exactly one condition.
+/// The toy preset n = 1 with a target its challenge set meets (2^3/545 <= 2^-6) and the draft's
+/// L = lambda, so that its report is clean and each test below flips exactly one condition.
 fn clean_toy() -> Choices {
     Choices {
         lambda: 6,
+        rej_iterations: RejIterations::Lambda,
         ..toy_choices(1)
     }
 }
@@ -35,7 +38,7 @@ fn severities_are_as_documented() {
     use ConstraintId::*;
     for id in ConstraintId::ALL {
         let expected = match id {
-            RejectionConstant | KnowledgeError => Severity::Warning,
+            RejectionConstant | KnowledgeError | RejIterationsLambda => Severity::Warning,
             _ => Severity::Fatal,
         };
         assert_eq!(id.severity(), expected, "{id:?}");
@@ -80,16 +83,49 @@ fn q_five_mod_eight() {
 }
 
 #[test]
-fn q_above_range_guard() {
-    // 1 + 2^(l+3) n omega^2 b = 1 + 2^9 * 4 * 4 = 8193 for the toy n = 1 (independent of delta).
-    let at = report(&with_q(clean_toy(), 8193));
-    let above = report(&with_q(clean_toy(), 8194));
-    assert!(!at.holds(ConstraintId::QAboveRangeGuard));
-    assert!(above.holds(ConstraintId::QAboveRangeGuard));
-    assert_eq!(
-        at.get(ConstraintId::QAboveRangeGuard).severity,
-        Severity::Fatal
+fn no_range_guard_since_the_parameter_table() {
+    // The bound 1 + 2^(l+3) n omega^2 b (= 8193 for the toy n = 1) left the Setup in the draft's
+    // commit 1096ea2: a modulus at or below it is no longer a violation by itself.
+    let (p, r) = derive(&with_q(clean_toy(), 8189)).unwrap();
+    assert_eq!(p.q % 8, 5);
+    assert!(
+        !r.violations().any(|c| c.id.statement().contains("2^(l+3)")),
+        "{r}"
     );
+}
+
+#[test]
+fn rej_iterations_equal_lambda() {
+    let toy = clean_toy();
+    let at = |rej| {
+        derive(&Choices {
+            rej_iterations: rej,
+            ..toy
+        })
+        .unwrap()
+    };
+    let (p, r) = at(RejIterations::Lambda);
+    assert_eq!(p.rej_iterations, u64::from(toy.lambda));
+    assert!(r.holds(ConstraintId::RejIterationsLambda));
+    for l in [toy.lambda - 1, toy.lambda + 1, 1] {
+        let (p, r) = at(RejIterations::Fixed(l));
+        assert_eq!(p.rej_iterations, u64::from(l));
+        assert!(!r.holds(ConstraintId::RejIterationsLambda), "L = {l}");
+        assert_eq!(
+            r.get(ConstraintId::RejIterationsLambda).severity,
+            Severity::Warning
+        );
+    }
+    let (_, r) = at(RejIterations::Fixed(toy.lambda));
+    assert!(r.holds(ConstraintId::RejIterationsLambda));
+    // L = 0 is not a choice.
+    assert!(matches!(
+        derive(&Choices {
+            rej_iterations: RejIterations::Fixed(0),
+            ..toy
+        }),
+        Err(hachi_co_params::Error::InvalidChoice(_))
+    ));
 }
 
 #[test]
@@ -122,6 +158,7 @@ fn centered_responses() {
         omega: Omega::Fixed(1),
         challenge_set: hachi_co_params::ChallengeSet::L1Ball,
         tau_rule: TauRule::Tight,
+        rej_iterations: RejIterations::Lambda,
         n_a: 1,
         n_b: 1,
         n_d: 1,

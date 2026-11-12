@@ -21,7 +21,7 @@ pub const EVAL_DOMAIN: &[u8] = b"hachi-co/eval/v1";
 
 /// The labels of the parameter words of the statement, in the order they are absorbed
 /// ([`statement_words`]).
-pub const LABELS_PARAMS: [&str; 17] = [
+pub const LABELS_PARAMS: [&str; 18] = [
     "hachi-co/eval/params/lambda",
     "hachi-co/eval/params/n",
     "hachi-co/eval/params/t",
@@ -32,6 +32,7 @@ pub const LABELS_PARAMS: [&str; 17] = [
     "hachi-co/eval/params/omega",
     "hachi-co/eval/params/challenge_set",
     "hachi-co/eval/params/tau_rule",
+    "hachi-co/eval/params/rej_iterations",
     "hachi-co/eval/params/n_A",
     "hachi-co/eval/params/n_B",
     "hachi-co/eval/params/n_D",
@@ -57,13 +58,15 @@ pub const LABEL_X: &str = "hachi-co/eval/x";
 /// 64-bit integers in a fixed order, each with its label from [`LABELS_PARAMS`]:
 /// $\lambda$, $n$, $t$, $\ell$, $\alpha$, $\kappa$, $b$, $\omega$ (`params.omega`), the challenge
 /// set (0 for the $\ell\_1$ ball, 1 for the sparse set), the $\tau$ rule (0 tight, 1 the earlier
-/// draft's, 2 ceil), $n\_A$, $n\_B$, $n\_D$, $m\_u$, $m\_v$, the rule of the pad (0 for
+/// draft's, 2 ceil), the number $L$ of iterations of the rejection sampling
+/// (`params.rej_iterations`, since the draft's commit `1096ea2`), $n\_A$, $n\_B$, $n\_D$,
+/// $m\_u$, $m\_v$, the rule of the pad (0 for
 /// [`PadRule::Field`], 1 for [`PadRule::Residues`]), $q$ (`params.q`).
 ///
 /// [`hachi_co_params::derive`] computes every other parameter from these, so they fix the
 /// whole parameter set. (A [`Params`] value edited by hand after `derive` is outside this
 /// guarantee: build contexts from derived parameters.)
-pub fn statement_words(params: &Params) -> [(&'static str, u64); 17] {
+pub fn statement_words(params: &Params) -> [(&'static str, u64); 18] {
     let c = &params.choices;
     let challenge_set = match c.challenge_set {
         ChallengeSet::L1Ball => 0,
@@ -89,6 +92,7 @@ pub fn statement_words(params: &Params) -> [(&'static str, u64); 17] {
         params.omega,
         challenge_set,
         tau_rule,
+        params.rej_iterations,
         c.n_a,
         c.n_b,
         c.n_d,
@@ -109,7 +113,7 @@ fn rows(m: &Matrix) -> Vec<Poly> {
 /// Absorbs the statement of $\mathsf{Eval}$ into `ch`, before any coin is drawn
 /// (`docs/m1-spec.md`, WP11), in this order:
 ///
-/// 1. the 17 parameter words of [`statement_words`], each with
+/// 1. the 18 parameter words of [`statement_words`], each with
 ///    [`Challenger::absorb_u64`] under its label;
 /// 2. $\mathbf A$, $\mathbf B$, $\mathbf D$ (`6_Collaborative_Hachi.tex`:287-292), each as one
 ///    message of ring elements, row-major ([`Challenger::absorb_polys`] under [`LABEL_PP_A`],

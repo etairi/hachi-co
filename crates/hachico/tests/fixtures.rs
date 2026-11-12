@@ -15,8 +15,8 @@ mod common;
 
 use common::net::run_with;
 use common::{
-    K, assert_claims_match, clear_pcs, clear_words, fixture_claims, fixture_proof,
-    fixture_proof_without_pcs, fixture_statement, load, recorded_state, without_pcs,
+    K, assert_claims_match, clear_pcs, clear_words, fixture_accept_sets, fixture_claims,
+    fixture_proof, fixture_proof_without_pcs, fixture_statement, load, recorded_state, without_pcs,
 };
 use hachi_co::{
     EvalOutput, EvalProof, ProofError, VerifyError, commit, encoded_len, eval_with,
@@ -30,9 +30,9 @@ use hachi_co_mpc::{Loopback, MemoryConfig, ZeroSharing};
 /// failures), then as a whole: the oracle's values, and the base-PCS words of `want`
 /// ([`fixture_proof`], computed from the recorded polynomials).
 fn compare_proof(fx: &Fixture, want: &EvalProof<K>, proof: &EvalProof<K>, what: &str) {
-    let recorded = fixture_proof_without_pcs(fx);
+    let recorded = fixture_proof_without_pcs(fx, &fx.context::<K>().unwrap());
     assert_eq!(proof.e_u, recorded.e_u, "{what}: E(u)");
-    assert_eq!(proof.attempt, recorded.attempt, "{what}: a*");
+    assert_eq!(proof.accept_sets, recorded.accept_sets, "{what}: R");
     assert_eq!(proof.v, recorded.v, "{what}: v");
     let (got, want_t) = (&proof.sumcheck, &recorded.sumcheck);
     assert_eq!(got.g0_sums, want_t.g0_sums, "{what}: G0");
@@ -52,41 +52,39 @@ fn compare_proof(fx: &Fixture, want: &EvalProof<K>, proof: &EvalProof<K>, what: 
     assert_eq!(proof, want, "{what}");
 }
 
-/// The attempts of the ring-to-linear step as the fixture records them (v, c, this party's
-/// accept bit, the abort), and the accepted attempt's c.
-fn compare_attempts(fx: &Fixture, out: &EvalOutput<K>, p: usize, what: &str) {
-    let recorded = fx
-        .get("/ring_to_linear/attempts")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .len();
-    assert_eq!(out.r2l.attempts.len(), recorded, "{what}");
-    for (a, rec) in out.r2l.attempts.iter().enumerate() {
-        let at = |k: &str| format!("/ring_to_linear/attempts/{a}/{k}");
-        assert_eq!(
-            rec.v,
-            fx.polys(&at("v")).unwrap(),
-            "{what}: v of attempt {a}"
-        );
-        assert_eq!(
-            rec.c,
-            fx.int_rows(&at("c")).unwrap(),
-            "{what}: c of attempt {a}"
-        );
-        let accept = fx.bool(&at(&format!("provers/{}/accept", p - 1))).unwrap();
-        assert_eq!(rec.accepted, accept, "{what}: accept of attempt {a}");
-        assert_eq!(
-            rec.aborted,
-            fx.bool(&at("abort")).unwrap(),
-            "{what}: abort {a}"
-        );
-    }
-    let a = out.proof.attempt;
+/// The ring-to-linear step as the fixture records it: v, c, this party's accept flags, every
+/// set of accepted iterations and j*.
+fn compare_iterations(fx: &Fixture, out: &EvalOutput<K>, p: usize, what: &str) {
+    let ctx = fx.context::<K>().unwrap();
+    assert_eq!(
+        out.r2l.v,
+        fx.polys("/ring_to_linear/v").unwrap(),
+        "{what}: v"
+    );
     assert_eq!(
         out.r2l.c,
-        fx.int_rows(&format!("/ring_to_linear/attempts/{a}/c"))
-            .unwrap()
+        fx.int_rows("/ring_to_linear/c").unwrap(),
+        "{what}: c"
+    );
+    assert_eq!(
+        out.r2l.accept_sets,
+        fixture_accept_sets(fx, &ctx),
+        "{what}: R"
+    );
+    for j in 0..ctx.layout.rej_iterations {
+        let accept = fx
+            .bool(&format!("/ring_to_linear/provers/{}/accept/{j}", p - 1))
+            .unwrap();
+        assert_eq!(
+            hachi_co_r2l::accepts(&out.r2l.accept_sets[p - 1], j),
+            accept,
+            "{what}: accept of iteration {j}"
+        );
+    }
+    assert_eq!(
+        out.r2l.j_star,
+        fx.usize("/ring_to_linear/j_star").unwrap(),
+        "{what}: j*"
     );
     assert_eq!(out.conv.e_u, fx.poly("/conv/E_u").unwrap(), "{what}");
     assert_eq!(
@@ -122,11 +120,10 @@ fn toy_n1_replay_reproduces_the_fixture_end_to_end() {
     let mut ch = ReplayChallenger::new(&fx).unwrap();
     let out = eval_with(&ctx, &pcs, &mut comm, &mut rng, &mut ch, &state, &u, &x).unwrap();
     compare_proof(&fx, &want, &out.proof, "toy-n1");
-    compare_attempts(&fx, &out, 1, "toy-n1");
-    assert_eq!(
-        out.r2l.attempts.iter().filter(|a| a.aborted).count(),
-        2,
-        "toy-n1 has two aborted attempts (ref/README.md, choice 19)"
+    compare_iterations(&fx, &out, 1, "toy-n1");
+    assert!(
+        out.r2l.j_star > 0,
+        "toy-n1 rejects its first iteration (ref/README.md, choice 19)"
     );
     assert_eq!(
         out.sumcheck.point,
@@ -181,7 +178,7 @@ fn threaded_replay_reproduces_every_multi_party_fixture() {
                 assert_eq!(u, &u_fx, "{what}: u");
                 assert_eq!(state, &recorded_state(&fx, &ctx, p0 + 1), "{what}: st");
                 compare_proof(&fx, &want, &out.proof, &what);
-                compare_attempts(&fx, out, p0 + 1, &what);
+                compare_iterations(&fx, out, p0 + 1, &what);
             }
             let states: Vec<_> = outputs.iter().map(|(_, st, _)| st.clone()).collect();
             let f = fx.exts::<K>("/input/f").unwrap();
@@ -225,7 +222,14 @@ fn composed_verifier_accepts_the_fixture_transcripts() {
         // Without the base PCS's words the proof does not fit the context.
         let mut ch = ReplayChallenger::new(&fx).unwrap();
         assert!(matches!(
-            verify_claims_with(&ctx, &pcs, &mut ch, &u, &x, &fixture_proof_without_pcs(&fx),),
+            verify_claims_with(
+                &ctx,
+                &pcs,
+                &mut ch,
+                &u,
+                &x,
+                &fixture_proof_without_pcs(&fx, &ctx)
+            ),
             Err(VerifyError::Proof(ProofError::Shape { .. }))
         ));
     }

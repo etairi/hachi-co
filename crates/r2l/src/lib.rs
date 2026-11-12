@@ -1,6 +1,8 @@
 //! Work package WP9 of Hachi-Co (`docs/m1-spec.md`, "WP9 `hachi-co-r2l`"): the conversion of ring
-//! evaluation claims to linear relations over $\mathcal R\_q$ (`5_Building_Blocks.tex`:98-207;
-//! Sage oracle `ref/hachico_ref/r2l.py`). After $\Pi\_{\mathsf{conv}}$, the provers hold the
+//! evaluation claims to linear relations over $\mathcal R\_q$ (`5_Building_Blocks.tex`:98-207,
+//! with the $L$ parallel iterations of the rejection sampling of `fig:ring-to-linear` and
+//! `fig:ring-to-linear-2` since the draft's commit `1096ea2`; Sage oracle
+//! `ref/hachico_ref/r2l.py`). After $\Pi\_{\mathsf{conv}}$, the provers hold the
 //! blocks $\mathbf s\_i$ of $\mathbf f'$ and shares $\langle u \rangle\_p$; this step ends with a
 //! public matrix $\mathbf M$ and shares $\langle \mathbf z' \rangle\_p$, $\lbrace \mathbf y
 //! \rbrace\_p$ with $\mathbf M \sum\_p \langle \mathbf z' \rangle\_p = \sum\_p \lbrace \mathbf y
@@ -9,14 +11,15 @@
 //! | Item | Step | Draft (`5_Building_Blocks.tex`) |
 //! |---|---|---|
 //! | [`owned_w`], [`block_w`], [`a_times_g`] | $w\_i = \mathbf a^T \mathbf G\_{2^m} \mathbf s\_i$, $\hat{\mathbf w}\_i = \mathbf G\_1^{-1}(w\_i)$ for the owned blocks | 103-108 |
-//! | [`sample_attempt`], [`mask_images`] | per attempt: $\mathbf r\_p \leftarrow \chi\_r$, $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, $\mathbf t\_{0,p}$, $\hat{\mathbf t}\_{0,p}$, $w\_{0,p}$, $\hat{\mathbf w}\_{0,p}$ | 110-114 |
+//! | [`sample_masks`], [`mask_images`] | $\mathbf r\_p^j \leftarrow \chi\_r$ for $j \lt L$, $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, and per mask $\mathbf t\_{0,p}^j$, $\hat{\mathbf t}\_{0,p}^j$, $w\_{0,p}^j$, $\hat{\mathbf w}\_{0,p}^j$ | `fig:ring-to-linear`, step 3 |
 //! | [`d_slice`], [`fah_d_input`] | $p$'s input $\mathbf D \cdot \lbrace (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0, \boldsymbol\rho) \rbrace\_p$ to $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ | 115-121 |
 //! | [`check_challenges`] | $\mathbf c \in \mathcal C^{2^r}$ | 122-126 |
-//! | [`fold`], [`respond`] | $\sum\_{i \in \mathcal I\_p} c\_i \mathbf s\_i$ over $\mathbb Z\[X\]/(X^d+1)$ and $\mathsf{Rej}$ | 127-129 |
-//! | [`z_of_sum`], [`norm_check`], [`z_hat`] | prover 1: $\mathbf z = \sum\_p \mathbf z\_p$, $\Vert \mathbf z \Vert\_\infty \le \beta$, $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$ | 129-133 |
+//! | [`fold`], [`respond`] | $\sum\_{i \in \mathcal I\_p} c\_i \mathbf s\_i$ over $\mathbb Z\[X\]/(X^d+1)$ and $\mathsf{Rej}$, once per mask | `fig:ring-to-linear`, step 5 |
+//! | [`accept`]: [`encode_accept_set`], [`check_accept_set`], [`select_iteration`] | the sets $R\_p$ of accepted iterations and $j^\ast = \min \bigcap\_p R\_p$ | `fig:ring-to-linear`, step 6 |
+//! | [`z_of_sum`], [`norm_check`], [`z_hat`] | prover 1: $\mathbf z = \sum\_p \mathbf z\_p^{j^\ast}$, $\Vert \mathbf z \Vert\_\infty \le \beta$, $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$ | 129-133 |
 //! | [`z_prime_share`], [`y_share`] | $\langle \mathbf z' \rangle\_p$ and $\lbrace \mathbf y \rbrace\_p$ ([`LinearShare`](hachi_co_core::LinearShare)) | 134, 154-179 |
-//! | [`run`], [`run_with_cap`], [`R2lOutput`] | the driver: attempts until no party aborts, with [`Comm`](hachi_co_mpc::Comm), [`PartyRandomness`](hachi_co_core::PartyRandomness) and [`Challenger`](hachi_co_core::Challenger) | 102-182 |
-//! | [`verifier_challenges`], [`linear_relation`] | the verifier: $\mathbf c$ by Fiat-Shamir, $\mathbf c \in \mathcal C^{2^r}$, $\mathbf M$ and $\mathbf y$ | 122-126, 157-179 |
+//! | [`run`], [`R2lOutput`] | the driver, one round with $L$ masks, with [`Comm`](hachi_co_mpc::Comm), [`PartyRandomness`](hachi_co_core::PartyRandomness) and [`Challenger`](hachi_co_core::Challenger) | 102-182 |
+//! | [`verifier_challenges`], [`verifier_iteration`], [`linear_relation`] | the verifier: $\mathbf c$ by Fiat-Shamir, $\mathbf c \in \mathcal C^{2^r}$, $j^\ast$ from the sets, $\mathbf M$ and $\mathbf y$ | 122-126, 157-179 |
 //! | [`sum_shares`], [`residual`], [`relation_holds`], [`row_block_checks`] | test oracles: $\mathbf M \mathbf z' = \mathbf y$ and the meaning of the rows | 154, 182 |
 //!
 //! **Conventions** (`docs/m1-spec.md`, "Conventions"; `ref/README.md`, "Conventions"): parties
@@ -25,15 +28,16 @@
 //! challenges, folds, responses) are `Vec<i64>`, flat with coefficient $j$ of element $i$ at
 //! $id + j$ ($N = d\delta 2^m$ entries for masks, folds and responses, [`response_len`]).
 //!
-//! **Communication and coins.** Per attempt $a$ the driver calls
-//! [`Challenger::begin_attempt`](hachi_co_core::Challenger::begin_attempt)`(a)`, absorbs
-//! $\mathbf v$ under [`LABEL_V`] and draws
-//! [`r2l_challenges`](hachi_co_core::Challenger::r2l_challenges)`(a, 2^r, d, ω)`; a Fiat-Shamir
-//! verifier repeats these calls for the accepted attempt only ([`verifier_challenges`]). The
-//! collective calls carry the labels [`COMM_FAH_D`], [`COMM_ABORT`], [`COMM_FAH_Z`] and
-//! [`COMM_PROVER1`], in this order within an attempt (the last two only in an accepted one).
+//! **Communication and coins.** The driver absorbs $\mathbf v$ under [`LABEL_V`], draws
+//! [`r2l_challenges`](hachi_co_core::Challenger::r2l_challenges)`(2^r, d, ω)`, and after the
+//! broadcast of the sets of accepted iterations absorbs them under [`LABEL_ACCEPT`]; a
+//! Fiat-Shamir verifier makes the same calls ([`verifier_challenges`], [`verifier_iteration`]).
+//! The collective calls carry the labels [`COMM_FAH_D`], [`COMM_ACCEPT`] and [`COMM_FAH_Z`], in
+//! this order (the last only when some iteration is accepted by every prover). After the last,
+//! every prover checks $\Vert \mathbf z \Vert\_\infty \le \beta$ itself (`fig:ring-to-linear-2`,
+//! step 9, since the draft's commit `0337dfb`), so no announcement follows.
 //!
-//! **Secrets and constant time.** The masks $\mathbf r\_p$ and their images, the commitment
+//! **Secrets and constant time.** The masks $\mathbf r\_p^j$ and their images, the commitment
 //! randomness $\boldsymbol\rho^v\_p$, the digits of $\mathbf s\_i$, the folds and $\mathbf z$ are
 //! secret. What aims at constant time (best effort, as Rust does not guarantee constant-time code
 //! generation):
@@ -51,36 +55,33 @@
 //! \mathbf G\_{2^m} \mathbf r\_p$ and their decompositions $\mathbf G^{-1}$, and $w\_i$,
 //! $\hat{\mathbf w}\_i$ (they run in `hachi-co-math`, whose $\mathbb Z\_q$ products use `u128`
 //! remainders and conditional subtractions and whose $\mathbf G^{-1}$ chooses representatives and
-//! digits by comparisons); prover 1's norm check and $\mathbf J^{-1}$ on $\mathbf z$; the
+//! digits by comparisons); the norm check on $\mathbf z$ and prover 1's $\mathbf J^{-1}$; the
 //! samplers' rejection loops (whose running time depends on the number of
-//! rejected words, which is independent of the values returned). The driver wipes each attempt's
-//! mask and fold, and the responses of aborted attempts, as soon as they are no longer needed, and
-//! [`AttemptSecrets`] wipes its contents when dropped, also on early returns (best effort: the
-//! compiler is only discouraged from eliding the writes, and earlier copies are not reached).
-//! [`AttemptSecrets`] and [`MaskImages`] hide their contents from `Debug`.
+//! rejected words, which is independent of the values returned). The driver wipes the masks and
+//! the fold right after $\mathsf{Rej}$ and every response but that of $j^\ast$ before any is
+//! sent, and [`MaskSecrets`] wipes its contents when dropped, also on early returns (best effort:
+//! the compiler is only discouraged from eliding the writes, and earlier copies are not reached).
+//! [`MaskSecrets`] and [`MaskImages`] hide their contents from `Debug`.
 //!
 //! **Choices made here where the draft and the oracle are silent** (each is documented at its
 //! item):
-//! - the accept bits are agreed ([`COMM_ABORT`]) before any response is sent, and the responses
-//!   enter $\mathcal F\_{\mathsf{AH}}(1^n)$ only in an accepted attempt (plan
-//!   `docs/hachi-co-plan.md`, finding F5);
-//! - prover 1 announces the outcome of its steps after that sum ([`COMM_PROVER1`]); a failed
-//!   norm check is not retried but ends the step with [`Error::NormCheck`] at prover 1 and
-//!   [`Error::Prover1Abort`] at the others (it never happens for honest provers,
-//!   `5_Building_Blocks.tex`:207);
-//! - the attempts are capped at [`MAX_ATTEMPTS`] (the oracle's default), and
-//!   [`verifier_challenges`] refuses an attempt index at or above the cap
-//!   ([`Error::AttemptOutOfRange`]);
-//! - the labels [`LABEL_V`] and `COMM_*`;
+//! - the sets of accepted iterations are broadcast ([`COMM_ACCEPT`]) before any response is
+//!   sent, as the draft has it, and only the responses of $j^\ast$ enter
+//!   $\mathcal F\_{\mathsf{AH}}(1^n)$ (plan `docs/hachi-co-plan.md`, finding F5); a set is
+//!   $\lceil L/64 \rceil$ words ([`accept`]), and iterations are 0-indexed (the draft's $j + 1$);
+//! - the labels [`LABEL_V`], [`LABEL_ACCEPT`] and `COMM_*`;
 //! - every prover and the verifier check $\mathbf c \in \mathcal C^{2^r}$ with the draft's
 //!   $\ell\_1$ ball, and the shapes, canonical residues and ranges of everything they receive
 //!   from the randomness source, the challenger and the network.
 //!
 //! References: "the draft" is the Hachi-Co paper draft (`collaborative-hatchi`, commit
-//! `8834c9f`), cited by file and line; "the oracle" is the Sage reference in `ref/`.
+//! `8834c9f`), cited by file and line, and since its commit `1096ea2` by figure and step for the
+//! $L$ iterations (and since `0337dfb` for the norm check of every prover); "the oracle" is the
+//! Sage reference in `ref/`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod accept;
 mod ct;
 mod driver;
 mod error;
@@ -90,11 +91,12 @@ mod relation;
 mod share;
 mod verifier;
 
-pub use driver::{AttemptRecord, R2lOutput, run, run_with_cap};
+pub use accept::{accept_set_len, accepts, check_accept_set, encode_accept_set, select_iteration};
+pub use driver::{R2lOutput, run};
 pub use error::{Error, Result};
 pub use local::{
-    AttemptSecrets, BlockW, MaskImages, a_times_g, block_w, check_challenges, d_slice, fah_d_input,
-    fold, mask_images, owned_w, respond, response_len, sample_attempt,
+    BlockW, MaskImages, MaskSecrets, a_times_g, block_w, check_challenges, d_slice, fah_d_input,
+    fold, mask_images, owned_w, respond, response_len, sample_masks,
 };
 pub use prover1::{norm_check, z_hat, z_of_sum};
 pub use relation::{
@@ -102,30 +104,23 @@ pub use relation::{
     row_block_checks, sum_shares,
 };
 pub use share::{y_share, z_prime_share};
-pub use verifier::{LinearRelation, linear_relation, verifier_challenges};
+pub use verifier::{LinearRelation, linear_relation, verifier_challenges, verifier_iteration};
 
-/// The label under which provers and verifier absorb the first message $\mathbf v$ of each
-/// attempt before drawing $\mathbf c$ (`5_Building_Blocks.tex`:133-138).
+/// The label under which provers and verifier absorb the first message $\mathbf v$ before
+/// drawing $\mathbf c$ (`5_Building_Blocks.tex`:133-138).
 pub const LABEL_V: &str = "hachi-co/r2l/v";
+
+/// The label under which provers and verifier absorb the $n$ sets of accepted iterations
+/// (`fig:ring-to-linear`, step 6), one vector of words per prover.
+pub const LABEL_ACCEPT: &str = "hachi-co/r2l/accept-sets";
 
 /// The label of the $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ call that outputs $\mathbf v$
 /// (`5_Building_Blocks.tex`:131-133).
 pub const COMM_FAH_D: &str = "hachi-co/r2l/F_AH(D)";
 
-/// The label of the agreement on an abort after $\mathsf{Rej}$ (`5_Building_Blocks.tex`:141).
-pub const COMM_ABORT: &str = "hachi-co/r2l/abort";
+/// The label of the broadcast of the sets of accepted iterations (`fig:ring-to-linear`, step 6).
+pub const COMM_ACCEPT: &str = "hachi-co/r2l/accept-sets";
 
 /// The label of the $\mathcal F\_{\mathsf{AH}}(1^n)$ call that sums the responses
-/// $\mathbf z\_p$ (`5_Building_Blocks.tex`:142-143).
+/// $\mathbf z\_p^{j^\ast}$ (`5_Building_Blocks.tex`:142-143).
 pub const COMM_FAH_Z: &str = "hachi-co/r2l/F_AH(1^n)";
-
-/// The label of prover 1's announcement whether its steps after that sum failed
-/// (`5_Building_Blocks.tex`:144: "If not, it aborts the protocol").
-pub const COMM_PROVER1: &str = "hachi-co/r2l/prover-1-check";
-
-/// The default cap on the attempts of [`run`] (the oracle's `max_attempts`). For honest provers
-/// an attempt aborts with probability $1 - M^{-n} \le 1 - 1/e$ (`6_Collaborative_Hachi.tex`:279:
-/// $M \le e^{1/n}$), so all of them abort with probability at most
-/// $(1 - 1/e)^{64} \lt 2^{-42}$. The accepted attempt's index is therefore below the cap, and
-/// [`verifier_challenges`] refuses any other ([`Error::AttemptOutOfRange`]).
-pub const MAX_ATTEMPTS: u64 = 64;

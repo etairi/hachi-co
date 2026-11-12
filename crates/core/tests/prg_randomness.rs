@@ -1,10 +1,9 @@
-//! `PrgRandomness`: the documented streams, the distributions' supports, AS.Share, the base
-//! PCS's seeds, and the refusal to serve a stream twice.
+//! `PrgRandomness`: the documented streams, the distributions' supports, the base PCS's seeds,
+//! and the refusal to serve a stream twice.
 
 use hachi_co_core::{
-    BlinderKind, DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK,
-    DOMAIN_RESHARE, DOMAIN_RHO_U, DOMAIN_RHO_V, DOMAIN_RHO_W, Error, Ext, Fqk, PartyRandomness,
-    PrgRandomness,
+    BlinderKind, DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RHO_U,
+    DOMAIN_RHO_V, DOMAIN_RHO_W, Error, Ext, Fqk, PartyRandomness, PrgRandomness,
 };
 use hachi_co_sampling::{ShakePrg, rej, uniform};
 use rand::Rng;
@@ -27,24 +26,21 @@ fn ext_from(prg: &mut ShakePrg) -> Ext<K> {
 #[test]
 fn masks_and_rho_follow_the_documented_streams() {
     let mut rng = PrgRandomness::new(SEED);
-    for attempt in [0u64, 1, 7] {
-        let mask = PartyRandomness::<K>::mask(&mut rng, attempt, GAMMA, 768).unwrap();
+    for iteration in [0u64, 1, 7] {
+        let mask = PartyRandomness::<K>::mask(&mut rng, iteration, GAMMA, 768).unwrap();
         let want = rej::mask(
-            &mut ShakePrg::new(&SEED, DOMAIN_MASK.as_bytes(), attempt),
+            &mut ShakePrg::new(&SEED, DOMAIN_MASK.as_bytes(), iteration),
             GAMMA,
             768,
         );
         assert_eq!(mask, want.unwrap());
         assert!(mask.iter().all(|x| x.unsigned_abs() <= GAMMA));
-        let rho = PartyRandomness::<K>::rho_v(&mut rng, attempt, 4, 32).unwrap();
-        let want = uniform::short(
-            &mut ShakePrg::new(&SEED, DOMAIN_RHO_V.as_bytes(), attempt),
-            4,
-            32,
-        );
-        assert_eq!(rho, want.unwrap());
-        assert!(rho.iter().all(|x| (-2..=1).contains(x)));
     }
+    // rho^v has one stream, for all iterations.
+    let rho = PartyRandomness::<K>::rho_v(&mut rng, 4, 32).unwrap();
+    let want = uniform::short(&mut ShakePrg::new(&SEED, DOMAIN_RHO_V.as_bytes(), 0), 4, 32);
+    assert_eq!(rho, want.unwrap());
+    assert!(rho.iter().all(|x| (-2..=1).contains(x)));
     // rho^u has one stream per PrgRandomness, drawn in Commit.
     let rho_u = PartyRandomness::<K>::rho_u(&mut rng, 4, 32).unwrap();
     let want = uniform::short(&mut ShakePrg::new(&SEED, DOMAIN_RHO_U.as_bytes(), 0), 4, 32);
@@ -89,8 +85,8 @@ fn supports_are_exactly_the_boxes() {
     }
     assert!(mask.iter().all(|x| (-1..=1).contains(x)));
     // S_b = [ceil(-b/2), ceil(b/2) - 1]: b = 4 -> [-2, 1], b = 5 -> [-2, 2].
-    for (attempt, b, lo, hi) in [(0u64, 4u64, -2i64, 1i64), (1, 5, -2, 2), (2, 3, -1, 1)] {
-        let rho = PartyRandomness::<K>::rho_v(&mut rng, attempt, b, 3000).unwrap();
+    for (b, lo, hi) in [(4u64, -2i64, 1i64), (5, -2, 2), (3, -1, 1)] {
+        let rho = PartyRandomness::<K>::rho_v(&mut PrgRandomness::new(SEED), b, 3000).unwrap();
         for v in lo..=hi {
             assert!(rho.contains(&v), "b = {b}: value {v} appears");
         }
@@ -100,68 +96,14 @@ fn supports_are_exactly_the_boxes() {
 
 #[test]
 fn determinism_and_independence() {
-    let draw = |seed: [u8; 32], attempt| {
-        PartyRandomness::<K>::mask(&mut PrgRandomness::new(seed), attempt, GAMMA, 64).unwrap()
+    let draw = |seed: [u8; 32], iteration| {
+        PartyRandomness::<K>::mask(&mut PrgRandomness::new(seed), iteration, GAMMA, 64).unwrap()
     };
     assert_eq!(draw(SEED, 3), draw(SEED, 3));
     assert_ne!(draw(SEED, 3), draw(SEED, 4));
     let mut other = SEED;
     other[0] ^= 1;
     assert_ne!(draw(SEED, 3), draw(other, 3));
-}
-
-#[test]
-fn reshare_is_additive_sharing() {
-    let f = field();
-    let input: Vec<Ext<K>> = (0..64u64).map(|i| Ext([i, 2 * i, Q - 1 - i, 5])).collect();
-    for n in 1..=5 {
-        let mut rng = PrgRandomness::new(SEED);
-        let shares = PartyRandomness::<K>::reshare(&mut rng, &f, &input, n).unwrap();
-        assert_eq!(shares.len(), n);
-        let mut sum = vec![f.zero(); input.len()];
-        for s in &shares {
-            assert_eq!(s.len(), input.len());
-            assert!(s.iter().all(|x| x.0.iter().all(|c| *c < Q)));
-            for (acc, x) in sum.iter_mut().zip(s) {
-                *acc = f.add(acc, x);
-            }
-        }
-        assert_eq!(sum, input, "n = {n}");
-        // Share j < n is the documented stream j - 1, element by element.
-        for (j, s) in shares[..n - 1].iter().enumerate() {
-            let mut prg = ShakePrg::new(&SEED, DOMAIN_RESHARE.as_bytes(), j as u64);
-            for x in s {
-                assert_eq!(*x, ext_from(&mut prg));
-            }
-        }
-        // The shares do not depend on the chunks.
-        let mut stream = PartyRandomness::<K>::reshare_stream(&mut PrgRandomness::new(SEED), &f, n);
-        let stream = stream.as_mut().unwrap();
-        let mut chunked = vec![Vec::new(); n];
-        for chunk in input.chunks(input.len().div_ceil(3)) {
-            for (all, part) in chunked.iter_mut().zip(stream.next_chunk(chunk).unwrap()) {
-                all.extend(part);
-            }
-        }
-        assert_eq!(chunked, shares, "n = {n}");
-        // A second resharing from the same source is refused.
-        assert_eq!(
-            PartyRandomness::<K>::reshare(&mut rng, &f, &input, n),
-            Err(Error::RandomnessReuse {
-                kind: DOMAIN_RESHARE,
-                index: 0
-            })
-        );
-    }
-    // Unreduced inputs stand for their residue class.
-    let unreduced: Vec<Ext<K>> = input.iter().map(|x| Ext(x.0.map(|c| c + Q))).collect();
-    let shares =
-        PartyRandomness::<K>::reshare(&mut PrgRandomness::new(SEED), &f, &unreduced, 1).unwrap();
-    assert_eq!(shares, vec![input.clone()]);
-    assert!(matches!(
-        PartyRandomness::<K>::reshare(&mut PrgRandomness::new(SEED), &f, &input, 0),
-        Err(Error::Parameter(_))
-    ));
 }
 
 #[test]
@@ -227,13 +169,8 @@ fn every_stream_is_served_once_and_failures_do_not_use_it_up() {
             index: 0
         })
     );
-    // Other kinds and other attempts are separate streams.
-    PartyRandomness::<K>::rho_v(&mut rng, 0, 4, 8).unwrap();
+    // Other kinds and other iterations are separate streams.
     PartyRandomness::<K>::mask(&mut rng, 1, GAMMA, 8).unwrap();
-    assert!(matches!(
-        PartyRandomness::<K>::rho_v(&mut rng, 0, 4, 8),
-        Err(Error::RandomnessReuse { .. })
-    ));
     PartyRandomness::<K>::rho_u(&mut rng, 4, 8).unwrap();
     assert!(matches!(
         PartyRandomness::<K>::rho_u(&mut rng, 4, 8),
@@ -246,10 +183,14 @@ fn every_stream_is_served_once_and_failures_do_not_use_it_up() {
     ));
     PartyRandomness::<K>::mask(&mut rng, 5, GAMMA, 8).unwrap();
     assert!(matches!(
-        PartyRandomness::<K>::rho_v(&mut rng, 9, 0, 8),
+        PartyRandomness::<K>::rho_v(&mut rng, 0, 8),
         Err(Error::Sampling(_))
     ));
-    PartyRandomness::<K>::rho_v(&mut rng, 9, 4, 8).unwrap();
+    PartyRandomness::<K>::rho_v(&mut rng, 4, 8).unwrap();
+    assert!(matches!(
+        PartyRandomness::<K>::rho_v(&mut rng, 4, 8),
+        Err(Error::RandomnessReuse { .. })
+    ));
     // Debug output does not show the seed.
     let debug = format!("{rng:?}");
     assert!(debug.starts_with("PrgRandomness"));

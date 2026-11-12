@@ -80,7 +80,7 @@ fn the_layout_of_the_bytes_is_the_documented_one() {
     let bytes = proof.to_bytes();
     assert_eq!(&bytes[..8], &MAGIC);
     assert_eq!(&bytes[8..16], &VERSION.to_le_bytes());
-    assert_eq!(VERSION, 3);
+    assert_eq!(VERSION, 4);
     let (chunks, rest) = bytes[HEADER_LEN..].as_chunks::<8>();
     assert!(rest.is_empty());
     let words: Vec<u64> = chunks.iter().map(|c| u64::from_le_bytes(*c)).collect();
@@ -93,7 +93,7 @@ fn the_layout_of_the_bytes_is_the_documented_one() {
             .collect()
     };
     let (commitments, openings) = (items(&t.commitments), items(&t.openings));
-    let mut expected = vec![proof.attempt];
+    let mut expected: Vec<u64> = proof.accept_sets.iter().flatten().copied().collect();
     expected.extend(
         commitments
             .iter()
@@ -119,7 +119,8 @@ fn the_layout_of_the_bytes_is_the_documented_one() {
     let pcs_words: usize = commitments.iter().chain(&openings).map(Vec::len).sum();
     assert_eq!(
         words.len(),
-        1 + 6 * l.n
+        l.n * l.rej_iterations.div_ceil(64)
+            + 6 * l.n
             + l.d
             + l.n_d * l.d
             + K * (2 * l.n + l.ell_pp * (l.d0 + l.d1 + 2) + 3 * l.n)

@@ -63,14 +63,17 @@ CONVENTIONS = OrderedDict([
     ("conv", "x' = 1^{ceil(log n)} || x[0 : l-alpha+kappa]; b = monomials(x'[0:r]); a = monomials(x'[r:l']); "
              "v_point = psi(monomials(x[l-alpha+kappa : l])); d[nat(i) 2^m + nat(j)] = b_i a_j; "
              "<u>_p = sum over p's blocks of d_t f'_t; F_AH(E) outputs E(u); u itself stays shared."),
-    ("z_prime_layout", "z' = [w_hat (2^r delta) | w0_hat (n delta) | t0_hat (n n_A delta) | rho_v (n m_v) | "
+    ("z_prime_layout", "z' = [w_hat (2^r delta) | w0_hat (n L delta) | t0_hat (n L n_A delta) | rho_v (n m_v) | "
                        "t_hat (2^r n_A delta) | rho_u (n m_u) | z_hat (2^m delta tau) | <u> (1)], of length mu - 1; "
-                       "z_hat entry (j*delta+e)*tau+t is digit t of z[j*delta+e]."),
-    ("M_rows", "rows of M: D (n_D), B (n_B), b^T G (1), c^T(x)G_1 | 1_n^T(x)G_1 | -a^T G J (1), "
-               "1_n^T(x)G_{n_A} | c^T(x)G_{n_A} | -A J (n_A); y = (v, u_com, 0, 0, 0)."),
+                       "w0_hat_p^j at ((p-1) L + j) delta, t0_hat_p^j at ((p-1) L + j) n_A delta (iteration j "
+                       "0-indexed); z_hat entry (j*delta+e)*tau+t is digit t of z[j*delta+e]."),
+    ("M_rows", "rows of M: D (n_D), B (n_B), b^T G (1), c^T(x)G_1 | 1_n^T(x)e_j*^T(x)G_1 | -a^T G J (1), "
+               "1_n^T(x)e_j*^T(x)G_{n_A} | c^T(x)G_{n_A} | -A J (n_A), for the selected iteration j*; "
+               "y = (v, u_com, 0, 0, 0)."),
     ("shares", "<z'>_p equals z' on the positions S_p and 0 elsewhere, except position mu-2 (<u>), which holds "
                "<u>_p. Prover 1 holds y; the other provers hold 0. S_p: p's blocks of w_hat and t_hat, its own "
-               "w0_hat, t0_hat, rho_v, rho_u, and (p = 1) z_hat. Positions of unowned zero blocks are in no S_p."),
+               "w0_hat and t0_hat of all L iterations, rho_v, rho_u, and (p = 1) z_hat. Positions of unowned zero "
+               "blocks are in no S_p."),
     ("quotient", "<r>_p = 1/2 (1 - X^d)(M <z'>_p - {y}_p) mod X^{2d}+1 with entries read as degree < d "
                  "polynomials; stored as 2d residues."),
     ("hypercube", "V = (U, L), |U| = ell_U = ceil(log(mu+n')), |L| = ell_L = log 2d; point index "
@@ -91,8 +94,12 @@ CONVENTIONS = OrderedDict([
     ("blinders", "g(V) = s0 + sum_{j=1}^{ell_pp} sum_{k=1}^{D} s[j-1][k-1] V_j^k, D = d0 for g0 and d1 for g1."),
     ("challenges", "c_i uniform in {c : ||c||_1 <= omega} (exact sampler, prg.py); alpha, rho, tau0, tau1, a_r "
                    "uniform in F_{q^k}; all verifier coins come from the instance seed (public coins)."),
-    ("retries", "An abort ends Eval with (bot, bot); the caller restarts it. Pi_conv is deterministic, so the "
-                "oracle re-runs only the ring-to-linear step with fresh masks, rho and c (attempt index)."),
+    ("iterations", "The ring-to-linear step runs L iterations of the rejection sampling in parallel "
+                   "(fig:ring-to-linear since the draft's commit 1096ea2): each prover draws L masks and one rho^v, "
+                   "v commits to the images of all masks, one c is drawn, R_p lists the iterations prover p "
+                   "accepted (0-indexed), j* is the smallest iteration in every R_p, and only the responses of j* "
+                   "are summed. An empty intersection aborts Eval."),
+    ("commit", "Commit has no resharing (since the draft's commit 1096ea2): f_shares = input/f_init_shares."),
     ("base_pcs", "Deferred: commitments are not modelled; openings are checked by evaluating the committed "
                  "polynomials directly (IdealPCS)."),
 ])
@@ -108,12 +115,14 @@ def build_fixture(res, neg, command, selection=None):
     import sage.version
     fx["generated_by"] = OrderedDict([
         ("command", command), ("sage", sage.version.version), ("python", platform.python_version()),
-        ("numpy", np.__version__), ("draft", "collaborative-hatchi commit 8834c9f"),
+        ("numpy", np.__version__),
+        ("draft", "collaborative-hatchi commit 8834c9f, with the changes of ref/README.md up to commit 1e6812f"),
     ])
     fx["conventions"] = CONVENTIONS
     pd = P.as_dict()
     pd["acceptance_per_prover"] = P.acceptance_per_prover()
-    pd["abort_probability"] = 1 - P.acceptance_per_prover() ** P.n
+    pd["abort_probability_per_iteration"] = 1 - P.acceptance_per_prover() ** P.n
+    pd["abort_probability"] = P.abort_probability()
     pd["l1ball_size"] = int(l1ball_count(P.d, P.omega))
     fx["params"] = pd
     fx["seeds"] = OrderedDict([("instance", ctx.seed.decode()), ("setup", ctx.setup_seed.decode()),
@@ -134,7 +143,7 @@ def build_fixture(res, neg, command, selection=None):
             blocks.append(OrderedDict([("index", i), ("owner", p), ("s", L(st["s"])), ("t", L(st["t"])),
                                        ("t_hat", L(st["t_hat"]))]))
     fx["commit"] = OrderedDict([
-        ("reshare", L(cd["reshare"])), ("f_shares", L(cd["f_shares"])), ("f_hat", L(cd["f_hat"])),
+        ("f_shares", L(cd["f_shares"])), ("f_hat", L(cd["f_hat"])),
         ("f_prime", L(cd["f_prime"])), ("block_owner", owner), ("blocks", blocks), ("t_hat", L(cd["t_hat"])),
         ("rho_u", L(cd["rho_u"])), ("u", L(res["u_com"])),
     ])
@@ -148,24 +157,23 @@ def build_fixture(res, neg, command, selection=None):
         ("E_u", L(conv["E_u"])), ("E_matrix", L(res["E_mat"])),
         ("verifier_y_eq_E_u", res["verifier_checks"]["conv_y_eq_E(u)"]),
     ])
-    atts = []
-    for a in r2l["attempts"]:
-        provs = []
-        for p in range(1, P.n + 1):
-            pr = a["provers"][p]
-            provs.append(OrderedDict([
-                ("prover", p), ("mask", L(pr["mask"])), ("rho_v", L(pr["rho_v"])), ("t0", L(pr["t0"])),
-                ("t0_hat", L(pr["t0_hat"])), ("w0", L(pr["w0"])), ("w0_hat", L(pr["w0_hat"])),
-                ("fold_norm", pr["fold_norm"]), ("z_norm", pr["z_norm"]), ("accept", pr["accept"])]))
-        atts.append(OrderedDict([("attempt", a["attempt"]), ("provers", provs), ("v", L(a["v"])), ("c", L(a["c"])),
-                                 ("c_in_C", a["c_in_C"]), ("abort", a["abort"]),
-                                 ("aborting_provers", a["aborting_provers"])]))
-    acc = r2l["attempts"][-1]
+    provs = []
+    for p in range(1, P.n + 1):
+        pr = r2l["provers"][p]
+        its = pr["iterations"]
+        provs.append(OrderedDict([
+            ("prover", p), ("rho_v", L(pr["rho_v"])), ("masks", [L(it["mask"]) for it in its]),
+            ("t0", [L(it["t0"]) for it in its]), ("t0_hat", [L(it["t0_hat"]) for it in its]),
+            ("w0", [L(it["w0"]) for it in its]), ("w0_hat", [L(it["w0_hat"]) for it in its]),
+            ("fold_norm", pr["fold_norm"]), ("z_norms", [it["z_norm"] for it in its]),
+            ("accept", [bool(it["accept"]) for it in its])]))
+    js = r2l["j_star"]
     lay = r2l["layout"]
     fx["ring_to_linear"] = OrderedDict([
-        ("w", L(r2l["w"])), ("w_hat", L(r2l["w_hat"])), ("attempts", atts),
-        ("accepted_attempt", r2l["accepted_attempt"]),
-        ("z_i", [L(acc["provers"][p]["z"]) for p in range(1, P.n + 1)]),
+        ("w", L(r2l["w"])), ("w_hat", L(r2l["w_hat"])), ("iterations", P.rej_iterations), ("provers", provs),
+        ("v", L(r2l["v"])), ("c", L(r2l["c"])), ("c_in_C", r2l["c_in_C"]),
+        ("accept_sets", [list(r) for r in r2l["accept_sets"]]), ("j_star", js),
+        ("z_i", [L(r2l["provers"][p]["iterations"][js]["z"]) for p in range(1, P.n + 1)]),
         ("z", L(r2l["z"])), ("z_norm", r2l["z_norm"]), ("z_norm_le_beta", r2l["z_norm_ok"]),
         ("layout", OrderedDict([("blocks", [list(t) for t in lay.blocks()]),
                                 ("rows", OrderedDict([("D", lay.row_D), ("B", lay.row_B), ("b", lay.row_b),

@@ -2,9 +2,11 @@
 //!
 //! The party code of every building block is written once against the [`Comm`] trait: the
 //! additively homomorphic functionality $\mathcal F\_{\mathsf{AH}}$ (draft
-//! `4_preliminaries.tex`:185-200), the agreement on an abort (`5_Building_Blocks.tex`:141, 144),
-//! the pairwise exchange of the resharing in Commit (`6_Collaborative_Hachi.tex`:308-310), and the
-//! publication of per-party values ([`Comm::all_gather`]). [`Comm::gather`] collects vectors at
+//! `4_preliminaries.tex`:185-200), the agreement on an abort (`5_Building_Blocks.tex`:144), a
+//! pairwise exchange ([`Comm::exchange`], which served the resharing of Commit until the draft's
+//! commit `1096ea2` and is no longer used by the protocol), and the publication of per-party
+//! values ([`Comm::all_gather`], e.g. the sets of accepted iterations of the ring-to-linear
+//! step). [`Comm::gather`] collects vectors at
 //! one party; the protocol of the draft does not use it (it sums the responses with
 //! $\mathcal F\_{\mathsf{AH}}(1^n)$, `5_Building_Blocks.tex`:142-143), it serves the variant of
 //! `docs/optimizations.md`, item 34. Nothing protocol-specific enters this crate (plan

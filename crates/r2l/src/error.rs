@@ -3,8 +3,9 @@
 use hachi_co_mpc::PartyId;
 
 /// Everything that can go wrong in the ring-to-linear step: errors of the layers below, inputs of
-/// the wrong shape, challenges outside $\mathcal C$, a failed check of prover 1, a misbehaving
-/// communication layer, and the attempt cap. Errors are values (`docs/m1-spec.md`, rule 5);
+/// the wrong shape, challenges outside $\mathcal C$, malformed sets of accepted iterations, no
+/// iteration accepted by every prover, a failed check of prover 1 and a misbehaving
+/// communication layer. Errors are values (`docs/m1-spec.md`, rule 5);
 /// nothing in this crate panics on malformed input, and the verifier-side functions
 /// ([`linear_relation`](crate::linear_relation), [`verifier_challenges`](crate::verifier_challenges))
 /// return an error for every malformed or out-of-range proof value.
@@ -92,43 +93,41 @@ pub enum Error {
         /// The value of the communication layer.
         actual: usize,
     },
-    /// The communication layer broke its contract (for example an abort agreement that
-    /// contradicts the party's own flag); the message names it.
+    /// The communication layer broke its contract (for example a broadcast that returns the
+    /// party's own set of accepted iterations changed); the message names it.
     #[error("protocol: {0}")]
     Protocol(String),
-    /// Prover 1's check $\Vert \mathbf z \Vert\_\infty \le \beta$ failed
-    /// (`5_Building_Blocks.tex`:144), returned at prover 1. It never fails for honest provers
-    /// (`5_Building_Blocks.tex`:207), so it is not retried: the step stops with this error.
-    #[error("prover 1's norm check failed: ||z||_inf = {norm} > beta = {beta}")]
+    /// The check $\Vert \mathbf z \Vert\_\infty \le \beta$ failed, so the protocol aborts
+    /// (`fig:ring-to-linear-2`, step 9: "The provers check that $\Vert \mathbf z \Vert\_\infty
+    /// \le \beta$. \[...\] If not, they abort the protocol", since the draft's commit `0337dfb`,
+    /// before which only prover 1 checked, `5_Building_Blocks.tex`:144). Every prover runs the check
+    /// on the same $\mathbf z$, so every prover returns this error. It never fails for honest
+    /// provers (`5_Building_Blocks.tex`:207).
+    #[error("the norm check failed: ||z||_inf = {norm} > beta = {beta}")]
     NormCheck {
         /// $\Vert \mathbf z \Vert\_\infty$.
         norm: u64,
         /// $\beta = n\gamma$.
         beta: u64,
     },
-    /// Returned at the provers $p \gt 1$ when prover 1 announces that its steps after the sum
-    /// failed ([`Error::NormCheck`], a malformed response, or $\mathbf J^{-1}$).
-    #[error("prover 1 aborted the protocol after the sum of the responses")]
-    Prover1Abort,
-    /// Every one of the `attempts` attempts aborted (`5_Building_Blocks.tex`:141). For honest
-    /// provers each attempt aborts with probability $1 - M^{-n} \le 1 - 1/e$
-    /// (`6_Collaborative_Hachi.tex`:279), so [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) attempts all
-    /// abort with probability below $2^{-42}$.
-    #[error("all {attempts} attempts of the ring-to-linear step aborted")]
-    TooManyAttempts {
-        /// The cap that was reached.
-        attempts: u64,
+    /// No iteration is in every prover's set $R\_p$ of accepted iterations, so the protocol
+    /// aborts (`fig:ring-to-linear`, step 6, since the draft's commit `1096ea2`: "If
+    /// $\bigcap\_{i \in \[n\]} R\_i$ is empty, then $\mathcal V$ outputs $\bot$"). For honest
+    /// provers every iteration is accepted by all of them with probability $M^{-n} \ge 1/e$,
+    /// independently, so this happens with probability $(1 - M^{-n})^L \le (1 - 1/e)^L$.
+    #[error("no iteration of the {iterations} is accepted by every prover")]
+    NoCommonIteration {
+        /// $L$.
+        iterations: usize,
     },
-    /// The index $a^\ast$ of the accepted attempt, a proof value, is at or beyond the cap
-    /// [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS) on the attempts of [`run`](crate::run)
-    /// (`5_Building_Blocks.tex`:141); honest provers never produce it.
-    /// [`verifier_challenges`](crate::verifier_challenges) refuses it.
-    #[error("attempt index {attempt} is not below the cap {cap}")]
-    AttemptOutOfRange {
-        /// The index that was passed.
-        attempt: u64,
-        /// The cap, [`MAX_ATTEMPTS`](crate::MAX_ATTEMPTS).
-        cap: u64,
+    /// A set of accepted iterations (a broadcast message, or a proof value) is malformed: it does
+    /// not have $\lceil L/64 \rceil$ words, or it names an iteration at or beyond $L$.
+    #[error("the set of accepted iterations of party {party} is malformed: {what}")]
+    AcceptSet {
+        /// The party whose set it is.
+        party: PartyId,
+        /// What is wrong.
+        what: &'static str,
     },
     /// A party index outside $1, \dots, n$.
     #[error("party {party} is not in 1..={n}")]

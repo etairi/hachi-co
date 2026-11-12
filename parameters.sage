@@ -253,6 +253,7 @@ if RUN_SINGLE_PROVER:
 # Run (this section only):   sage parameters.sage --hachi-co-only
 # Development options:       --hachi-co-grid=l:n:alpha,...   only these (l, n, alpha)
 #                            --hachi-co-out=DIR               write the three files under DIR instead
+#                            --hachi-co-fixture-only          write only tests/fixtures/sage_cascade.json (no estimator)
 #
 # CASCADE (6_CH:272-291; log is base 2):
 #   d = 2^alpha, k = 2^kappa, delta = ceil(log_b q), l' = ceil(log n) + l - alpha + kappa,
@@ -260,20 +261,26 @@ if RUN_SINGLE_PROVER:
 #   beta_1 = 2^(r - ceil(log n)) omega floor(b/2), N = d delta 2^m, gamma = 2 n N beta_1,
 #   M = ((2 gamma + 1)/(2 gamma - 2 beta_1 + 1))^N, beta = n gamma,
 #   tau (rule below), (beta_bar, omega_bar, gamma_bar) = (2 b^tau, 2 omega, b - 1),
-#   mu = 2^r delta + n delta + 2^r n_A delta + n n_A delta + n m_u + n m_v + 2^m delta tau + 2,
+#   L = lambda iterations of the rejection sampling (rule below),
+#   mu = 2^r delta + n L delta + 2^r n_A delta + n L n_A delta + n m_u + n m_v + 2^m delta tau + 2,
 #   n' = n_A + n_B + n_D + 2, l'' = ceil(log(mu + n')) + log 2d, d_0 = 2b + n' + 1, d_1 = 3,
-#   nu = n' + d + (mu + n') d; widths: A delta 2^m, B n_A delta 2^r + n m_u, D delta (2^r + n + n n_A) + n m_v.
+#   nu = n' + d + (mu + n') d; widths: A delta 2^m, B n_A delta 2^r + n m_u, D delta (2^r + n L + n L n_A) + n m_v.
+#   The draft's parameter table (fig:parameters, since its commit 1096ea2) has the L masks per prover in mu and
+#   in the width of D; at 8834c9f these had L = 1.
 # RULES (docs/m0-spec.md):
 #   tau ("Tight", the Setup's rule as the draft states it since 2026-11-10): the least tau with
 #       (ceil(b/2) - 1) (b^tau - 1)/(b - 1) >= beta, so that balanced digits represent every |z| <= beta;
 #       "Draft" is the earlier ceil(log_b beta) + 1 (6_CH:280 at 8834c9f), "Ceil" is ceil(log_b beta).
-#   q ("Smallest"): the smallest prime p = 5 mod 8 with p > max(16 omega b^tau, 1 + 2^(l+3) n omega^2 b,
-#       2 beta + 1), tau and beta computed with delta = ceil(log_b p). 16 omega b^tau = 4 omega_bar beta_bar
-#       is the binding guard of 6_CH:274. Since the bounds depend on p only through delta, the candidates
+#   q ("Smallest"): the smallest prime p = 5 mod 8 with p > max(16 omega b^tau, 2 beta + 1), tau and beta
+#       computed with delta = ceil(log_b p). 16 omega b^tau = 4 omega_bar beta_bar is the binding guard of
+#       6_CH:274; the bound 1 + 2^(l+3) n omega^2 b of the earlier Setup is gone since the draft's commit
+#       1096ea2 (it never fixed q at a preset). Since the bounds depend on p only through delta, the candidates
 #       with a given delta form the band b^(delta-1) < p <= b^delta with fixed bounds; scanning the bands
 #       upwards gives the smallest admissible prime exactly.
 #   omega ("MinForTarget"): the smallest radius with 2^(r+1)/|C| <= 2^-lambda, C the l1 ball
 #       {c : ||c||_1 <= omega} of 5_Building_Blocks.tex:134, |C| = sum_i 2^i binom(d, i) binom(omega, i).
+#   L ("Lambda", the draft's rule): L = lambda; {"Fixed": L} for the insecure toy, development and
+#       benchmark presets (crates/params, TOY_REJ_ITERATIONS = 16).
 #
 # SECURITY (lambda = 115 bits, k = 4, b = 16, tight tau, l1 ball, omega minimal):
 #   MSIS for A (relaxed binding, 6_CH:581): rank n_A d, width delta 2^m, infinity bound
@@ -314,7 +321,8 @@ if RUN_SINGLE_PROVER:
 #       to delta, which costs more in mu and N; the README lists that frontier. n_B, m_u and m_v: the
 #       smallest secure values at the chosen q.
 #
-# The threshold t of Setup is not used by the construction; presets record t = floor((n - 1)/2).
+# The threshold t of Setup is not used by the construction; presets record t = n - 1, the largest threshold
+# the draft allows since its commit 1096ea2 (t < n; it was t < n/2, recorded as floor((n - 1)/2), before).
 
 import json
 import datetime
@@ -335,6 +343,7 @@ HCO_GRID = ([(l, n, a) for l in (16, 20, 24) for n in (2, 4) for a in (8, 10)]
 
 _hco_root = os.path.dirname(_preparsed_path)
 _hco_out = os.path.join(_hco_root, "crates", "params")
+HCO_FIXTURE_ONLY = "--hachi-co-fixture-only" in sys.argv
 for _arg in sys.argv[1:]:
     if _arg.startswith("--hachi-co-grid="):
         HCO_GRID = [tuple(int(v) for v in item.split(":")) for item in _arg.split("=", 1)[1].split(",")]
@@ -426,24 +435,25 @@ def hco_delta_dependent(ch, st, omega, delta):
             "binding_guard": 16 * omega * b^tau}
 
 
-def hco_range_guard(ch, omega):
-    return 1 + 2^(ch["ell"] + 3) * ch["n"] * omega^2 * ch["b"]
+def hco_q_lower_bound(dd):
+    return max(dd["binding_guard"], 2 * dd["beta"] + 1)
 
 
-def hco_q_lower_bound(dd, range_guard):
-    return max(dd["binding_guard"], range_guard, 2 * dd["beta"] + 1)
-
-
-def hco_smallest_q(ch, st, omega, range_guard):
+def hco_smallest_q(ch, st, omega):
     """The smallest prime q = 5 mod 8 above the bounds, scanning the bands b^(delta-1) < q <= b^delta."""
     b = ch["b"]; delta = 1
     while b^(delta - 1) < 2^64:
         dd = hco_delta_dependent(ch, st, omega, delta)
-        p = hco_next_prime_5mod8(max(hco_q_lower_bound(dd, range_guard), b^(delta - 1)))
+        p = hco_next_prime_5mod8(max(hco_q_lower_bound(dd), b^(delta - 1)))
         if p <= b^delta:
             return p, delta
         delta += 1
     raise ValueError("no modulus below 2^64")
+
+
+def hco_rej_iterations_of(ch):
+    """L: lambda for "Lambda" (the draft's rule), the given number for {"Fixed": L}."""
+    return ch["rej_iterations"]["Fixed"] if isinstance(ch["rej_iterations"], dict) else ch["lambda"]
 
 
 def hco_omega_of(ch, st):
@@ -454,14 +464,15 @@ def hco_derive(ch):
     """The cascade on a choices dict in the layout of the Rust Choices; returns (params dict, report dict)."""
     st = hco_structure(ch)
     omega = hco_omega_of(ch, st)
-    rg = hco_range_guard(ch, omega)
     if isinstance(ch["q"], dict):
         q = ch["q"]["Fixed"]; delta = hco_ceil_log(ch["b"], q)
     else:
-        q, delta = hco_smallest_q(ch, st, omega, rg)
+        q, delta = hco_smallest_q(ch, st, omega)
     dd = hco_delta_dependent(ch, st, omega, delta)
     n = ch["n"]; b = ch["b"]; n_a = ch["n_a"]; r = st["r"]; m = st["m"]; tau = dd["tau"]; d = st["d"]
-    mu = (2^r * delta + n * delta + 2^r * n_a * delta + n * n_a * delta + n * ch["m_u"] + n * ch["m_v"]
+    L = hco_rej_iterations_of(ch)
+    assert L >= 1, "L >= 1"
+    mu = (2^r * delta + n * L * delta + 2^r * n_a * delta + n * L * n_a * delta + n * ch["m_u"] + n * ch["m_v"]
           + 2^m * delta * tau + 2)
     n_prime = n_a + ch["n_b"] + ch["n_d"] + 2
     R = RealField(256)
@@ -471,11 +482,11 @@ def hco_derive(ch):
         "ell_prime": st["ell_prime"], "r": r, "m": m, "beta1": dd["beta1"], "big_n": dd["big_n"],
         "gamma": dd["gamma"], "rejection_m": float(exp(ln_m)), "log2_rejection_m": float(ln_m / log(R(2))),
         "beta": dd["beta"], "tau": tau, "beta_bar": 2 * b^tau, "omega_bar": 2 * omega, "gamma_bar": b - 1,
-        "mu": mu, "n_prime": n_prime, "ell_dprime": hco_ceil_log2(mu + n_prime) + ch["alpha"] + 1,
+        "rej_iterations": L, "mu": mu, "n_prime": n_prime, "ell_dprime": hco_ceil_log2(mu + n_prime) + ch["alpha"] + 1,
         "d0": 2 * b + n_prime + 1, "d1": 3, "nu": n_prime + d + (mu + n_prime) * d,
         "width_a": delta * 2^m, "width_b": n_a * delta * 2^r + n * ch["m_u"],
-        "width_d": delta * (2^r + n + n * n_a) + n * ch["m_v"],
-        "binding_guard": dd["binding_guard"], "range_guard": rg, "msis_bound_a": 8 * omega * b^tau,
+        "width_d": delta * (2^r + n * L + n * L * n_a) + n * ch["m_v"],
+        "binding_guard": dd["binding_guard"], "msis_bound_a": 8 * omega * b^tau,
         "msis_bound_b": 2 * (b - 1), "j_inv_capacity": hco_j_capacity(b, tau),
     }
     size = hco_challenge_set_size(ch["challenge_set"], d, omega)
@@ -483,7 +494,6 @@ def hco_derive(ch):
     rep = {
         "QPrime": bool(is_prime(q)),
         "QFiveMod8": q % 8 == 5,
-        "QAboveRangeGuard": q > rg,
         "QAboveBindingGuard": q > dd["binding_guard"],
         "CenteredResponses": 2 * dd["beta"] < q,
         "AlphaMinusKappa": 2 <= amk <= ch["ell"],
@@ -495,16 +505,22 @@ def hco_derive(ch):
         "RejectionConstant": bool(ln_m <= R(1) / n),
         "JInvRepresentable": P["j_inv_capacity"] >= dd["beta"],
         "KnowledgeError": size >= 2^(r + 1 + ch["lambda"]),
+        "RejIterationsLambda": L == ch["lambda"],
     }
     return P, rep
 
 
-def hco_choices(lam, n, ell, alpha, kappa, b, omega, cs, tau_rule, n_a, n_b, n_d, m_u, m_v, q):
-    """A choices dict in the serde layout of the Rust Choices (omega/q: an int for Fixed, None otherwise)."""
-    return {"lambda": lam, "n": n, "t": (n - 1) // 2, "ell": ell, "alpha": alpha, "kappa": kappa, "b": b,
+def hco_choices(lam, n, ell, alpha, kappa, b, omega, cs, tau_rule, n_a, n_b, n_d, m_u, m_v, q, rej=None):
+    """A choices dict in the serde layout of the Rust Choices (omega/q/rej: an int for Fixed, None otherwise;
+    rej = None is the draft's L = lambda)."""
+    return {"lambda": lam, "n": n, "t": n - 1, "ell": ell, "alpha": alpha, "kappa": kappa, "b": b,
             "omega": "MinForTarget" if omega is None else {"Fixed": omega},
-            "challenge_set": cs, "tau_rule": tau_rule, "n_a": n_a, "n_b": n_b, "n_d": n_d, "m_u": m_u, "m_v": m_v,
+            "challenge_set": cs, "tau_rule": tau_rule, "rej_iterations": "Lambda" if rej is None else {"Fixed": rej},
+            "n_a": n_a, "n_b": n_b, "n_d": n_d, "m_u": m_u, "m_v": m_v,
             "q": "Smallest" if q is None else {"Fixed": q}}
+
+
+HCO_TOY_REJ = 16                      # L of the toy, development and benchmark presets (crates/params, TOY_REJ_ITERATIONS)
 
 
 def hco_plain(x):
@@ -681,13 +697,13 @@ def hco_mlwe_secure(bits, target=HCO_LAMBDA):
 
 def hco_bands(ch, st, omega):
     """The delta-bands that contain admissible q < 2^63: (delta, smallest admissible prime, top q, B_A)."""
-    b = ch["b"]; rg = hco_range_guard(ch, omega)
+    b = ch["b"]
     bands = []
     delta = 1
     while b^(delta - 1) < HCO_Q_LIMIT:
         dd = hco_delta_dependent(ch, st, omega, delta)
         top = min(b^delta, HCO_Q_LIMIT - 1)
-        lo = max(hco_q_lower_bound(dd, rg), b^(delta - 1))
+        lo = max(hco_q_lower_bound(dd), b^(delta - 1))
         if lo < top:
             low = hco_next_prime_5mod8(lo)
             if low <= top:
@@ -802,7 +818,13 @@ def hco_fixture():
         entries.append({"params": hco_plain(P), "report": rep})
     # The toy presets of docs/m0-spec.md and variations of every choice around them.
     for n in (1, 2, 3):
-        add(hco_choices(115, n, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None))
+        add(hco_choices(115, n, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None, HCO_TOY_REJ))
+    # 2 beta < q at its boundary, as in crates/params/tests/report_boundaries.rs (b = 2^20, d = 4, n = 1,
+    # omega = 1: beta = 2^24 at delta = 2): q = 2^25 violates it and 2^25 + 1 satisfies it. The random
+    # grid below rarely puts q and 2 beta in one delta-band, since the binding guard is usually far above.
+    wide = hco_choices(1, 1, 2, 2, 1, 2^20, 1, "L1Ball", "Tight", 1, 1, 1, 2, 2, None)
+    for q in (2^25, 2^25 + 1):
+        add(dict(wide, q={"Fixed": int(q)}))
     rng = random.Random(int(20261017))                 # Python 3.14 rejects a Sage Integer seed
     for _ in range(100):
         b = rng.choice([2, 3, 4, 5, 7, 8, 16, 32])
@@ -819,7 +841,8 @@ def hco_fixture():
         n_a, n_b, n_d = rng.randint(1, 4), rng.randint(1, 2), rng.randint(1, 3)
         m_u = rng.randint(n_b, n_b + 4)                    # m_u = n_B also occurs (a violation)
         m_v = rng.randint(n_d, n_d + 4)                    # m_v = n_D also occurs (a violation)
-        ch = hco_choices(lam, n, ell, alpha, kappa, b, omega, cs, tau_rule, n_a, n_b, n_d, m_u, m_v, None)
+        rej = None if rng.random() < 0.5 else rng.randint(1, 40)   # L = lambda, or a fixed L (L != lambda is a warning)
+        ch = hco_choices(lam, n, ell, alpha, kappa, b, omega, cs, tau_rule, n_a, n_b, n_d, m_u, m_v, None, rej)
         try:
             P, _ = hco_derive(ch)
         except (ValueError, AssertionError):
@@ -831,7 +854,7 @@ def hco_fixture():
         q0 = P["q"]
         choice = rng.randint(0, 6)
         fixed = [q0 + 8, next_prime(q0 + 1), P["binding_guard"], P["binding_guard"] + 1,
-                 P["range_guard"], 2 * P["beta"], 2 * P["beta"] + 1][choice]
+                 P["binding_guard"] - 1, 2 * P["beta"], 2 * P["beta"] + 1][choice]
         if 2 <= fixed < 2^64:
             add(dict(ch, q={"Fixed": int(fixed)}))
     # The configurations of the secure grid at the smallest admissible q (n_A = 8, m_u = m_v = 7), for alpha 8, 9, 10.
@@ -845,7 +868,7 @@ def hco_fixture():
                 except ValueError:
                     pass                                    # no modulus below 2^64
     # Moduli at the top of u64 (q >= 2^63 fails QBelow2Pow63).
-    toy = hco_choices(115, 2, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None)
+    toy = hco_choices(115, 2, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None, HCO_TOY_REJ)
     for q in (2^63 - 25, 2^63 + 29, 2^64 - 59):
         add(dict(toy, q={"Fixed": int(q)}))
     # Exact boundaries of M <= e^(1/n): the least gamma at which it holds, for (n, N, beta_1).
@@ -900,11 +923,12 @@ if RUN_COLLABORATIVE:
     _hco_started = datetime.datetime.now()
 
     # The toy presets of docs/m0-spec.md with beta_1 = 2^(r - ceil(log n)) omega floor(b/2), the revised Setup
-    # of 2026-11-02 (a check of this implementation against the table that the Sage oracle and the Rust
-    # crate both compute: beta halves, and at n = 3 tau drops to 10 and q to the band delta = 13).
-    for _n, _row in [(1, (8388637, 12, 24576, 9, 558, 15, 14)), (2, (33554501, 13, 106496, 10, 790, 15, 14)),
-                     (3, (33554501, 13, 239616, 10, 1340, 16, 14))]:
-        _P, _ = hco_derive(hco_choices(115, _n, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None))
+    # of 2026-11-02, and L = 16 iterations of the rejection sampling (the draft's L masks per prover since its
+    # commit 1096ea2): a check of this implementation against the table that the Sage oracle and the Rust
+    # crate both compute (mu grows by n (L - 1) delta (1 + n_A) over the single mask).
+    for _n, _row in [(1, (8388637, 12, 24576, 9, 918, 15, 14)), (2, (33554501, 13, 106496, 10, 1570, 16, 14)),
+                     (3, (33554501, 13, 239616, 10, 2510, 17, 14))]:
+        _P, _ = hco_derive(hco_choices(115, _n, 6, 4, 2, 4, 2, "L1Ball", "Tight", 1, 1, 1, 2, 2, None, HCO_TOY_REJ))
         assert (_P["q"], _P["delta"], _P["beta"], _P["tau"], _P["mu"], _P["ell_dprime"], _P["d0"]) == _row, _n
     hco_log("toy presets: the brief's table is reproduced")
 
@@ -914,6 +938,9 @@ if RUN_COLLABORATIVE:
     with open(_fixture_path, "w") as _f:
         _f.write(hco_json_lines(hco_plain(_fixture)))
     hco_log("wrote %s (%d cascade entries)" % (_fixture_path, len(_fixture["entries"])))
+    if HCO_FIXTURE_ONLY:
+        hco_log("--hachi-co-fixture-only: the secure presets are not searched")
+        sys.exit(0)
 
     _presets = []
     _rejected = []
@@ -995,8 +1022,8 @@ if RUN_COLLABORATIVE:
         "",
         "- Command: `%s` (run from the repository root; %s, started %s)." % (_cmd.strip(), _sage_version, _hco_started.strftime("%Y-%m-%d %H:%M")),
         "- Lattice estimator: %s, revision `%s` (%s)." % (ESTIMATOR_REPO, _estimator_rev, "cloned into a temporary directory and removed at exit" if _estimator_tmp is not None else "an existing checkout given by LATTICE_ESTIMATOR_DIR"),
-        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10) and the rules of `docs/m0-spec.md`.",
-        "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, n_D = %d, t = floor((n - 1)/2)." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
+        "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10), the L = lambda masks per prover in mu and in the width of D and no bound 1 + 2^(l+3) n omega^2 b on q (the parameter table of the draft's commit `1096ea2`), and the rules of `docs/m0-spec.md`.",
+        "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, L = lambda, n_D = %d, t = n - 1." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
         "- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/%d bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2(b - 1)); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207)." % HCO_Q_STEPS,
         "- MSIS: first the trivial linear-algebra attack, rank log2(q/(2B + 1)) >= lambda, then `SIS.lattice` (infinity norm) with zeta = 0 on m' columns, minimised over m' (a grid of 1.25 to 64 times the rank, refined by ternary search), because the estimator's own search over ignored columns misses interior optima and returns infinite costs for wide matrices. MLWE: `LWE.estimate` without arora-gb and bkw (only n_D d samples per secret), and also without dual_hybrid when n d < (m - n) d, because its MATZOV cost model assumes n samples and uses m only to cap the block size; secret and error uniform on [-8, 7].",
         "- Bits are log2 of the estimated cost; 'inf' means that no number of columns gave a finite cost (every evaluation infinite or beyond 2^1000). Estimates, not proofs; see the notes in `parameters.sage`.",

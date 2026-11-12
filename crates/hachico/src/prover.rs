@@ -71,9 +71,9 @@ pub struct EvalOutput<const K: usize> {
     /// $\Pi\_{\mathsf{conv}}$'s output: the public vectors, the party's share $\langle u
     /// \rangle\_p$ (private) and $E(u)$.
     pub conv: ConvOutput<K>,
-    /// The ring-to-linear step's output: $a^\ast$, $\mathbf v$, $\mathbf c$, the record of every
-    /// attempt, and the party's shares $\langle \mathbf z' \rangle\_p$, $\lbrace \mathbf y
-    /// \rbrace\_p$ (private).
+    /// The ring-to-linear step's output: $\mathbf v$, $\mathbf c$, the sets of accepted
+    /// iterations, $j^\ast$, and the party's shares $\langle \mathbf z' \rangle\_p$,
+    /// $\lbrace \mathbf y \rbrace\_p$ (private).
     pub r2l: R2lOutput,
     /// The party's private data of the sumcheck: the table of $\langle \widetilde w \rangle\_p$,
     /// the blinders $g\_{0,p}, g\_{1,p}$, the coins and the point $\mathbf a$.
@@ -115,17 +115,19 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 /// 2. $\Pi\_{\mathsf{conv}}$ ([`hachi_co_conv::pi_conv`], line 429; $\Pi\_A$ at `c071784`): the
 ///    public vectors, $\langle u \rangle\_p$ and $E(u)$, which is the value $y$; $E(u)$ is
 ///    absorbed under [`LABEL_E_U`];
-/// 3. the ring-to-linear step with its attempts ([`hachi_co_r2l::run`], line 435), which calls
-///    `begin_attempt`, absorbs each attempt's $\mathbf v$ and draws $\mathbf c$ itself;
-///    $\mathbf M$ and $\mathbf y$ from the accepted attempt ([`linear_relation`]);
+/// 3. the ring-to-linear step with its $L$ iterations of the rejection sampling
+///    ([`hachi_co_r2l::run`], line 435; `fig:ring-to-linear` since the draft's commit `1096ea2`),
+///    which absorbs $\mathbf v$, draws $\mathbf c$ and absorbs the sets of accepted iterations
+///    itself; $\mathbf M$ and $\mathbf y$ for the selected iteration $j^\ast$
+///    ([`linear_relation`]);
 /// 4. the sumcheck ([`hachi_co_sumcheck::prove`], line 437) with the matrix of $E$ at the point
 ///    $v$ ([`e_matrix`]), which makes its own absorbs and contexts, and in which each party
 ///    commits to $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$ with `pcs` before the
 ///    coins and opens them at the end (`5_Building_Blocks.tex`:238-273, 346-350).
 ///
-/// The proof holds $E(u)$, $a^\ast$, $\mathbf v$ and the sumcheck transcript (with the base
-/// PCS's commitments and opening proofs), never $\mathbf c$ (the verifier re-derives it) nor
-/// the masks, $\boldsymbol\rho^v\_p$, $\boldsymbol\rho^u\_p$, $\mathbf z\_p$ or
+/// The proof holds $E(u)$, the sets of accepted iterations, $\mathbf v$ and the sumcheck
+/// transcript (with the base PCS's commitments and opening proofs), never $\mathbf c$ or
+/// $j^\ast$ (the verifier re-derives them) nor the masks, $\boldsymbol\rho^v\_p$, $\boldsymbol\rho^u\_p$, $\mathbf z\_p$ or
 /// $\hat{\mathbf z}$ (plan `docs/hachi-co-plan.md`, finding F5). The per-party final values
 /// reveal one evaluation $\langle \widetilde w \rangle\_p(\mathbf a)$ of each party's share
 /// polynomial, which the pad $\rho^w\_p$ masks (`5_Building_Blocks.tex`:252-256, 346-352). The
@@ -138,9 +140,10 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 /// is drawn afresh. A [`PrgRandomness`](hachi_co_core::PrgRandomness) refuses to serve a stream
 /// twice ([`RandomnessReuse`](hachi_co_core::Error::RandomnessReuse)), so reusing a source fails
 /// instead of repeating a mask.
-/// An abort of every attempt is [`hachi_co_r2l::Error::TooManyAttempts`]; the draft's Eval ends
-/// with $(\bot, \bot)$ on an abort (line 435), and under Fiat-Shamir the provers retry with fresh
-/// randomness instead (`ref/README.md`, choice 5).
+/// If no iteration is accepted by every prover the step aborts with
+/// [`hachi_co_r2l::Error::NoCommonIteration`], the draft's Eval ending with $(\bot, \bot)$ (line
+/// 435); for honest provers this has probability $(1 - M^{-n})^L$, negligible for $L = \lambda$
+/// (`5_Building_Blocks.tex`, the paragraph before `fig:ring-to-linear`).
 ///
 /// # Errors
 /// [`Error::Statement`] for a statement that does not fit the context;
@@ -170,13 +173,13 @@ pub fn eval_with<
     ch.absorb_polys(LABEL_E_U, core::slice::from_ref(&conv.e_u));
     let r2l = hachi_co_r2l::run(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
     let (transcript, private) = {
-        let rel = linear_relation(ctx, &conv.public, &r2l.v, &r2l.c, u)?;
+        let rel = linear_relation(ctx, &conv.public, &r2l.v, &r2l.c, r2l.j_star, u)?;
         let e = e_matrix(ctx, &conv.public.v_point)?;
         hachi_co_sumcheck::prove(ctx, pcs, comm, rng, ch, &rel.m, &e, &r2l.share)?
     };
     let proof = EvalProof {
         e_u: conv.e_u.clone(),
-        attempt: r2l.accepted_attempt,
+        accept_sets: r2l.accept_sets.clone(),
         v: r2l.v.clone(),
         sumcheck: transcript,
     };

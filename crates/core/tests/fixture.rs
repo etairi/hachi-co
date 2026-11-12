@@ -50,8 +50,9 @@ fn every_fixture_has_one_entry_per_party() {
         let l = Layout::new(&fx.params().unwrap()).unwrap();
         for pointer in [
             "/input/f_init_shares",
-            "/commit/reshare",
             "/commit/f_shares",
+            "/ring_to_linear/provers",
+            "/ring_to_linear/accept_sets",
             "/conv/u_shares",
             "/ring_to_linear/z_i",
             "/sumcheck/quotient_shares",
@@ -64,15 +65,24 @@ fn every_fixture_has_one_entry_per_party() {
         ] {
             assert_eq!(len(&fx, pointer), n, "{name} {pointer}");
         }
-        for i in 0..n {
-            assert_eq!(len(&fx, &format!("/commit/reshare/{i}")), n, "{name}");
-        }
-        let attempts = len(&fx, "/ring_to_linear/attempts");
-        for a in 0..attempts {
-            let pointer = format!("/ring_to_linear/attempts/{a}/provers");
-            assert_eq!(len(&fx, &pointer), n, "{name}");
-            for p in 1..=n {
-                assert_eq!(fx.usize(&format!("{pointer}/{}/prover", p - 1)).unwrap(), p);
+        // Commit has no resharing: each party's share is its input share.
+        assert_eq!(
+            fx.get("/commit/f_shares").unwrap(),
+            fx.get("/input/f_init_shares").unwrap(),
+            "{name}"
+        );
+        assert!(fx.get("/commit/reshare").is_err(), "{name}");
+        let iterations = fx.usize("/ring_to_linear/iterations").unwrap();
+        assert_eq!(iterations, l.rej_iterations, "{name}");
+        for p in 1..=n {
+            let pointer = format!("/ring_to_linear/provers/{}", p - 1);
+            assert_eq!(fx.usize(&format!("{pointer}/prover")).unwrap(), p);
+            for key in ["masks", "t0", "t0_hat", "w0", "w0_hat", "z_norms", "accept"] {
+                assert_eq!(
+                    len(&fx, &format!("{pointer}/{key}")),
+                    iterations,
+                    "{name} {key}"
+                );
             }
         }
         for r in 0..l.ell_pp {
@@ -105,9 +115,10 @@ fn every_fixture_has_one_entry_per_party() {
 }
 
 /// The oracle recorded a passing run: every relation holds, the verifier ran its
-/// $1 + 2\ell'' + 3n + 2$ checks (36, 39, 44, 47 and 61 for $n = 1, 2, 3, 4, 8$) and accepted,
-/// every negative test passed, and the seed record names the fixture's seeds
-/// (`ref/README.md`, choice 19: the first seed index with an aborted attempt).
+/// $1 + 2\ell'' + 3n + 2$ checks (36, 41, 46, 49 and 63 for $n = 1, 2, 3, 4, 8$, with
+/// $\ell'' = 15, 16, 17, 17, 18$ at $L = 16$) and accepted, every negative test passed, and the seed
+/// record names the fixture's seeds (`ref/README.md`, choice 19: the first seed index whose run
+/// selects an iteration $j^\ast > 0$).
 #[test]
 fn every_fixture_records_a_passing_run() {
     let mut counts = Vec::new();
@@ -136,11 +147,12 @@ fn every_fixture_records_a_passing_run() {
                 assert!(checks.iter().any(|(k, _)| *k == key), "{name}: {key}");
             }
         }
-        // Negative tests: 4 per party and 16 others on the transcript; 6 witnesses (3 for n = 1,
-        // which has no second party to shift shares to); 3 openings.
+        // Negative tests: 4 per party and 17 others on the transcript (one of them selects another
+        // iteration than j*); 6 witnesses (3 for n = 1, which has no second party to shift shares
+        // to); 3 openings.
         let witnesses = if n >= 2 { 7 } else { 4 };
         for (group, count) in [
-            ("transcript", 16 + 4 * n),
+            ("transcript", 17 + 4 * n),
             ("witness", witnesses),
             ("open", 6),
         ] {
@@ -155,10 +167,11 @@ fn every_fixture_records_a_passing_run() {
             "/negative_tests/rej_boundary_toy/accepted_set_smaller",
             "/negative_tests/rej_boundary_toy/within_bound_full",
             "/negative_tests/abort_rate/within_3_sigma",
+            "/negative_tests/empty_intersection/passed",
         ] {
             assert!(fx.bool(pointer).unwrap(), "{name} {pointer}");
         }
-        // Seeds: the instance is the last run tried by the selection, which has an aborted attempt.
+        // Seeds: the instance is the last run tried by the selection, which selects j* > 0.
         let instance = fx.str("/seeds/instance").unwrap();
         assert!(
             instance.starts_with(&format!("hachi-co-ref/{name}/")),
@@ -178,11 +191,14 @@ fn every_fixture_records_a_passing_run() {
             let pointer = format!("/seeds/selection/tried/{t}/all_checks_pass");
             assert!(fx.bool(&pointer).unwrap(), "{name} {pointer}");
         }
-        let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
-        assert!(accepted >= 1, "{name}: the fixture covers the retry path");
-        assert_eq!(len(&fx, "/ring_to_linear/attempts"), accepted + 1, "{name}");
+        let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+        assert!(
+            j_star >= 1,
+            "{name}: the fixture covers a rejected first iteration"
+        );
+        assert!(j_star < l.rej_iterations, "{name}");
     }
-    assert_eq!(counts, [36, 39, 44, 47, 61]);
+    assert_eq!(counts, [36, 41, 46, 49, 63]);
 }
 
 /// Changing, adding or removing any parameter of a fixture is detected and named, for every
@@ -199,7 +215,7 @@ fn parameter_cross_check_detects_every_disagreement() {
             .keys()
             .cloned()
             .collect();
-        assert_eq!(keys.len(), 46, "{name}");
+        assert_eq!(keys.len(), 48, "{name}");
         for key in &keys {
             let mut root = fx.json().clone();
             let entry = root.pointer_mut(&format!("/params/{key}")).unwrap();
@@ -266,20 +282,16 @@ fn decoders_check_types_shapes_and_residues() {
     );
     assert_eq!(fx.matrix("/setup/A").unwrap().len(), 1);
     assert_eq!(fx.exts::<4>("/input/x").unwrap().len(), 6);
-    assert_eq!(fx.ext_rows::<4>("/commit/reshare/0").unwrap().len(), 1);
+    assert_eq!(fx.exts::<4>("/commit/f_shares/0").unwrap().len(), 64);
     assert_eq!(fx.residue_rows("/conv/E_matrix").unwrap().len(), 16);
     assert_eq!(fx.residues("/setup/A").unwrap().len(), 48 * 16);
     assert_eq!(
-        fx.ints("/ring_to_linear/attempts/0/provers/0/mask")
-            .unwrap()
-            .len(),
+        fx.ints("/ring_to_linear/provers/0/masks/0").unwrap().len(),
         48 * 16
     );
-    assert_eq!(
-        fx.int_rows("/ring_to_linear/attempts/0/c").unwrap().len(),
-        4
-    );
-    assert_eq!(fx.usize("/ring_to_linear/accepted_attempt").unwrap(), 2);
+    assert_eq!(fx.int_rows("/ring_to_linear/c").unwrap().len(), 4);
+    assert_eq!(fx.usize("/ring_to_linear/iterations").unwrap(), 16);
+    assert!(fx.usize("/ring_to_linear/j_star").unwrap() >= 1);
     assert!(fx.bool("/verifier/accept").unwrap());
     // Wrong shapes and types.
     assert!(fixture_err(fx.poly("/commit/u")).contains("expected 16 residues"));
@@ -292,18 +304,15 @@ fn decoders_check_types_shapes_and_residues() {
     assert!(fixture_err(fx.ints("/conventions/indexing")).contains("integer"));
     assert!(fixture_err(fx.int_rows("/params/q")).contains("list"));
     // Masks are signed: a negative entry is neither a u64 nor a residue.
-    let mask = fx
-        .int_rows("/ring_to_linear/attempts/0/provers/0/mask")
-        .unwrap();
+    let mask = fx.int_rows("/ring_to_linear/provers/0/masks/0").unwrap();
     let (i, j) = (0..mask.len())
         .flat_map(|i| (0..mask[i].len()).map(move |j| (i, j)))
         .find(|(i, j)| mask[*i][*j] < 0)
         .expect("a mask of 768 uniform entries has a negative one");
-    let pointer = format!("/ring_to_linear/attempts/0/provers/0/mask/{i}/{j}");
+    let pointer = format!("/ring_to_linear/provers/0/masks/0/{i}/{j}");
     assert!(fixture_err(fx.u64(&pointer)).contains("non-negative integer"));
     assert!(
-        fixture_err(fx.residues("/ring_to_linear/attempts/0/provers/0/mask"))
-            .contains("not a residue")
+        fixture_err(fx.residues("/ring_to_linear/provers/0/masks/0")).contains("not a residue")
     );
     // Residues must be below q.
     let mut root = fx.json().clone();

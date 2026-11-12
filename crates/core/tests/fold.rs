@@ -53,57 +53,63 @@ fn folds_norms_rej_and_responses_match_every_fixture() {
         for st in &states {
             st.validate(l).unwrap();
         }
-        let attempts = fx
-            .get("/ring_to_linear/attempts")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .len();
-        let accepted = fx.usize("/ring_to_linear/accepted_attempt").unwrap();
+        let iterations = fx.usize("/ring_to_linear/iterations").unwrap();
+        let j_star = fx.usize("/ring_to_linear/j_star").unwrap();
+        let sets: Vec<Vec<usize>> = (0..l.n)
+            .map(|p0| {
+                let set = fx
+                    .get(&format!("/ring_to_linear/accept_sets/{p0}"))
+                    .unwrap();
+                set.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|j| j.as_u64().unwrap() as usize)
+                    .collect()
+            })
+            .collect();
+        let c = fx.int_rows("/ring_to_linear/c").unwrap();
         let mut z_sum = vec![0i64; l.width_a * l.d];
-        for a in 0..attempts {
-            let c = fx
-                .int_rows(&format!("/ring_to_linear/attempts/{a}/c"))
-                .unwrap();
-            for (st, p) in states.iter().zip(1..) {
-                let prefix = format!("/ring_to_linear/attempts/{a}/provers/{}", p - 1);
-                // fold = sum over p's blocks of c_i s_i over Z[X]/(X^d + 1).
-                let mut fold = vec![vec![0i64; l.d]; l.width_a];
-                for block in &st.blocks {
-                    let s = short::centered(&ctx.ring, &block.s).unwrap();
-                    assert!(short::inf_norm_rows(&s) <= ctx.b() / 2);
-                    let cs = short::negacyclic_mul_rows(&c[block.index], &s).unwrap();
-                    for (acc, row) in fold.iter_mut().zip(&cs) {
-                        for (x, y) in acc.iter_mut().zip(row) {
-                            *x += y;
-                        }
+        for (st, p) in states.iter().zip(1..) {
+            let prefix = format!("/ring_to_linear/provers/{}", p - 1);
+            // fold = sum over p's blocks of c_i s_i over Z[X]/(X^d + 1), once for all iterations.
+            let mut fold = vec![vec![0i64; l.d]; l.width_a];
+            for block in &st.blocks {
+                let s = short::centered(&ctx.ring, &block.s).unwrap();
+                assert!(short::inf_norm_rows(&s) <= ctx.b() / 2);
+                let cs = short::negacyclic_mul_rows(&c[block.index], &s).unwrap();
+                for (acc, row) in fold.iter_mut().zip(&cs) {
+                    for (x, y) in acc.iter_mut().zip(row) {
+                        *x += y;
                     }
                 }
-                let fold_norm = short::inf_norm_rows(&fold);
-                assert_eq!(
-                    fold_norm,
-                    fx.u64(&format!("{prefix}/fold_norm")).unwrap(),
-                    "{name}"
-                );
-                assert!(fold_norm <= beta1, "the bound of 5_Building_Blocks.tex:141");
-                let mut rng = ReplayRandomness::new(&fx, p).unwrap();
+            }
+            let fold_norm = short::inf_norm_rows(&fold);
+            assert_eq!(
+                fold_norm,
+                fx.u64(&format!("{prefix}/fold_norm")).unwrap(),
+                "{name}"
+            );
+            assert!(fold_norm <= beta1, "the bound of 5_Building_Blocks.tex:141");
+            let fold = flatten_rows(&fold);
+            let mut rng = ReplayRandomness::new(&fx, p).unwrap();
+            for j in 0..iterations {
                 let mask =
-                    PartyRandomness::<K>::mask(&mut rng, a as u64, gamma, l.width_a * l.d).unwrap();
-                let fold = flatten_rows(&fold);
+                    PartyRandomness::<K>::mask(&mut rng, j as u64, gamma, l.width_a * l.d).unwrap();
                 let z: Vec<i64> = fold.iter().zip(&mask).map(|(x, r)| x + r).collect();
                 assert_eq!(
                     short::inf_norm(&z),
-                    fx.u64(&format!("{prefix}/z_norm")).unwrap()
+                    fx.u64(&format!("{prefix}/z_norms/{j}")).unwrap()
                 );
-                let accept = fx.bool(&format!("{prefix}/accept")).unwrap();
+                let accept = fx.bool(&format!("{prefix}/accept/{j}")).unwrap();
                 assert_eq!(
                     short::inf_norm(&z) <= gamma - beta1,
                     accept,
-                    "{name} attempt {a} p {p}"
+                    "{name} iteration {j} p {p}"
                 );
+                assert_eq!(sets[p - 1].contains(&j), accept, "{name}: R_{p}");
                 let decided = rej::rej(&fold, gamma, beta1, &mask).unwrap();
                 assert_eq!(decided.is_some(), accept);
-                if a == accepted {
+                if j == j_star {
                     assert!(accept);
                     assert_eq!(
                         z,
@@ -115,6 +121,9 @@ fn folds_norms_rej_and_responses_match_every_fixture() {
                 }
             }
         }
+        // j* is the smallest iteration in every set.
+        let common = (0..iterations).find(|j| sets.iter().all(|r| r.contains(j)));
+        assert_eq!(common, Some(j_star), "{name}");
         assert_eq!(z_sum, fx.ints("/ring_to_linear/z").unwrap(), "{name}");
         assert_eq!(
             short::inf_norm(&z_sum),
