@@ -1,0 +1,41 @@
+# Secure Hachi-Co presets (family secure100, lambda = 100)
+
+Written by `parameters.sage` (Hachi-Co section); do not edit by hand. The same data, with every derived
+quantity, is in `secure100.json`, which `hachi-co-params` embeds and re-derives in its tests.
+
+- Command: `sage parameters.sage --hachi-co-only --hachi-co-lambda=100 --hachi-co-family=secure100` (run from the repository root; SageMath version 10.9, Release Date: 2026-05-04, started 2026-11-12 09:54).
+- Lattice estimator: https://github.com/malb/lattice-estimator, revision `53da5982597709ba0fdf94ea37a84d822310fd84` (an existing checkout given by LATTICE_ESTIMATOR_DIR).
+- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10), the L = lambda masks per prover in mu and in the width of D and no bound 1 + 2^(l+3) n omega^2 b on q (the parameter table of the draft's commit `1096ea2`), and the rules of `docs/m0-spec.md`.
+- Fixed choices: lambda = 100, k = 4 (kappa = 2), b = 16, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, L = lambda, n_D = 1, t = n - 1.
+- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/256 bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2(b - 1)); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207).
+- MSIS: first the trivial linear-algebra attack, rank log2(q/(2B + 1)) >= lambda, then `SIS.lattice` (infinity norm) with zeta = 0 on m' columns, minimised over m' (a grid of 1.25 to 64 times the rank, refined by ternary search), because the estimator's own search over ignored columns misses interior optima and returns infinite costs for wide matrices. MLWE: `LWE.estimate` without arora-gb and bkw (only n_D d samples per secret), and also without dual_hybrid when n d < (m - n) d, because its MATZOV cost model assumes n samples and uses m only to cap the block size; secret and error uniform on [-8, 7].
+- Bits are log2 of the estimated cost; 'inf' means that no number of columns gave a finite cost (every evaluation infinite or beyond 2^1000). Estimates, not proofs; see the notes in `parameters.sage`.
+
+| preset | l | n | d | omega | q | log2 q | delta | tau | r | m | n_A | n_B | m_u | m_v | mu | l'' | N | log2 beta | MSIS A trivial / lattice | MSIS B | MLWE (attack) | M^-n | fewer rows of A in higher bands (delta: n_A) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| secure100-l16-n2-a8 | 16 | 2 | 256 | 18 | 43414379837789 | 45.303 | 12 | 9 | 6 | 5 | 6 | 1 | 5 | 5 | 25654 | 24 | 98304 | 31.75 | 1740.8 / 100.2 | 513.1 | 144.3 (bdd) | 0.607 | 14: 5 |
+| secure100-l16-n2-a10 | 16 | 2 | 1024 | 13 | 14788965039349 | 43.750 | 11 | 9 | 5 | 4 | 2 | 1 | 3 | 3 | 9254 | 25 | 180224 | 31.16 | 100.7 / 132.5 | inf | 202.8 (bdd) | 0.607 | none |
+| secure100-l16-n4-a8 | 16 | 4 | 256 | 18 | 43414379837789 | 45.303 | 12 | 9 | 6 | 6 | 6 | 1 | 5 | 5 | 45930 | 25 | 196608 | 33.75 | 1740.8 / 100.2 | 513.1 | 144.3 (bdd) | 0.607 | 14: 5 |
+| secure100-l16-n4-a10 | 16 | 4 | 1024 | 13 | 14788965039349 | 43.750 | 11 | 9 | 5 | 5 | 2 | 1 | 3 | 3 | 17450 | 26 | 360448 | 33.16 | 100.7 / 132.5 | inf | 202.8 (bdd) | 0.607 | none |
+| secure100-l20-n2-a8 | 20 | 2 | 256 | 18 | 329216418593581 | 48.226 | 13 | 10 | 8 | 7 | 7 | 1 | 5 | 5 | 64086 | 25 | 425984 | 35.87 | 100.5 / 105.8 | 547.4 | 133.6 (bdd) | 0.607 | 14: 6 |
+| secure100-l20-n2-a10 | 20 | 2 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 7 | 6 | 2 | 1 | 3 | 3 | 19502 | 26 | 786432 | 35.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
+| secure100-l20-n4-a8 | 20 | 4 | 256 | 18 | 329216418593581 | 48.226 | 13 | 10 | 8 | 8 | 7 | 1 | 5 | 5 | 101546 | 26 | 851968 | 37.87 | 100.5 / 105.8 | 547.4 | 133.6 (bdd) | 0.607 | 14: 6 |
+| secure100-l20-n4-a10 | 20 | 4 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 7 | 7 | 2 | 1 | 3 | 3 | 34394 | 27 | 1572864 | 37.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
+| secure100-l24-n2-a8 | 24 | 2 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 10 | 9 | 7 | 1 | 5 | 5 | 215958 | 27 | 1835008 | 40.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
+| secure100-l24-n2-a10 | 24 | 2 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 9 | 8 | 2 | 1 | 3 | 3 | 64390 | 27 | 3407872 | 39.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
+| secure100-l24-n4-a8 | 24 | 4 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 10 | 10 | 7 | 1 | 5 | 5 | 317226 | 28 | 3670016 | 42.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
+| secure100-l24-n4-a10 | 24 | 4 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 9 | 9 | 2 | 1 | 3 | 3 | 108810 | 28 | 6815744 | 41.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
+| secure100-l28-n2-a8 | 28 | 2 | 256 | 19 | 88665684641314861 | 56.299 | 15 | 12 | 12 | 11 | 8 | 1 | 5 | 5 | 948622 | 29 | 7864320 | 44.15 | 105.1 / 105.4 | 642.4 | 110.8 (bdd) | 0.607 | 16: 7 |
+| secure100-l28-n2-a10 | 28 | 2 | 1024 | 14 | 65326880641120541 | 55.859 | 14 | 12 | 11 | 10 | 2 | 1 | 3 | 3 | 266462 | 30 | 14680064 | 43.61 | 104.8 / 106.1 | inf | 151.5 (bdd) | 0.607 | none |
+| secure100-l28-n4-a8 | 28 | 4 | 256 | 19 | 88665684641314861 | 56.299 | 15 | 12 | 12 | 12 | 8 | 1 | 5 | 5 | 1344282 | 30 | 15728640 | 46.15 | 105.1 / 105.4 | 642.4 | 110.8 (bdd) | 0.607 | 16: 7 |
+| secure100-l28-n4-a10 | 28 | 4 | 1024 | 14 | 65326880641120541 | 55.859 | 14 | 12 | 11 | 11 | 2 | 1 | 3 | 3 | 446906 | 30 | 29360128 | 45.61 | 104.8 / 106.1 | inf | 151.5 (bdd) | 0.607 | none |
+| secure100-l30-n2-a8 | 30 | 2 | 256 | 19 | 88665684641314861 | 56.299 | 15 | 12 | 13 | 12 | 8 | 1 | 5 | 5 | 1870222 | 30 | 15728640 | 46.15 | 105.1 / 105.4 | 642.4 | 110.8 (bdd) | 0.607 | 16: 7 |
+| secure100-l30-n2-a10 | 30 | 2 | 1024 | 14 | 65326880641120541 | 55.859 | 14 | 12 | 12 | 11 | 2 | 1 | 3 | 3 | 524510 | 31 | 29360128 | 45.61 | 104.8 / 106.1 | inf | 151.5 (bdd) | 0.607 | none |
+| secure100-l30-n4-a8 | 30 | 4 | 256 | 19 | 1998335303620206989 | 60.794 | 16 | 13 | 13 | 13 | 8 | 1 | 5 | 5 | 2941226 | 31 | 33554432 | 48.25 | 1117.3 / 100.1 | 695.4 | 101.2 (bdd) | 0.607 | none |
+| secure100-l30-n4-a10 | 30 | 4 | 1024 | 14 | 1140956584378478381 | 59.985 | 15 | 13 | 12 | 12 | 2 | 1 | 3 | 3 | 1001066 | 31 | 62914560 | 47.71 | 363.7 / 100.1 | inf | 139.5 (bdd) | 0.607 | none |
+| secure100-l16-n8-a8 | 16 | 8 | 256 | 18 | 329216418593581 | 48.226 | 13 | 10 | 7 | 6 | 7 | 1 | 5 | 5 | 104914 | 26 | 212992 | 35.87 | 100.5 / 105.8 | 547.4 | 133.6 (bdd) | 0.607 | 14: 6 |
+| secure100-l16-n8-a10 | 16 | 8 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 6 | 5 | 2 | 1 | 3 | 3 | 34994 | 27 | 393216 | 35.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
+| secure100-l20-n8-a8 | 20 | 8 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 9 | 8 | 7 | 1 | 5 | 5 | 186450 | 27 | 917504 | 40.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
+| secure100-l20-n8-a10 | 20 | 8 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 8 | 7 | 2 | 1 | 3 | 3 | 59538 | 27 | 1703936 | 39.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
+| secure100-l24-n8-a8 | 24 | 8 | 256 | 19 | 88665684641314861 | 56.299 | 15 | 12 | 11 | 10 | 8 | 1 | 5 | 5 | 568882 | 29 | 3932160 | 44.15 | 105.1 / 105.4 | 642.4 | 110.8 (bdd) | 0.607 | 16: 7 |
+| secure100-l24-n8-a10 | 24 | 8 | 1024 | 14 | 65326880641120541 | 55.859 | 14 | 12 | 10 | 9 | 2 | 1 | 3 | 3 | 162674 | 29 | 7340032 | 43.61 | 104.8 / 106.1 | inf | 151.5 (bdd) | 0.607 | none |

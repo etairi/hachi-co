@@ -1,11 +1,14 @@
 //! Named parameter sets: the toy presets of `docs/m0-spec.md` (with $n = 4, 8$ added), the
 //! development presets of `docs/m1-spec.md` (WP11) and the secure
-//! 64-bit presets that `parameters.sage` writes to `crates/params/presets/secure.json`.
+//! 64-bit presets that `parameters.sage` writes to `crates/params/presets/`.
 //!
-//! The JSON file is embedded at compile time ([`SECURE_JSON`]). Each secure entry stores the
-//! [`Choices`] (inside its [`Params`]), the parameters Sage derived from them, and the lattice
-//! estimator's results; the test `tests/secure_presets.rs` re-derives every entry in Rust and
-//! requires exact agreement.
+//! The secure presets come in families ([`SECURE_FAMILIES`]), one Sage run each at one security
+//! target: `secure-*` at $\lambda = 115$ (`secure.json`) and `secure100-*` at $\lambda = 100$
+//! (`secure100.json`), the latter for the comparison with PPP26 (ePrint 2026/729), whose
+//! implementation targets about 100 bits. The JSON files are embedded at compile time. Each
+//! secure entry stores the [`Choices`] (inside its [`Params`]), the parameters Sage derived from
+//! them, and the lattice estimator's results; the test `tests/secure_presets.rs` re-derives every
+//! entry in Rust and requires exact agreement.
 
 use crate::cascade::{Params, derive};
 use crate::choices::{ChallengeSet, Choices, Omega, PadRule, QChoice, RejIterations, TauRule};
@@ -19,6 +22,74 @@ pub const SECURE_JSON: &str = include_str!("../presets/secure.json");
 /// Hachi's parameters for the secure presets (`presets/hachi.json`, from
 /// `scripts/hachi-parameters/`).
 pub const HACHI_JSON: &str = include_str!("../presets/hachi.json");
+
+/// The contents of `crates/params/presets/secure100.json`, the family `secure100` at
+/// $\lambda = 100$, embedded at compile time.
+pub const SECURE100_JSON: &str = include_str!("../presets/secure100.json");
+
+/// Hachi's parameters for the family `secure100` (`presets/hachi100.json`).
+pub const HACHI100_JSON: &str = include_str!("../presets/hachi100.json");
+
+/// A family of secure presets: the output of one run of `parameters.sage` at one security target,
+/// with Hachi's parameters for it at the same target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SecureFamily {
+    /// The prefix of the names, `<name>-l<l>-n<n>-a<alpha>` (`--hachi-co-family`).
+    pub name: &'static str,
+    /// The security target $\lambda$ of every preset of the family (`--hachi-co-lambda`).
+    pub lambda: u32,
+    /// The file `presets/<name>.json` that `parameters.sage` wrote.
+    pub json: &'static str,
+    /// Hachi's parameters for the family, from `scripts/hachi-parameters/` at the same target.
+    pub hachi_json: &'static str,
+}
+
+/// The families of secure presets: `secure` at 115 bits, the main target, and `secure100` at 100
+/// bits.
+pub const SECURE_FAMILIES: [SecureFamily; 2] = [
+    SecureFamily {
+        name: "secure",
+        lambda: 115,
+        json: SECURE_JSON,
+        hachi_json: HACHI_JSON,
+    },
+    SecureFamily {
+        name: "secure100",
+        lambda: 100,
+        json: SECURE100_JSON,
+        hachi_json: HACHI100_JSON,
+    },
+];
+
+impl SecureFamily {
+    /// Parses the family's file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Json`] if the file does not parse (the tests parse it).
+    pub fn file(&self) -> Result<SecurePresetFile> {
+        Ok(serde_json::from_str(self.json)?)
+    }
+
+    /// The presets of the family, in the order of its file.
+    ///
+    /// # Errors
+    ///
+    /// As [`SecureFamily::file`].
+    pub fn presets(&self) -> Result<Vec<Preset>> {
+        Ok(self
+            .file()?
+            .presets
+            .into_iter()
+            .map(|e| Preset {
+                name: e.name,
+                kind: PresetKind::Secure,
+                choices: e.params.choices,
+                security: Some(e.security),
+            })
+            .collect())
+    }
+}
 
 /// Whether a preset is meant to be secure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -311,14 +382,20 @@ struct HachiFile {
     presets: std::collections::BTreeMap<String, HachiPreset>,
 }
 
-/// The entry of the preset `name` in [`HACHI_JSON`], if it has one.
+/// The entry of the preset `name` in the Hachi file of its family ([`SecureFamily::hachi_json`]),
+/// if it has one. Names are unique across the families.
 ///
 /// # Errors
 ///
-/// As [`secure_preset_file`], for the embedded [`HACHI_JSON`].
+/// As [`secure_preset_file`], for the embedded Hachi files.
 pub fn hachi_preset(name: &str) -> Result<Option<HachiPreset>> {
-    let file: HachiFile = serde_json::from_str(HACHI_JSON)?;
-    Ok(file.presets.get(name).copied())
+    for family in &SECURE_FAMILIES {
+        let file: HachiFile = serde_json::from_str(family.hachi_json)?;
+        if let Some(entry) = file.presets.get(name) {
+            return Ok(Some(*entry));
+        }
+    }
+    Ok(None)
 }
 
 /// The benchmark choices with $\ell$ variables and $n$ parties: [`toy_choices`]`(n)` with this
@@ -351,34 +428,38 @@ pub fn bench_preset(name: &str) -> Option<Preset> {
     })
 }
 
-/// Parses the embedded [`SECURE_JSON`].
+/// Parses the embedded [`SECURE_JSON`], the main family.
 ///
 /// # Errors
 ///
 /// [`Error::Json`] if the file does not parse (the tests parse it).
 pub fn secure_preset_file() -> Result<SecurePresetFile> {
-    Ok(serde_json::from_str(SECURE_JSON)?)
+    SECURE_FAMILIES[0].file()
 }
 
-/// The secure presets of `secure.json`.
+/// The secure presets of `secure.json`, the main family (115 bits).
 ///
 /// # Errors
 ///
 /// As [`secure_preset_file`].
 pub fn secure_presets() -> Result<Vec<Preset>> {
-    Ok(secure_preset_file()?
-        .presets
-        .into_iter()
-        .map(|e| Preset {
-            name: e.name,
-            kind: PresetKind::Secure,
-            choices: e.params.choices,
-            security: Some(e.security),
-        })
-        .collect())
+    SECURE_FAMILIES[0].presets()
 }
 
-/// The toy presets, then the development presets, then the secure presets.
+/// The secure presets of every family, in the order of [`SECURE_FAMILIES`].
+///
+/// # Errors
+///
+/// As [`SecureFamily::file`].
+pub fn all_secure_presets() -> Result<Vec<Preset>> {
+    let mut all = Vec::new();
+    for family in &SECURE_FAMILIES {
+        all.extend(family.presets()?);
+    }
+    Ok(all)
+}
+
+/// The toy presets, then the development presets, then the secure presets of every family.
 ///
 /// # Errors
 ///
@@ -386,7 +467,7 @@ pub fn secure_presets() -> Result<Vec<Preset>> {
 pub fn presets() -> Result<Vec<Preset>> {
     let mut all = toy_presets();
     all.extend(dev_presets());
-    all.extend(secure_presets()?);
+    all.extend(all_secure_presets()?);
     Ok(all)
 }
 

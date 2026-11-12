@@ -12,9 +12,9 @@
 //!   $\mathbf f$ and every share; in a deployment each party would hold its share from elsewhere
 //!   and the claim would be computed jointly.
 //! - The connections are plaintext TCP ([`hachi_co_mpc::TcpTransport`], "Not a secure channel").
-//! - The parameters are insecure test choices, except at the `secure-*` presets, where Hachi
-//!   takes the choices of [`HachiBase::preset_choices`]: estimates for binding and for the MLWE
-//!   rank of the masks, not proofs.
+//! - The parameters are insecure test choices, except at the secure presets (`secure-*` and
+//!   `secure100-*`), where Hachi takes the choices of [`HachiBase::preset_choices`]: estimates for
+//!   binding and for the MLWE rank of the masks, not proofs.
 //! - The suffix `-merged` on a preset name (for example `secure-l16-n2-a8-merged`) selects
 //!   Hachi's merged commitments ([`HachiBase::merged`]), an option to compare against the draft's
 //!   three commitments, which every other name uses.

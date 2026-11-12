@@ -254,6 +254,11 @@ if RUN_SINGLE_PROVER:
 # Development options:       --hachi-co-grid=l:n:alpha,...   only these (l, n, alpha)
 #                            --hachi-co-out=DIR               write the three files under DIR instead
 #                            --hachi-co-fixture-only          write only tests/fixtures/sage_cascade.json (no estimator)
+# Other families:            --hachi-co-lambda=BITS           the security target (default 115)
+#                            --hachi-co-family=NAME           the presets NAME-l<l>-n<n>-a<alpha> in presets/NAME.json and
+#                                                             presets/README-NAME.md (default secure: secure.json, README.md)
+#   The family secure100 (lambda = 100) is for the comparison with PPP26 (ePrint 2026/729), whose implementation targets
+#   about 100 bits: sage parameters.sage --hachi-co-only --hachi-co-lambda=100 --hachi-co-family=secure100
 #
 # CASCADE (6_CH:272-291; log is base 2):
 #   d = 2^alpha, k = 2^kappa, delta = ceil(log_b q), l' = ceil(log n) + l - alpha + kappa,
@@ -282,7 +287,7 @@ if RUN_SINGLE_PROVER:
 #   L ("Lambda", the draft's rule): L = lambda; {"Fixed": L} for the insecure toy, development and
 #       benchmark presets (crates/params, TOY_REJ_ITERATIONS = 16).
 #
-# SECURITY (lambda = 115 bits, k = 4, b = 16, tight tau, l1 ball, omega minimal):
+# SECURITY (lambda = HCO_LAMBDA bits, 115 by default, k = 4, b = 16, tight tau, l1 ball, omega minimal):
 #   MSIS for A (relaxed binding, 6_CH:581): rank n_A d, width delta 2^m, infinity bound
 #       2 omega_bar beta_bar = 8 omega b^tau. This bound is just below q/2 at the smallest admissible q.
 #       First the trivial linear-algebra attack that the estimator does not model: fix the free
@@ -327,7 +332,8 @@ if RUN_SINGLE_PROVER:
 import json
 import datetime
 
-HCO_LAMBDA = 115                      # security target (bits)
+HCO_LAMBDA = 115                      # security target (bits), --hachi-co-lambda
+HCO_FAMILY = "secure"                 # the presets' names and files, --hachi-co-family
 HCO_KAPPA = 2                         # k = 4
 HCO_B = 16                            # decomposition base
 HCO_ND = 1                            # height of D
@@ -349,6 +355,11 @@ for _arg in sys.argv[1:]:
         HCO_GRID = [tuple(int(v) for v in item.split(":")) for item in _arg.split("=", 1)[1].split(",")]
     elif _arg.startswith("--hachi-co-out="):
         _hco_out = os.path.abspath(_arg.split("=", 1)[1])
+    elif _arg.startswith("--hachi-co-lambda="):
+        HCO_LAMBDA = int(_arg.split("=", 1)[1])
+    elif _arg.startswith("--hachi-co-family="):
+        HCO_FAMILY = _arg.split("=", 1)[1]
+        assert HCO_FAMILY.replace("-", "").isalnum() and not HCO_FAMILY.endswith("-"), HCO_FAMILY
 
 
 # ---------------------------------------------------------------------------------------------
@@ -946,7 +957,7 @@ if RUN_COLLABORATIVE:
     _rejected = []
     _frontiers = {}
     for (_l, _n, _alpha) in HCO_GRID:
-        _name = "secure-l%d-n%d-a%d" % (_l, _n, _alpha)
+        _name = "%s-l%d-n%d-a%d" % (HCO_FAMILY, _l, _n, _alpha)
         hco_log("\n%s: l = %d, n = %d, alpha = %d (d = %d)" % (_name, _l, _n, _alpha, 2^_alpha))
         _ch = hco_choices(HCO_LAMBDA, _n, _l, _alpha, HCO_KAPPA, HCO_B, None, HCO_CHALLENGE_SET, HCO_TAU_RULE,
                           1, 1, HCO_ND, 2, HCO_ND + 1, None)
@@ -1006,7 +1017,7 @@ if RUN_COLLABORATIVE:
         "generated": _hco_started.strftime("%Y-%m-%d"),
         "presets": _presets,
     }
-    _json_path = os.path.join(_hco_out, "presets", "secure.json")
+    _json_path = os.path.join(_hco_out, "presets", "%s.json" % HCO_FAMILY)
     os.makedirs(os.path.dirname(_json_path), exist_ok=True)
     with open(_json_path, "w") as _f:
         json.dump(hco_plain(_doc), _f, indent=1)
@@ -1015,10 +1026,10 @@ if RUN_COLLABORATIVE:
 
     # The human-readable table.
     _lines = [
-        "# Secure Hachi-Co presets",
+        "# Secure Hachi-Co presets" + ("" if HCO_FAMILY == "secure" else " (family %s, lambda = %d)" % (HCO_FAMILY, HCO_LAMBDA)),
         "",
         "Written by `parameters.sage` (Hachi-Co section); do not edit by hand. The same data, with every derived",
-        "quantity, is in `secure.json`, which `hachi-co-params` embeds and re-derives in its tests.",
+        "quantity, is in `%s.json`, which `hachi-co-params` embeds and re-derives in its tests." % HCO_FAMILY,
         "",
         "- Command: `%s` (run from the repository root; %s, started %s)." % (_cmd.strip(), _sage_version, _hco_started.strftime("%Y-%m-%d %H:%M")),
         "- Lattice estimator: %s, revision `%s` (%s)." % (ESTIMATOR_REPO, _estimator_rev, "cloned into a temporary directory and removed at exit" if _estimator_tmp is not None else "an existing checkout given by LATTICE_ESTIMATOR_DIR"),
@@ -1043,7 +1054,7 @@ if RUN_COLLABORATIVE:
     if _rejected:
         _lines += ["", "Configurations without a secure preset below 2^63:", ""]
         _lines += ["- %s: %s." % (_name, _why) for (_name, _why) in _rejected]
-    _readme_path = os.path.join(_hco_out, "presets", "README.md")
+    _readme_path = os.path.join(_hco_out, "presets", "README.md" if HCO_FAMILY == "secure" else "README-%s.md" % HCO_FAMILY)
     with open(_readme_path, "w") as _f:
         _f.write("\n".join(_lines) + "\n")
     hco_log("wrote %s" % _readme_path)

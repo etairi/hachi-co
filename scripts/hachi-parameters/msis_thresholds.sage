@@ -3,7 +3,8 @@
 # The SIS wrapper is copied from parameters.sage (hco_sis_cost / hco_msis), same estimator revision
 # as crates/params/presets/secure.json (53da598...). Run: sage msis_thresholds.sage > thresholds.txt
 # Optional arguments: moduli (digits) restrict the moduli; ranks=r1,r2,... (or ranks=none) and mlwe=n1,n2,...
-# (or mlwe=none) replace the Module-SIS ranks and the MLWE secret dimensions.
+# (or mlwe=none) replace the Module-SIS ranks and the MLWE secret dimensions; targets=t1,t2,... replaces the security
+# targets in bits (default 115,128), one column each, named in the header that choose.py reads.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "lattice-estimator"))
 from estimator import *
@@ -46,12 +47,13 @@ def int_list(key, default):
     return default if v is None else ([] if v == "none" else [int(x) for x in v.split(",")])
 ranks = int_list("ranks", [256, 512, 1024, 2048, 3072, 4096])
 mlwe_dims = int_list("mlwe", [256, 512, 1024, 2048])
-print("q log2q rank | max log2(beta) with MSIS >= 115 bits | >= 128 bits")
+targets = int_list("targets", [115, 128])
+print("q log2q rank | max log2(beta) with MSIS >= %d bits" % targets[0] + "".join(" | >= %d bits" % t for t in targets[1:]))
 for q in qs:
     lq = float(log(q, 2))
     for rank in ranks:
         out = []
-        for target in (115, 128):
+        for target in targets:
             lo, hi = 1, int(floor(lq)) - 1          # search over integer log2(beta)
             if msis_bits(rank, q, 2**lo) < target:
                 out.append("none"); continue
@@ -60,7 +62,7 @@ for q in qs:
                 if msis_bits(rank, q, 2**mid) >= target: lo = mid
                 else: hi = mid - 1
             out.append(str(lo))
-        print(q, "%.1f" % lq, rank, "|", out[0], "|", out[1]); sys.stdout.flush()
+        print(q, "%.1f" % lq, rank, "|", " | ".join(out)); sys.stdout.flush()
 
 print()
 print("MLWE with Gaussian secret and error, sigma = 8: q, secret dim nu*d, samples m = n*d -> bits")

@@ -1,18 +1,18 @@
-//! Hachi's parameters for the secure presets, in `crates/params/presets/hachi.json`
-//! (`scripts/hachi-parameters/`): every secure preset has an entry, the entry builds a
-//! [`HachiBase`] whose schedules and proof sizes are the recorded ones, masks included, and `Setup`
-//! of the harness takes it. The ignored test prints what the script reads.
+//! Hachi's parameters for the secure presets, in `crates/params/presets/hachi.json` and
+//! `hachi100.json` (`scripts/hachi-parameters/`): every secure preset of every family has an
+//! entry at its family's target, the entry builds a [`HachiBase`] whose schedules and proof sizes
+//! are the recorded ones, masks included, and `Setup` of the harness takes it. The ignored test
+//! prints what the script reads.
 
 use hachi::{HachiChoices, HachiPcs, Hiding, Layout, Schedule};
 use hachi_co::HachiBase;
 use hachi_co::harness::Setup;
 use hachi_co_core::Context;
-use hachi_co_params::presets::{hachi_preset, secure_presets};
+use hachi_co_params::presets::{SECURE_FAMILIES, all_secure_presets, hachi_preset, secure_presets};
 
 const K: usize = 4;
 
-/// $\lambda$ and $\phi$ of the masks of the secure presets.
-const LAMBDA: u32 = 128;
+/// $\phi$ of the masks of the secure presets. Their $\lambda$ is the preset's.
 const PHI: u32 = 13;
 
 /// The largest height of $\mathbf A$ at the masked level that the probe tries.
@@ -28,14 +28,15 @@ const BASES: [u64; 3] = [4, 8, 16];
 /// level above what Module-SIS allows at their $q$, and $\omega = 25$ does neither.
 const OMEGAS: std::ops::RangeInclusive<u64> = 8..=32;
 
-/// The MLWE ranks of `scripts/hachi-parameters/mlwe_ranks.txt`: `(q, d, b) -> nu`.
-fn mlwe_ranks() -> std::collections::BTreeMap<(u64, usize, u64), usize> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/hachi-parameters/mlwe_ranks.txt"
+/// The MLWE ranks at `lambda` bits of `scripts/hachi-parameters/mlwe_ranks-<lambda>.txt`:
+/// `(q, d, b) -> nu`.
+fn mlwe_ranks(lambda: u32) -> std::collections::BTreeMap<(u64, usize, u64), usize> {
+    let path = format!(
+        "{}/../../scripts/hachi-parameters/mlwe_ranks-{lambda}.txt",
+        env!("CARGO_MANIFEST_DIR")
     );
-    std::fs::read_to_string(path)
-        .expect("the ranks of mlwe_ranks.sage")
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{path}, the ranks of mlwe_ranks.sage target={lambda}: {e}"))
         .lines()
         .filter(|l| !l.starts_with('#'))
         .filter_map(|l| {
@@ -86,12 +87,19 @@ fn schedule_json(s: &Schedule, delta: usize) -> String {
 /// share polynomial), `"masked-g0"` and `"masked-g1"`.
 ///
 /// The candidates are every base in [`BASES`], every radius in [`OMEGAS`] and every height up to
-/// 8 rows (`-a8`) or 6 (`-a10`).
+/// 8 rows (`-a8`) or 6 (`-a10`). The family is `HACHI_PROBE_FAMILY` (default `secure`), and the
+/// masks and MLWE ranks are at the family's $\lambda$.
 #[test]
 #[ignore = "a probe: run with --ignored --nocapture"]
 fn hachi_layouts() {
-    let ranks = mlwe_ranks();
-    for preset in secure_presets().unwrap() {
+    let name = std::env::var("HACHI_PROBE_FAMILY").unwrap_or_else(|_| "secure".to_owned());
+    let family = SECURE_FAMILIES
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("HACHI_PROBE_FAMILY={name} is not a family"));
+    let ranks = mlwe_ranks(family.lambda);
+    for preset in family.presets().unwrap() {
+        assert_eq!(preset.choices.lambda, family.lambda, "{}", preset.name);
         let (params, _) = preset.derive().unwrap();
         // Up to 8 rows at d = 256, so that n_A d reaches 2048 as at d = 1024 with n_A = 2.
         let max_n_a = if preset.name.ends_with("-a8") { 8 } else { 6 };
@@ -145,7 +153,7 @@ fn hachi_layouts() {
                         let hiding = Hiding {
                             nu,
                             n_a: n_a0,
-                            lambda: LAMBDA,
+                            lambda: family.lambda,
                             phi: PHI,
                         };
                         let choices = HachiChoices {
@@ -214,9 +222,31 @@ fn context_free_pcs(q: u64, d: usize, name: &str) -> HachiPcs<K> {
     HachiPcs::new(q, choices).unwrap()
 }
 
+/// Each family's Hachi file is chosen at the family's target, and its masks at the preset's
+/// $\lambda$.
+#[test]
+fn every_hachi_file_targets_its_family() {
+    for family in &SECURE_FAMILIES {
+        let file: serde_json::Value = serde_json::from_str(family.hachi_json).unwrap();
+        assert_eq!(
+            file["target_bits"],
+            u64::from(family.lambda),
+            "the Hachi file of {} (run choose.py --target {})",
+            family.name,
+            family.lambda
+        );
+    }
+    for preset in all_secure_presets().unwrap() {
+        let entry = hachi_preset(&preset.name).unwrap().expect("an entry");
+        if let Some(h) = entry.hiding {
+            assert_eq!(h.lambda, preset.choices.lambda, "{}", preset.name);
+        }
+    }
+}
+
 #[test]
 fn every_secure_preset_has_hachi_parameters_of_the_recorded_sizes() {
-    for preset in secure_presets().unwrap() {
+    for preset in all_secure_presets().unwrap() {
         let (params, _) = preset.derive().unwrap();
         let (q, d, vars) = (params.q, params.d as usize, params.ell_dprime as usize);
         let pcs = context_free_pcs(q, d, &preset.name);

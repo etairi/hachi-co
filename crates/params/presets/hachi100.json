@@ -1,0 +1,604 @@
+{
+ "estimator_revision": "53da5982597709ba0fdf94ea37a84d822310fd84",
+ "presets": {
+  "secure100-l16-n2-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 13,
+   "proof_words": {
+    "g0": 36799,
+    "g1": 36799,
+    "w": 80405
+   }
+  },
+  "secure100-l16-n2-a8": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 7,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 3,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 36652,
+    "g1": 18323,
+    "w": 40872
+   }
+  },
+  "secure100-l16-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 4,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 13,
+   "proof_words": {
+    "g0": 69630,
+    "g1": 36799,
+    "w": 80468
+   }
+  },
+  "secure100-l16-n4-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 7,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52225,
+    "g1": 13813,
+    "w": 55450
+   }
+  },
+  "secure100-l16-n8-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70001,
+    "g1": 37164,
+    "w": 81824
+   }
+  },
+  "secure100-l16-n8-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52425,
+    "g1": 13912,
+    "w": 57555
+   }
+  },
+  "secure100-l20-n2-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 3,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 13,
+   "proof_words": {
+    "g0": 70001,
+    "g1": 37164,
+    "w": 81824
+   }
+  },
+  "secure100-l20-n2-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52425,
+    "g1": 13912,
+    "w": 55860
+   }
+  },
+  "secure100-l20-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70001,
+    "g1": 37164,
+    "w": 81824
+   }
+  },
+  "secure100-l20-n4-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52425,
+    "g1": 13912,
+    "w": 57555
+   }
+  },
+  "secure100-l20-n8-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70373,
+    "g1": 37530,
+    "w": 83181
+   }
+  },
+  "secure100-l20-n8-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52758,
+    "g1": 14077,
+    "w": 56594
+   }
+  },
+  "secure100-l24-n2-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70373,
+    "g1": 37530,
+    "w": 83181
+   }
+  },
+  "secure100-l24-n2-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52758,
+    "g1": 14077,
+    "w": 56594
+   }
+  },
+  "secure100-l24-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70373,
+    "g1": 37530,
+    "w": 87475
+   }
+  },
+  "secure100-l24-n4-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52758,
+    "g1": 14077,
+    "w": 58462
+   }
+  },
+  "secure100-l24-n8-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70744,
+    "g1": 37896,
+    "w": 150395
+   }
+  },
+  "secure100-l24-n8-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 9,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52958,
+    "g1": 26518,
+    "w": 59032
+   }
+  },
+  "secure100-l28-n2-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70744,
+    "g1": 37896,
+    "w": 150556
+   }
+  },
+  "secure100-l28-n2-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 6,
+    "nu": 9,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52958,
+    "g1": 26518,
+    "w": 59032
+   }
+  },
+  "secure100-l28-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70744,
+    "g1": 37896,
+    "w": 150556
+   }
+  },
+  "secure100-l28-n4-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 7,
+    "nu": 9,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52958,
+    "g1": 26518,
+    "w": 59032
+   }
+  },
+  "secure100-l30-n2-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 70744,
+    "g1": 37896,
+    "w": 150556
+   }
+  },
+  "secure100-l30-n2-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 7,
+    "nu": 9,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 52958,
+    "g1": 26518,
+    "w": 59032
+   }
+  },
+  "secure100-l30-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 2,
+    "nu": 3,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 14,
+   "proof_words": {
+    "g0": 71116,
+    "g1": 38262,
+    "w": 151947
+   }
+  },
+  "secure100-l30-n4-a8": {
+   "b": 16,
+   "hiding": {
+    "lambda": 100,
+    "n_a": 7,
+    "nu": 9,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 3,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 2,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 19,
+   "proof_words": {
+    "g0": 40494,
+    "g1": 18953,
+    "w": 46615
+   }
+  }
+ },
+ "target_bits": 100
+}

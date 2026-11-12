@@ -1,9 +1,12 @@
-//! The secure presets of `presets/secure.json` (written by `parameters.sage`): Rust re-derives
-//! every preset from its choices and must reproduce every value Sage derived, every condition of
-//! the report must hold, and the recorded estimates must be consistent with the parameters and
-//! reach the target.
+//! The secure presets of every family (`presets/secure.json`, `presets/secure100.json`, written
+//! by `parameters.sage`): Rust re-derives every preset from its choices and must reproduce every
+//! value Sage derived, every condition of the report must hold, and the recorded estimates must
+//! be consistent with the parameters and reach the family's target.
 
-use hachi_co_params::presets::{SecurePresetFile, secure_preset_file, secure_presets};
+use hachi_co_params::presets::{
+    SECURE_FAMILIES, SecureFamily, SecurePresetFile, all_secure_presets, secure_preset_file,
+    secure_presets,
+};
 use hachi_co_params::{
     ChallengeSet, Omega, Params, PresetKind, QChoice, RejIterations, TauRule, derive, presets,
 };
@@ -22,13 +25,42 @@ fn assert_same_params(expected: &Params, got: &Params, what: &str) {
     assert_eq!(&expected, got, "{what}");
 }
 
-fn file() -> SecurePresetFile {
-    secure_preset_file().expect("secure.json parses")
+fn file(family: &SecureFamily) -> SecurePresetFile {
+    family
+        .file()
+        .unwrap_or_else(|e| panic!("{}.json parses: {e}", family.name))
+}
+
+/// Every entry of every family, with its family.
+fn entries() -> Vec<(SecureFamily, hachi_co_params::presets::SecurePresetEntry)> {
+    SECURE_FAMILIES
+        .iter()
+        .flat_map(|family| file(family).presets.into_iter().map(|e| (*family, e)))
+        .collect()
+}
+
+#[test]
+fn the_main_family_is_secure_json() {
+    assert_eq!(secure_preset_file().unwrap(), file(&SECURE_FAMILIES[0]));
+    assert_eq!(SECURE_FAMILIES[0].name, "secure");
+    let names: Vec<_> = SECURE_FAMILIES.iter().map(|f| f.name).collect();
+    assert_eq!(names, ["secure", "secure100"]);
 }
 
 #[test]
 fn the_file_records_its_provenance() {
-    let f = file();
+    for family in &SECURE_FAMILIES {
+        provenance(family);
+    }
+}
+
+fn provenance(family: &SecureFamily) {
+    let f = file(family);
+    assert!(
+        !f.generator.starts_with("PLACEHOLDER"),
+        "{}.json is a placeholder: install the output of parameters.sage",
+        family.name
+    );
     assert_eq!(f.format, 1);
     assert!(
         f.command.starts_with("sage parameters.sage"),
@@ -43,6 +75,13 @@ fn the_file_records_its_provenance() {
     assert_eq!(f.estimator.revision.len(), 40);
     assert!(f.estimator.revision.chars().all(|c| c.is_ascii_hexdigit()));
     assert!(
+        f.command
+            .contains(&format!("--hachi-co-family={}", family.name))
+            == (family.name != "secure"),
+        "{}",
+        f.command
+    );
+    assert!(
         !f.presets.is_empty(),
         "no secure presets: run parameters.sage"
     );
@@ -50,7 +89,7 @@ fn the_file_records_its_provenance() {
 
 #[test]
 fn rust_reproduces_every_secure_preset_exactly() {
-    for e in file().presets {
+    for (_, e) in entries() {
         let (p, report) =
             derive(&e.params.choices).unwrap_or_else(|err| panic!("{}: {err}", e.name));
         assert_same_params(&e.params, &p, &e.name);
@@ -60,7 +99,7 @@ fn rust_reproduces_every_secure_preset_exactly() {
 
 #[test]
 fn secure_presets_have_the_documented_choices() {
-    for e in file().presets {
+    for (family, e) in entries() {
         let c = e.params.choices;
         let p = &e.params;
         assert_eq!(
@@ -74,7 +113,7 @@ fn secure_presets_have_the_documented_choices() {
                 c.n_d
             ),
             (
-                115,
+                family.lambda,
                 2,
                 16,
                 TauRule::Tight,
@@ -90,14 +129,18 @@ fn secure_presets_have_the_documented_choices() {
         assert_eq!(c.t, c.n - 1, "{}", e.name);
         assert_eq!(c.rej_iterations, RejIterations::Lambda, "{}", e.name);
         assert_eq!(p.rej_iterations, u64::from(c.lambda), "{}", e.name);
-        assert_eq!(e.name, format!("secure-l{}-n{}-a{}", c.ell, c.n, c.alpha));
+        assert_eq!(
+            e.name,
+            format!("{}-l{}-n{}-a{}", family.name, c.ell, c.n, c.alpha)
+        );
     }
 }
 
 #[test]
 fn estimates_are_consistent_and_reach_the_target() {
-    for e in file().presets {
+    for (family, e) in entries() {
         let (p, s, c) = (&e.params, &e.security, &e.params.choices);
+        assert_eq!(s.lambda, family.lambda, "{}", e.name);
         let name = &e.name;
         assert_eq!(s.lambda, c.lambda, "{name}");
         let target = f64::from(s.lambda);
@@ -160,7 +203,11 @@ fn estimates_are_consistent_and_reach_the_target() {
 #[test]
 fn presets_lists_toys_then_dev_then_secure_presets() {
     let all = presets().unwrap();
-    let secure = secure_presets().unwrap();
+    let secure = all_secure_presets().unwrap();
+    assert_eq!(
+        secure[..secure_presets().unwrap().len()],
+        secure_presets().unwrap()[..]
+    );
     // Five toys (n = 1, 2, 3, 4, 8) and three development presets.
     assert_eq!(all.len(), 5 + 3 + secure.len());
     assert!(
@@ -189,7 +236,7 @@ fn presets_lists_toys_then_dev_then_secure_presets() {
 
 #[test]
 fn params_round_trip_through_serde() {
-    for e in file().presets {
+    for (_, e) in entries() {
         let text = serde_json::to_string(&e.params).unwrap();
         let back: Params = serde_json::from_str(&text).unwrap();
         assert_eq!(back, e.params, "{}", e.name);

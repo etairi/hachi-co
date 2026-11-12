@@ -6,8 +6,10 @@
 # digits as secret and error, and m = 2 n samples. A commitment gives the attacker n_A d samples per secret, which is
 # fewer, so m = 2 n is conservative. These are estimates, not proofs.
 #
-# Run from a directory holding this script and lattice-estimator at the revision of secure.json:
-#   sage mlwe_ranks.sage [secure.json] > mlwe_ranks.txt
+# Run from a directory holding this script and lattice-estimator at the revision of secure.json, with the family's
+# file and its lambda as the target (the probe reads mlwe_ranks-<target>.txt):
+#   sage mlwe_ranks.sage [secure.json] [target=115] > mlwe_ranks-115.txt
+#   sage mlwe_ranks.sage secure100.json target=100 > mlwe_ranks-100.txt
 import json
 import os
 import sys
@@ -15,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "lattice-estimator"))
 from estimator import *
 
-TARGET = 128
+TARGET = int(next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("target=")), "128"))
 BASES = [4, 8, 16]
 MAX_NU = 32
 
@@ -33,8 +35,8 @@ def bits(q, d, b, nu):
     return min(float(log(c["rop"], 2)) for c in res.values())
 
 
-path = sys.argv[1] if len(sys.argv) > 1 else "secure.json"
-print("# q d b nu bits")
+path = next((a for a in sys.argv[1:] if "=" not in a), "secure.json")
+print("# q d b nu bits (least nu with at least %d bits)" % TARGET)
 for q, d in pairs(path):
     for b in BASES:
         for nu in range(1, MAX_NU + 1):

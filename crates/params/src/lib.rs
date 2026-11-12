@@ -6,7 +6,7 @@
 //! | [`Choices`] | $\lambda, n, t, \ell, \alpha, \kappa, b, \omega$, the challenge set, the $\tau$ rule, the number $L$ of rejection iterations, $n_A, n_B, n_D, m_u, m_v$, $q$ | 6_Collaborative_Hachi.tex:265-275; `fig:parameters` for $L$ |
 //! | [`derive`](fn@crate::derive) | every derived quantity, exactly ([`Params`]) | 6_Collaborative_Hachi.tex:267-292 |
 //! | [`Report`] | each condition, whether it holds, and its [`Severity`] | 6_Collaborative_Hachi.tex:271-279, 4_preliminaries.tex:73, 100 |
-//! | [`presets`](mod@presets) | the toy presets, the development presets and the secure presets of `presets/secure.json` | `docs/m0-spec.md`; `docs/m1-spec.md`, WP11 |
+//! | [`presets`](mod@presets) | the toy presets, the development presets and the secure presets of `presets/secure.json` (115 bits) and `presets/secure100.json` (100 bits) | `docs/m0-spec.md`; `docs/m1-spec.md`, WP11 |
 //! | [`rules`] | integer logarithms, the $\tau$ rules, primality, $\lvert C \rvert$, $M \le e^{1/n}$ | — |
 //! | [`sizes`](fn@crate::sizes), [`sizes_with_base`] | the byte size of the Eval proof's encoding, per component ([`ProofSizes`]), with the base PCS's items ([`BasePcsWords`]) | `docs/m1-spec.md`, WP11 |
 //!

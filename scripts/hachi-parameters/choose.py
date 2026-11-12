@@ -6,8 +6,13 @@ Inputs:
   object (the share polynomial <w~>_p over F_{q^k} and the blinders g0, g1, each without masks and with them, as the
   objects masked, masked-g0 and masked-g1) and candidate choices (b, omega, n_A; n_B = n_D = 1; with masks also the
   height n_A0 of level 0 and the MLWE rank nu of mlwe_ranks.txt), the automatic schedule and the proof's words;
-- thresholds.txt, from msis_thresholds.sage: the largest integer log2(beta) with infinity-norm Module-SIS at least
-  115 / 128 bits hard, per modulus q and rank n d (lattice estimator 53da598, SIS.lattice).
+- thresholds.txt (or the files given by --thresholds), from msis_thresholds.sage: the largest integer log2(beta) with
+  infinity-norm Module-SIS at least as hard as each target of the file's header, per modulus q and rank n d (lattice
+  estimator 53da598, SIS.lattice).
+
+Usage: python3 choose.py <layouts.jsonl> --target BITS [--thresholds FILE ...] > hachi.json. The target is the
+family's lambda (115 for secure.json, 100 for secure100.json): the knowledge-error target, the Module-SIS column, and
+the lambda of the masks, which the layouts must have been probed with (HACHI_PROBE_FAMILY).
 
 Output: crates/params/presets/hachi.json. Hachi-Co's base PCS is one Hachi instance, so one choice serves all three
 objects: per preset, among the choices where all three pass, the one with the smallest sum of proof words. A choice
@@ -27,14 +32,16 @@ A rank missing from the table is read at the largest tabulated rank below it (co
 with the rank). A tabulated value equal to the search's cap, floor(log2 q) - 1, means "at least that" (conservative
 too). These are estimates, not proofs. The MLWE rank is an estimate too (mlwe_ranks.sage).
 """
+import argparse
 import json
 import math
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-LAMBDA = 128
+LAMBDA = None    # the target, set by --target
 PHI = 13
 OBJECTS = ("share", "g0", "g1")
 MASKED = {"masked": "share", "masked-g0": "g0", "masked-g1": "g1"}
@@ -50,19 +57,30 @@ def ball_bits(d, omega):
     return math.log2(total)
 
 
-def thresholds():
+def thresholds(paths, target):
+    """(q, rank) -> the largest log2(beta) at `target` bits (None for "none"), from every file in `paths`. A file's
+    header names its targets ("... >= 115 bits | >= 128 bits"), one column each; a file without `target` adds
+    nothing."""
     thr = {}
-    for line in (HERE / "thresholds.txt").read_text().splitlines():
-        parts = line.split()
-        if len(parts) == 7 and parts[3] == "|" and parts[0].isdigit():
-            q, rank = int(parts[0]), int(parts[2])
-            thr[(q, rank)] = tuple(None if v == "none" else int(v) for v in (parts[4], parts[6]))
+    for path in paths:
+        targets = None
+        for line in Path(path).read_text().splitlines():
+            if targets is None and re.search(r">=\s*\d+\s*bits", line):
+                targets = [int(t) for t in re.findall(r">=\s*(\d+)\s*bits", line)]
+                continue
+            fields = [f.strip() for f in line.split("|")]
+            head = fields[0].split()
+            if targets is None or len(head) != 3 or not head[0].isdigit() or len(fields) != 1 + len(targets):
+                continue
+            if target in targets:
+                v = fields[1 + targets.index(target)]
+                thr[(int(head[0]), int(head[2]))] = None if v == "none" else int(v)
     return thr
 
 
 def max_norm_log2(thr, q, rank):
     ranks = sorted(r for (qq, r) in thr if qq == q and r <= rank)
-    return thr[(q, ranks[-1])][1] if ranks else None
+    return thr[(q, ranks[-1])] if ranks else None
 
 
 def failure(cfg, thr):
@@ -91,8 +109,18 @@ def failure(cfg, thr):
 
 
 def main():
-    layouts = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "layouts.jsonl"
-    thr = thresholds()
+    global LAMBDA
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("layouts", type=Path)
+    ap.add_argument("--target", type=int, required=True, help="the family's lambda in bits")
+    ap.add_argument("--thresholds", type=Path, action="append",
+                    help="threshold files (default thresholds.txt next to this script)")
+    args = ap.parse_args()
+    LAMBDA = args.target
+    layouts = args.layouts
+    thr = thresholds(args.thresholds or [HERE / "thresholds.txt"], LAMBDA)
+    if not thr:
+        raise SystemExit(f"no Module-SIS thresholds at {LAMBDA} bits in {args.thresholds or ['thresholds.txt']}")
     rows = [json.loads(line) for line in layouts.read_text().splitlines() if line.startswith("{")]
     groups = defaultdict(dict)
     masked = defaultdict(dict)

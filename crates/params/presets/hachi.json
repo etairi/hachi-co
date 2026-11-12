@@ -3,26 +3,32 @@
  "presets": {
   "secure-l16-n2-a10": {
    "b": 16,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 8,
+    "nu": 2,
+    "phi": 13
+   },
    "iterations": {
-    "g0": 0,
-    "g1": 0,
+    "g0": 1,
+    "g1": 1,
     "w": 4
    },
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 17,
+   "omega": 15,
    "proof_words": {
-    "g0": 3525,
-    "g1": 1413,
-    "w": 80274
+    "g0": 69630,
+    "g1": 69630,
+    "w": 80468
    }
   },
   "secure-l16-n2-a8": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 8,
     "phi": 13
    },
@@ -34,7 +40,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 52159,
     "g1": 13780,
@@ -51,7 +57,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 3525,
     "g1": 1413,
@@ -61,8 +67,8 @@
   "secure-l16-n4-a8": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 8,
     "phi": 13
    },
@@ -74,7 +80,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 52159,
     "g1": 13780,
@@ -84,9 +90,9 @@
   "secure-l16-n8-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
-    "n_a": 3,
-    "nu": 3,
+    "lambda": 115,
+    "n_a": 2,
+    "nu": 2,
     "phi": 13
    },
    "iterations": {
@@ -97,19 +103,19 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 102334,
-    "g1": 53137,
+    "g1": 28516,
     "w": 112588
    }
   },
   "secure-l16-n8-a8": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 8,
-    "nu": 9,
+    "nu": 8,
     "phi": 13
    },
    "iterations": {
@@ -120,7 +126,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 52425,
     "g1": 26246,
@@ -128,34 +134,34 @@
    }
   },
   "secure-l20-n2-a10": {
-   "b": 8,
+   "b": 16,
    "hiding": {
-    "lambda": 128,
-    "n_a": 2,
-    "nu": 3,
+    "lambda": 115,
+    "n_a": 3,
+    "nu": 2,
     "phi": 13
    },
    "iterations": {
     "g0": 1,
     "g1": 1,
-    "w": 4
+    "w": 5
    },
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
-    "g0": 53137,
-    "g1": 28516,
-    "w": 112543
+    "g0": 70001,
+    "g1": 37164,
+    "w": 85719
    }
   },
   "secure-l20-n2-a8": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 8,
-    "nu": 9,
+    "nu": 8,
     "phi": 13
    },
    "iterations": {
@@ -166,7 +172,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 52425,
     "g1": 26246,
@@ -176,9 +182,9 @@
   "secure-l20-n4-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
-    "n_a": 3,
-    "nu": 3,
+    "lambda": 115,
+    "n_a": 2,
+    "nu": 2,
     "phi": 13
    },
    "iterations": {
@@ -189,19 +195,19 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 102334,
-    "g1": 53137,
+    "g1": 28516,
     "w": 112588
    }
   },
   "secure-l20-n4-a8": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 8,
-    "nu": 9,
+    "nu": 8,
     "phi": 13
    },
    "iterations": {
@@ -212,7 +218,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 52425,
     "g1": 26246,
@@ -222,7 +228,7 @@
   "secure-l20-n8-a10": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -235,7 +241,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 70373,
     "g1": 37530,
@@ -245,8 +251,8 @@
   "secure-l20-n8-a8": {
    "b": 4,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 10,
     "phi": 13
    },
@@ -258,7 +264,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 68663,
     "g1": 17968,
@@ -268,7 +274,7 @@
   "secure-l24-n2-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -281,7 +287,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 102754,
     "g1": 53552,
@@ -291,8 +297,8 @@
   "secure-l24-n2-a8": {
    "b": 4,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 10,
     "phi": 13
    },
@@ -304,7 +310,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 68663,
     "g1": 17968,
@@ -314,7 +320,7 @@
   "secure-l24-n4-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -327,7 +333,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 102754,
     "g1": 53552,
@@ -337,8 +343,8 @@
   "secure-l24-n4-a8": {
    "b": 4,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 10,
     "phi": 13
    },
@@ -350,7 +356,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 68663,
     "g1": 17968,
@@ -360,7 +366,7 @@
   "secure-l24-n8-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -373,7 +379,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 103089,
     "g1": 53883,
@@ -383,9 +389,9 @@
   "secure-l24-n8-a8": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
-    "nu": 10,
+    "lambda": 115,
+    "n_a": 7,
+    "nu": 9,
     "phi": 13
    },
    "iterations": {
@@ -396,7 +402,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 68101,
     "g1": 18785,
@@ -406,7 +412,7 @@
   "secure-l28-n2-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -419,7 +425,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 103089,
     "g1": 53883,
@@ -429,9 +435,9 @@
   "secure-l28-n2-a8": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
-    "nu": 10,
+    "lambda": 115,
+    "n_a": 7,
+    "nu": 9,
     "phi": 13
    },
    "iterations": {
@@ -442,7 +448,7 @@
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
     "g0": 68101,
     "g1": 18785,
@@ -452,7 +458,7 @@
   "secure-l28-n4-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -465,7 +471,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 103089,
     "g1": 53883,
@@ -475,30 +481,30 @@
   "secure-l28-n4-a8": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
-    "n_a": 12,
-    "nu": 10,
+    "lambda": 115,
+    "n_a": 8,
+    "nu": 9,
     "phi": 13
    },
    "iterations": {
-    "g0": 2,
+    "g0": 1,
     "g1": 1,
     "w": 5
    },
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
-    "g0": 70511,
-    "g1": 35251,
+    "g0": 68101,
+    "g1": 18785,
     "w": 78722
    }
   },
   "secure-l30-n2-a10": {
    "b": 8,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -511,7 +517,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 103089,
     "g1": 53883,
@@ -521,30 +527,30 @@
   "secure-l30-n2-a8": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
-    "n_a": 12,
-    "nu": 10,
+    "lambda": 115,
+    "n_a": 8,
+    "nu": 9,
     "phi": 13
    },
    "iterations": {
-    "g0": 2,
+    "g0": 1,
     "g1": 1,
     "w": 5
    },
    "n_a": 4,
    "n_b": 1,
    "n_d": 1,
-   "omega": 25,
+   "omega": 22,
    "proof_words": {
-    "g0": 70511,
-    "g1": 35251,
+    "g0": 68101,
+    "g1": 18785,
     "w": 78722
    }
   },
   "secure-l30-n4-a10": {
    "b": 16,
    "hiding": {
-    "lambda": 128,
+    "lambda": 115,
     "n_a": 2,
     "nu": 3,
     "phi": 13
@@ -557,7 +563,7 @@
    "n_a": 1,
    "n_b": 1,
    "n_d": 1,
-   "omega": 18,
+   "omega": 16,
    "proof_words": {
     "g0": 136833,
     "g1": 38353,
@@ -565,10 +571,10 @@
    }
   },
   "secure-l30-n4-a8": {
-   "b": 16,
+   "b": 8,
    "hiding": {
-    "lambda": 128,
-    "n_a": 8,
+    "lambda": 115,
+    "n_a": 7,
     "nu": 11,
     "phi": 13
    },
@@ -577,16 +583,16 @@
     "g1": 1,
     "w": 5
    },
-   "n_a": 4,
+   "n_a": 2,
    "n_b": 1,
    "n_d": 1,
-   "omega": 26,
+   "omega": 23,
    "proof_words": {
-    "g0": 71033,
-    "g1": 19037,
-    "w": 80108
+    "g0": 53358,
+    "g1": 26722,
+    "w": 60188
    }
   }
  },
- "target_bits": 128
+ "target_bits": 115
 }
