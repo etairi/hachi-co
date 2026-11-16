@@ -51,7 +51,7 @@ pub struct R2lOutput {
 /// `u_com` and its own state, randomness and challenger replica.
 ///
 /// 1. [`owned_w`]: $w\_i$, $\hat{\mathbf w}\_i$ of the owned blocks (step 2);
-/// 2. [`sample_masks`]: the $L$ masks $\mathbf r\_p^j$, one $\boldsymbol\rho^v\_p$, and the images
+/// 2. [`sample_masks`](crate::local::sample_masks): the $L$ masks $\mathbf r\_p^j$, one $\boldsymbol\rho^v\_p$, and the images
 ///    of every mask (step 3);
 /// 3. $\mathcal F\_{\mathsf{AH}}(\mathbf D)$ on the [`d_slice`] ([`fah_d_input`],
 ///    [`Comm::fah`] with label [`COMM_FAH_D`]) gives $\mathbf v$ (step 4); $\mathbf v$ is
@@ -77,7 +77,7 @@ pub struct R2lOutput {
 /// **Choices** (the draft is silent): a received set that is malformed, or a party's own set
 /// that comes back changed, is an error ([`Error::AcceptSet`], [`Error::Protocol`]).
 ///
-/// **Secrets.** The masks are used only by [`sample_masks`] (draws and images) and [`respond`]
+/// **Secrets.** The masks are used only by [`sample_masks`](crate::local::sample_masks) (draws and images) and [`respond`]
 /// ($\mathsf{Rej}$), and are wiped right after $\mathsf{Rej}$, as are the fold and every
 /// response but that of $j^\ast$; the rest of the [`MaskSecrets`](crate::MaskSecrets) is wiped
 /// when it is dropped at the end of the step. The broadcast sets depend only on the

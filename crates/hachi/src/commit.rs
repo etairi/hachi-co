@@ -186,7 +186,7 @@ impl<const K: usize> Ctx<K> {
 
     /// The columns `columns` of [`Ctx::matrix`]`(kind, iteration, rows, cols)`, with the same
     /// entries (`hachi_co_sampling::matrix::expand_columns`), for products formed block by block.
-    /// The columns are expanded in parallel, [`EXPAND_COLUMNS`] per task: every entry has its own
+    /// The columns are expanded in parallel, `EXPAND_COLUMNS` per task: every entry has its own
     /// stream, so the entries do not depend on the split.
     ///
     /// # Errors
@@ -527,7 +527,7 @@ pub fn commit<const K: usize>(
 
 /// Commits to the message whose element $e$ of chunk $c$ is $\psi$ of the $d/K$ values of
 /// $\mathbb F_{q^K}$ in the residues `table[(c len + e) d .. (c len + e + 1) d]`
-/// ([`packed_element`], `len` the layout's chunk length), as [`commit`] does on that message,
+/// (`packed_element`, `len` the layout's chunk length), as [`commit`] does on that message,
 /// without the message: each block of the products packs the elements it reads. The committed
 /// witness has an empty message, which the caller forms when it needs it. No randomness, so
 /// `layout` is not masked.

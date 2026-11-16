@@ -136,8 +136,10 @@ impl<'a, const K: usize> MRows<'a, K> {
 
     /// Row $i$ of $\mathbf M$: $\mu - 1$ polynomials, the entries of the documentation of
     /// [`build_m`] in that row, written in the order of that list. The large blocks are written
-    /// in parallel into the zeros of the row, in place ([`Ring::scalar_mul_into`] and
-    /// [`Ring::neg_scalar_mul_into`], the residues of `scalar_mul` and `neg`), so that no ring
+    /// in parallel into the zeros of the row, in place
+    /// ([`Ring::scalar_mul_into`](hachi_co_math::Ring::scalar_mul_into) and
+    /// [`Ring::neg_scalar_mul_into`](hachi_co_math::Ring::neg_scalar_mul_into), the residues of
+    /// `scalar_mul` and `neg`), so that no ring
     /// element is allocated or freed past the row's zeros.
     ///
     /// # Errors

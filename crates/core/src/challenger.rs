@@ -242,7 +242,7 @@ impl<const K: usize> Challenger<K> for FsChallenger {
             .append_message(label.as_bytes(), &encode_polys(polys));
     }
 
-    /// The bytes of [`encode_polys`] of the rows' concatenation, formed by chunks of ring
+    /// The bytes of `encode_polys` of the rows' concatenation, formed by chunks of ring
     /// elements in parallel and hashed in order ([`Transcript::append_message_parts`]): the
     /// same state, without the copy of the matrix or of its bytes (the setup matrices at the
     /// start of every Eval).

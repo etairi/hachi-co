@@ -124,14 +124,14 @@ fn replay_and_compare(name: &str) -> Run {
         assert!(short::inf_norm(&f) <= ctx.beta1());
         let mut flags = Vec::with_capacity(iters);
         let mut rs = Vec::with_capacity(iters);
-        for j in 0..iters {
-            let candidate: Vec<i64> = f.iter().zip(&s.masks[j]).map(|(x, r)| x + r).collect();
+        for (j, mask) in s.masks[..iters].iter().enumerate() {
+            let candidate: Vec<i64> = f.iter().zip(mask).map(|(x, r)| x + r).collect();
             assert_eq!(
                 short::inf_norm(&candidate),
                 fx.u64(&pk(&format!("z_norms/{j}"))).unwrap(),
                 "{name} p={p} j={j}: z_norm"
             );
-            let response = respond(&ctx, &f, &s.masks[j]).unwrap();
+            let response = respond(&ctx, &f, mask).unwrap();
             let accept = fx.bool(&pk(&format!("accept/{j}"))).unwrap();
             assert_eq!(response.is_some(), accept, "{name} p={p} j={j}: accept");
             assert_eq!(
@@ -209,9 +209,9 @@ fn replay_and_compare(name: &str) -> Run {
             LinearShare::slice(l, &z_prime_rec, &sum.y, &u_share(&fx, p), p).unwrap(),
             "{name}: share of p = {p}"
         );
-        for pos in 0..l.u {
+        for (pos, z) in share.z_prime[..l.u].iter().enumerate() {
             if !l.in_s(p, pos) {
-                assert!(share.z_prime[pos].0.iter().all(|x| *x == 0), "{name} p={p}");
+                assert!(z.0.iter().all(|x| *x == 0), "{name} p={p}");
             }
         }
     }

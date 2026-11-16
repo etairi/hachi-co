@@ -563,7 +563,7 @@ pub struct PartyOutput {
 /// network in the tests.
 ///
 /// # Errors
-/// [`HarnessError::Protocol`] with the error of [`commit`] or [`eval`].
+/// [`HarnessError::Protocol`] with the error of [`commit`] or [`eval`](crate::prover::eval).
 pub fn prove<C: Comm>(
     setup: &Setup,
     comm: &mut C,
@@ -589,11 +589,11 @@ pub fn prove<C: Comm>(
 
 /// [`prove`] for an instance too large for memory: [`commit_streaming`] on the share of `party`
 /// for the instance seed `instance_seed` (the streams of [`Instance::share`]), with the blocks
-/// of $\mathbf f'$ in a file in `dir`, then [`eval`]. The commitment and the proof are those of
+/// of $\mathbf f'$ in a file in `dir`, then [`eval`](crate::prover::eval). The commitment and the proof are those of
 /// [`prove`].
 ///
 /// # Errors
-/// [`HarnessError::Protocol`] with the error of [`commit_streaming`] or [`eval`].
+/// [`HarnessError::Protocol`] with the error of [`commit_streaming`] or [`eval`](crate::prover::eval).
 pub fn prove_streaming<C: Comm>(
     setup: &Setup,
     comm: &mut C,

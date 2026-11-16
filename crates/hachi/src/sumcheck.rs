@@ -1080,8 +1080,8 @@ pub fn prove<const K: usize, T: ResidueTable + ?Sized>(
 /// (\tau_{0,U}, \tau_{0,L})$: `eq0.rows` $= \widetilde{eq}(\tau_{0,U}, \cdot)$ and `eq0.cols`
 /// $= \widetilde{eq}(\tau_{0,L}, \cdot)$, as an iteration forms them. Each round takes the
 /// factor $\widetilde{eq}(\tau_k, t)$ of its variable out of the range part, which it then
-/// computes at one node fewer ([`unfactor`]), and where $\tau_k \ne 0$ forms node 1 from the
-/// round's claim ([`claim_node`]) rather than computing it: the same messages, transcript and
+/// computes at one node fewer (`unfactor`), and where $\tau_k \ne 0$ forms node 1 from the
+/// round's claim (`claim_node`) rather than computing it: the same messages, transcript and
 /// point for a table of digits, an honest prover's, whose range part sums to the claims the
 /// verifier keeps (0 before the first round). For a table with other entries the rounds still
 /// match the claims, and the verifier's last check refuses the proof.
