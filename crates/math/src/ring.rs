@@ -41,6 +41,16 @@ pub struct Sparse {
     terms: Vec<(usize, u64, u64, bool)>,
 }
 
+impl Sparse {
+    /// $\Vert c \Vert_1 = \sum_j |c_j|$ over the residues of $|c_j|$ (saturating), the most that
+    /// [`Ring::add_sparse_product_signed`] changes an entry per unit of $\max_j |a_j|$.
+    pub fn l1_norm(&self) -> u64 {
+        self.terms
+            .iter()
+            .fold(0u64, |s, (_, w, _, _)| s.saturating_add(*w))
+    }
+}
+
 /// The ring $\mathcal R_q = \mathbb Z_q\[X\]/(X^d + 1)$ (draft `4_preliminaries.tex`:67) with its
 /// exact multiplication plan. Cloning is cheap (the plan is shared).
 #[derive(Clone, Debug)]
@@ -244,6 +254,39 @@ impl Ring {
         ))
     }
 
+    /// [`Ring::scalar_mul`] written into `out`: the same residues, without a new polynomial.
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless `a` and `out` have $d$ coefficients.
+    pub fn scalar_mul_into(&self, c: u64, a: &Poly, out: &mut Poly) -> Result<()> {
+        self.check(a)?;
+        self.check(out)?;
+        let q = self.modulus();
+        let w = reduce(c, q);
+        let w_shoup = shoup(w, q);
+        for (o, x) in out.0.iter_mut().zip(&a.0) {
+            *o = shoup_mul(*x, w, w_shoup, q);
+        }
+        Ok(())
+    }
+
+    /// $-ca$, [`Ring::neg`] of [`Ring::scalar_mul`], written into `out`: the same residues,
+    /// without the two new polynomials.
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless `a` and `out` have $d$ coefficients.
+    pub fn neg_scalar_mul_into(&self, c: u64, a: &Poly, out: &mut Poly) -> Result<()> {
+        self.check(a)?;
+        self.check(out)?;
+        let q = self.modulus();
+        let w = reduce(c, q);
+        let w_shoup = shoup(w, q);
+        for (o, x) in out.0.iter_mut().zip(&a.0) {
+            *o = self.zq.neg(shoup_mul(*x, w, w_shoup, q));
+        }
+        Ok(())
+    }
+
     /// $X^e \cdot a$ for any integer $e$ (taken modulo $2d$; $X^d = -1$, draft
     /// `4_preliminaries.tex`:67).
     ///
@@ -319,6 +362,23 @@ impl Ring {
         self.plan.prepare(m)
     }
 
+    /// [`Ring::prepare`] of the columns `columns` of `m`, every row cut to them, without copying
+    /// them.
+    ///
+    /// # Errors
+    /// [`Error::Length`] for polynomials without $d$ coefficients.
+    ///
+    /// # Panics
+    /// If `columns` is not within every row.
+    pub fn prepare_columns(
+        &self,
+        m: &[Vec<Poly>],
+        columns: core::ops::Range<usize>,
+    ) -> Result<Prepared> {
+        let rows: Vec<&[Poly]> = m.iter().map(|row| &row[columns.clone()]).collect();
+        self.plan.prepare(&rows)
+    }
+
     /// [`Ring::prepare`] for vectors of centered coefficients of absolute value at most `norm`,
     /// with fewer primes when they suffice ([`crate::rns`]).
     ///
@@ -350,6 +410,47 @@ impl Ring {
             .mat_vec_prepared(m, v)?
             .into_iter()
             .map(Poly)
+            .collect())
+    }
+
+    /// [`Ring::mat_vec_prepared`] of a vector given in pieces by its centered coefficients
+    /// ([`crate::rns::Plan::mat_vec_prepared_pieces`]): the same product, without a transform or a
+    /// polynomial held per entry. Sequential.
+    ///
+    /// # Errors
+    /// As [`crate::rns::Plan::mat_vec_prepared_pieces`].
+    pub fn mat_vec_prepared_pieces(
+        &self,
+        m: &Prepared,
+        pieces: impl IntoIterator<Item = core::ops::Range<usize>>,
+        fill: impl FnMut(core::ops::Range<usize>, &mut [i64]) -> Result<()>,
+    ) -> Result<Vec<Poly>> {
+        Ok(self
+            .plan
+            .mat_vec_prepared_pieces(m, pieces, fill)?
+            .into_iter()
+            .map(Poly)
+            .collect())
+    }
+
+    /// [`Ring::mat_vec_prepared_pieces`] for `vectors` vectors at once
+    /// ([`crate::rns::Plan::mat_vec_prepared_pieces_many`]): the products of vector `v` at index
+    /// `v`. Sequential.
+    ///
+    /// # Errors
+    /// As [`crate::rns::Plan::mat_vec_prepared_pieces_many`].
+    pub fn mat_vec_prepared_pieces_many(
+        &self,
+        m: &Prepared,
+        vectors: usize,
+        pieces: impl IntoIterator<Item = core::ops::Range<usize>>,
+        fill: impl FnMut(usize, core::ops::Range<usize>, &mut [i64]) -> Result<()>,
+    ) -> Result<Vec<Vec<Poly>>> {
+        Ok(self
+            .plan
+            .mat_vec_prepared_pieces_many(m, vectors, pieces, fill)?
+            .into_iter()
+            .map(|products| products.into_iter().map(Poly).collect())
             .collect())
     }
 
@@ -425,6 +526,86 @@ impl Ring {
                 }
                 for (x, out) in subtracted.iter().zip(from.iter_mut()) {
                     *out = sub_mod(*out, shoup_mul(*x, *w, *w_shoup, q), q);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `acc` $\gets$ `acc` $+ ca$ over the integers, in $\mathbb Z\[X\]/(X^d + 1)$, for $a$ given
+    /// by signed integer coefficients: the product of [`Ring::add_sparse_product`] without any
+    /// reduction, whose residues modulo $q$ it gives once `acc` is reduced ([`Ring::from_i64`]).
+    /// The caller keeps the sums within `i64`: a call changes each entry by at most
+    /// $\Vert c \Vert_1 \max_j |a_j|$ ([`Sparse::l1_norm`]).
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless both slices have $d$ entries.
+    pub fn add_sparse_product_signed(&self, acc: &mut [i64], c: &Sparse, a: &[i64]) -> Result<()> {
+        self.sparse_product_into(acc, c, a)
+    }
+
+    /// [`Ring::add_sparse_product_signed`] in `i32`, with twice the lanes of a vector register:
+    /// the same sums while they stay within `i32`, which the caller keeps (a call changes each
+    /// entry by at most $\Vert c \Vert_1 \max_j |a_j|$).
+    ///
+    /// # Errors
+    /// As [`Ring::add_sparse_product_signed`], and [`Error::Overflow`] for a weight of $c$ beyond
+    /// `i32`.
+    pub fn add_sparse_product_signed_i32(
+        &self,
+        acc: &mut [i32],
+        c: &Sparse,
+        a: &[i32],
+    ) -> Result<()> {
+        self.sparse_product_into(acc, c, a)
+    }
+
+    /// The loops of [`Ring::add_sparse_product_signed`] for an integer type `T`.
+    fn sparse_product_into<T>(&self, acc: &mut [T], c: &Sparse, a: &[T]) -> Result<()>
+    where
+        T: Copy
+            + core::ops::AddAssign
+            + core::ops::SubAssign
+            + core::ops::Mul<Output = T>
+            + TryFrom<i64>,
+    {
+        let d = self.d;
+        for len in [acc.len(), a.len()] {
+            if len != d {
+                return Err(Error::Length {
+                    expected: d,
+                    actual: len,
+                });
+            }
+        }
+        for (j, w, _, negative) in &c.terms {
+            // X^j a: a_t moves to t + j, and for t >= d - j it wraps to t + j - d, negated.
+            let (bottom, top) = acc.split_at_mut(*j);
+            let (stays, wraps) = a.split_at(d - *j);
+            if *w == 1 {
+                if *negative {
+                    for (x, out) in stays.iter().zip(top.iter_mut()) {
+                        *out -= *x;
+                    }
+                    for (x, out) in wraps.iter().zip(bottom.iter_mut()) {
+                        *out += *x;
+                    }
+                } else {
+                    for (x, out) in stays.iter().zip(top.iter_mut()) {
+                        *out += *x;
+                    }
+                    for (x, out) in wraps.iter().zip(bottom.iter_mut()) {
+                        *out -= *x;
+                    }
+                }
+            } else {
+                let s = if *negative { -(*w as i64) } else { *w as i64 };
+                let s = T::try_from(s).map_err(|_| Error::Overflow)?;
+                for (x, out) in stays.iter().zip(top.iter_mut()) {
+                    *out += s * *x;
+                }
+                for (x, out) in wraps.iter().zip(bottom.iter_mut()) {
+                    *out -= s * *x;
                 }
             }
         }

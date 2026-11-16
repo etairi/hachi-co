@@ -27,6 +27,44 @@ pub fn expand_entry(
     uniform_mod_q(&mut ShakePrg::new(seed, domain, index), q, d)
 }
 
+/// The columns `columns` of the matrix of [`expand`]: entry $(i, j)$ for $j$ in the range, at
+/// `m[i][j - columns.start]`, is [`expand_entry`]`(seed, domain, i * cols + j, d, q)`, the same
+/// entry as in the whole matrix, so that a product by the matrix can be formed block by block.
+///
+/// # Errors
+/// [`Error::InvalidParameter`] unless the range lies within `cols`; the errors of [`expand`].
+pub fn expand_columns(
+    seed: &[u8; 32],
+    domain: &[u8],
+    rows: usize,
+    cols: usize,
+    columns: core::ops::Range<usize>,
+    d: usize,
+    q: u64,
+) -> Result<Vec<Vec<Vec<u64>>>> {
+    if q == 0 {
+        return Err(Error::EmptyRange);
+    }
+    if columns.start > columns.end || columns.end > cols {
+        return Err(Error::InvalidParameter(
+            "the columns are not within the matrix",
+        ));
+    }
+    let entries = u128::from(rows as u64) * u128::from(cols as u64);
+    if entries > 1u128 << 64 {
+        return Err(Error::InvalidParameter("matrix has more than 2^64 entries"));
+    }
+    let cols64 = cols as u64;
+    (0..rows as u64)
+        .map(|i| {
+            columns
+                .clone()
+                .map(|j| expand_entry(seed, domain, i * cols64 + j as u64, d, q))
+                .collect()
+        })
+        .collect()
+}
+
 /// The `rows` $\times$ `cols` matrix over $R_q = \mathbb Z_q\[X\]/(X^d + 1)$ whose entry $(i, j)$ is
 /// [`expand_entry`]`(seed, domain, i * cols + j, d, q)`; indexed as `m[i][j][k]`, the coefficient
 /// of $X^k$ in entry $(i, j)$.

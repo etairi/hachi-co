@@ -261,6 +261,76 @@ pub fn g_inv(ring: &Ring, b: u64, delta: usize, t: &[Poly]) -> Result<Vec<Poly>>
     })
 }
 
+/// The digits of [`g_inv`] for one vector of residues, by digit: `out[k n + j]` is digit $k$
+/// (least significant first) of `x[j]`, as a signed integer, for $n$ = `x.len()` and $k < \delta$,
+/// with `scratch` ($n$ entries) holding the running values. The representative and the digits are
+/// those of [`g_inv_scalar`]: the representative fits an `i64` ($q < 2^{63}$), and for a power of
+/// two $b$ the masks and arithmetic shifts give the residues and quotients of the `i128` rule, one
+/// digit at a time across all $n$ entries, so that the loops vectorize. Other bases go entry by
+/// entry. For the folds that take the digits of a ring element once and do not keep them.
+///
+/// # Errors
+/// As [`g_inv_scalar`], and [`Error::Length`] unless `out` has $\delta n$ entries and `scratch`
+/// has $n$.
+pub fn g_inv_rows(
+    zq: &Zq,
+    b: u64,
+    delta: usize,
+    x: &[u64],
+    out: &mut [i64],
+    scratch: &mut [i64],
+) -> Result<()> {
+    let n = x.len();
+    if b < 2 {
+        return Err(Error::Parameter("decomposition base must be at least 2"));
+    }
+    if delta == 0 {
+        return Err(Error::Parameter("decomposition needs at least one digit"));
+    }
+    check_window(zq, b, delta)?;
+    if out.len() != delta * n || scratch.len() != n {
+        return Err(Error::Length {
+            expected: delta * n,
+            actual: out.len(),
+        });
+    }
+    let (_, top) = representable_range(b, delta);
+    let (top, q) = (i64::try_from(top).unwrap_or(i64::MAX), zq.modulus() as i64);
+    for (z, xj) in scratch.iter_mut().zip(x) {
+        let r = zq.reduce(*xj) as i64;
+        *z = if r <= top { r } else { r - q };
+    }
+    let (_, hi) = digit_range(b);
+    let hi = hi as i64;
+    if b.is_power_of_two() {
+        let (bb, mask, bits) = (b as i64, b as i64 - 1, b.trailing_zeros());
+        for row in out.chunks_exact_mut(n) {
+            for (digit, z) in row.iter_mut().zip(scratch.iter_mut()) {
+                // (z - a) / b = floor(z / b) + [a = r - b], without forming z - a, which leaves
+                // i64 for a representative near 2^63 and a negative digit.
+                let r = *z & mask;
+                let carry = r > hi;
+                *digit = if carry { r - bb } else { r };
+                *z = (*z >> bits) + i64::from(carry);
+            }
+        }
+        debug_assert!(
+            scratch.iter().all(|z| *z == 0),
+            "the window holds the representative"
+        );
+    } else {
+        let mut digits = vec![0i64; delta];
+        for (j, z) in scratch.iter().enumerate() {
+            let rest = balanced_digits(i128::from(*z), b, &mut digits);
+            debug_assert_eq!(rest, 0, "the window holds the representative");
+            for (k, digit) in digits.iter().enumerate() {
+                out[k * n + j] = *digit;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// $\mathbf J^{-1}\_n(\mathbf z)$ for $\mathbf z \in \mathcal R_q^n$ read as centered integers:
 /// every coefficient decomposed by [`j_inv_scalar`] with $\tau$ digits, in the layout of
 /// [`g_inv`], digits stored as residues modulo $q$ (draft `4_preliminaries.tex`:100).
@@ -291,7 +361,12 @@ fn decompose(
     let d = ring.degree();
     check_digits(b, k, &vec![0i64; k])?;
     let zq = ring.zq();
-    let mut out = vec![ring.zero(); input.len() * k];
+    // The zero ring elements of the output are allocated in parallel too (they are many).
+    let mut out: Vec<Poly> = (0..input.len() * k)
+        .into_par_iter()
+        .with_min_len(256)
+        .map(|_| ring.zero())
+        .collect();
     out.par_chunks_mut(k)
         .zip(input.par_iter())
         .try_for_each_init(

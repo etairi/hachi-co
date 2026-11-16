@@ -186,7 +186,7 @@ impl SmallCrt {
     }
 
     #[inline(always)]
-    fn reconstruct_with(&self, residue: impl Fn(usize) -> u64) -> u64 {
+    pub(crate) fn reconstruct_with(&self, residue: impl Fn(usize) -> u64) -> u64 {
         let mut digits = [0u64; MAX_PRIMES];
         let negative = self.garner.digits(residue, &mut digits);
         let mut x = 0;

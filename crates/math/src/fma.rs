@@ -161,6 +161,15 @@ impl FmaPlan {
         core::hint::select_unpredictable(c < 0, -r, r)
     }
 
+    /// The residue in $[0, p)$ of one double of absolute value below $p$, as [`FmaPlan::residues`]
+    /// gives it.
+    #[inline(always)]
+    pub(crate) fn residue(&self, x: f64) -> u64 {
+        let r = x as i64;
+        let shifted = r.wrapping_add(self.prime as i64);
+        core::hint::select_unpredictable(r < 0, shifted, r) as u64
+    }
+
     /// `a` as residues in $[0, p)$, for doubles of absolute value below $p$.
     pub(crate) fn residues(&self, a: &[f64]) -> Vec<u64> {
         a.iter()

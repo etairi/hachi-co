@@ -10,6 +10,8 @@
 //! - [`decompose`]: the balanced decompositions $\mathbf G^{-1}$, $\mathbf J^{-1}$ and their
 //!   gadgets.
 //! - [`fqk`]: $\mathbb F_{q^k} \cong \mathcal R_q^H$ in Hachi's basis (Eq. (7)).
+//! - [`montgomery`]: $\mathbb F_{q^k}$ in a working representation, canonical or Montgomery's,
+//!   for the provers' inner loops.
 //! - [`subfield`]: $\mathcal R_q^H$, $\mathrm{Tr}\_H$, $\psi$, $\psi^{-1}$ and $E$ (Hachi,
 //!   Lemma 5 and Theorem 2; draft `field-to-ring-rok.tex`).
 //!
@@ -31,6 +33,7 @@ pub mod decompose;
 pub mod error;
 pub mod fma;
 pub mod fqk;
+pub mod montgomery;
 pub mod ntt;
 pub mod ring;
 pub mod rns;

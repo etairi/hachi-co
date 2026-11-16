@@ -230,3 +230,36 @@ fn small_range_challenges_are_in_range_and_uniform() {
     println!("chi2 challenge_u64_below(6): {stat:.2} (df 5, threshold 25.7448)");
     assert!(stat < 25.7448, "chi2 = {stat}");
 }
+
+/// A message given in parts is the message of their concatenation: the same state, for splits
+/// with empty parts, a single part, no part and the empty message.
+#[test]
+fn a_message_in_parts_is_the_message() {
+    let message: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
+    for cuts in [
+        vec![],
+        vec![0],
+        vec![1000],
+        vec![1, 2, 3],
+        vec![500, 500, 999],
+        vec![168, 336],
+    ] {
+        let mut parts: Vec<&[u8]> = Vec::new();
+        let mut start = 0;
+        for &cut in &cuts {
+            parts.push(&message[start..cut.max(start)]);
+            start = cut.max(start);
+        }
+        parts.push(&message[start..]);
+        let mut whole = Transcript::new(b"parts");
+        let mut split = whole.clone();
+        whole.append_message(b"label", &message);
+        split.append_message_parts(b"label", &parts);
+        assert_eq!(split, whole, "cuts {cuts:?}");
+    }
+    let mut whole = Transcript::new(b"parts");
+    let mut split = whole.clone();
+    whole.append_message(b"label", &[]);
+    split.append_message_parts(b"label", &[]);
+    assert_eq!(split, whole, "no part");
+}

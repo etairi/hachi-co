@@ -33,6 +33,7 @@ use crate::{
     ntt::MAX_DEGREE,
 };
 use core::hint::select_unpredictable;
+use core::ops::Range;
 use crypto_bigint::{U64, U576};
 use rayon::prelude::*;
 
@@ -438,6 +439,223 @@ impl Plan {
             .collect())
     }
 
+    /// [`Plan::mat_vec_prepared`] of a vector given in pieces by its centered coefficients, without
+    /// a transform held per entry: `fill(piece, out)` writes the centered coefficients of the
+    /// entries `piece` of the vector into `out`, $n$ per entry and entry by entry, each of absolute
+    /// value at most $\lfloor q/2 \rfloor$ (and the norm of `m` when it has fewer primes). The
+    /// pieces cover the vector in order, at most [`NADDS`] entries each. Each piece is transformed
+    /// into a scratch buffer (as the transforms of [`Plan::mat_vec_prepared`], [`LANES`] entries at
+    /// a time), its
+    /// products by the columns of `m` are summed in the NTT form and brought back by the CRT, and
+    /// the pieces' sums are added modulo $q$: every piece's sum is exact, so the result is that of
+    /// [`Plan::mat_vec_prepared`] on the same vector. Sequential, for callers that run many vectors
+    /// in parallel.
+    ///
+    /// # Errors
+    /// [`Error::Length`] unless the pieces cover the rows' length in order with 1 to [`NADDS`]
+    /// entries each, or for rows of different lengths; [`Error::Overflow`] for a coefficient
+    /// above the bound of [`Plan::prepare_short`]; those of `fill`.
+    pub fn mat_vec_prepared_pieces(
+        &self,
+        m: &Prepared,
+        pieces: impl IntoIterator<Item = Range<usize>>,
+        mut fill: impl FnMut(Range<usize>, &mut [i64]) -> Result<()>,
+    ) -> Result<Vec<Vec<u64>>> {
+        let len = m.rows.first().map_or(0, Vec::len);
+        for row in &m.rows {
+            if row.len() != len {
+                return Err(Error::Length {
+                    expected: len,
+                    actual: row.len(),
+                });
+            }
+        }
+        let (n, primes) = (self.n, m.primes);
+        let short = primes < self.plans.len();
+        let mut out = vec![vec![0u64; n]; m.rows.len()];
+        let mut centered = vec![0i64; NADDS * n];
+        // Entry k of a piece, prime p, at (k primes + p) n.
+        let mut transformed = vec![0f64; NADDS * primes * n];
+        let mut lanes_buffer = vec![0f64; LANES * n];
+        let mut acc = self.zero_accumulator(primes);
+        let mut next = 0;
+        for piece in pieces {
+            let count = piece.len();
+            if piece.start != next || piece.end > len || count == 0 || count > NADDS {
+                return Err(Error::Length {
+                    expected: next,
+                    actual: piece.start,
+                });
+            }
+            let values = &mut centered[..count * n];
+            fill(piece.clone(), values)?;
+            let bound = if short { m.norm } else { self.half_q };
+            if values.iter().any(|c| c.unsigned_abs() > bound) {
+                return Err(Error::Overflow);
+            }
+            for (batch_index, batch) in values.chunks(LANES * n).enumerate() {
+                let lanes = batch.len() / n;
+                let buffer = &mut lanes_buffer[..lanes * n];
+                for (p, plan) in self.plans[..primes].iter().enumerate() {
+                    let direct = self.half_q < plan.modulus();
+                    for (lane, entry) in batch.chunks_exact(n).enumerate() {
+                        for (slot, c) in buffer[lane..].iter_mut().step_by(lanes).zip(entry) {
+                            *slot = if direct { *c as f64 } else { plan.lift(*c) };
+                        }
+                    }
+                    plan.forward(buffer, lanes);
+                    for lane in 0..lanes {
+                        let k = batch_index * LANES + lane;
+                        let to = &mut transformed[(k * primes + p) * n..][..n];
+                        for (slot, x) in to.iter_mut().zip(buffer[lane..].iter().step_by(lanes)) {
+                            *slot = *x;
+                        }
+                    }
+                }
+            }
+            for (row, sum) in m.rows.iter().zip(out.iter_mut()) {
+                for (k, x) in row[piece.clone()].iter().enumerate() {
+                    self.mac_flat(&mut acc, x, &transformed[k * primes * n..][..primes * n]);
+                }
+                self.flush_into(&mut acc, sum);
+            }
+            next = piece.end;
+        }
+        if next != len {
+            return Err(Error::Length {
+                expected: len,
+                actual: next,
+            });
+        }
+        Ok(out)
+    }
+
+    /// [`Plan::mat_vec_prepared_pieces`] for `vectors` vectors at once, given in the same pieces:
+    /// `fill(v, piece, out)` writes the entries `piece` of vector `v`. Each prepared entry of
+    /// `m` is read once per piece for all the vectors, with one accumulator per vector, so each
+    /// vector gets the products of [`Plan::mat_vec_prepared_pieces`]. Returns the products of
+    /// vector `v` at index `v`.
+    ///
+    /// # Errors
+    /// As [`Plan::mat_vec_prepared_pieces`].
+    pub fn mat_vec_prepared_pieces_many(
+        &self,
+        m: &Prepared,
+        vectors: usize,
+        pieces: impl IntoIterator<Item = Range<usize>>,
+        mut fill: impl FnMut(usize, Range<usize>, &mut [i64]) -> Result<()>,
+    ) -> Result<Vec<Vec<Vec<u64>>>> {
+        let len = m.rows.first().map_or(0, Vec::len);
+        for row in &m.rows {
+            if row.len() != len {
+                return Err(Error::Length {
+                    expected: len,
+                    actual: row.len(),
+                });
+            }
+        }
+        let (n, primes) = (self.n, m.primes);
+        let short = primes < self.plans.len();
+        let mut out = vec![vec![vec![0u64; n]; m.rows.len()]; vectors];
+        let mut centered = vec![0i64; NADDS * n];
+        // Vector v, entry k of a piece, prime p, at ((v NADDS + k) primes + p) n.
+        let mut transformed = vec![0f64; vectors * NADDS * primes * n];
+        let mut lanes_buffer = vec![0f64; LANES * n];
+        let mut accs: Vec<Accumulator> = (0..vectors)
+            .map(|_| self.zero_accumulator(primes))
+            .collect();
+        let mut next = 0;
+        for piece in pieces {
+            let count = piece.len();
+            if piece.start != next || piece.end > len || count == 0 || count > NADDS {
+                return Err(Error::Length {
+                    expected: next,
+                    actual: piece.start,
+                });
+            }
+            for v in 0..vectors {
+                let values = &mut centered[..count * n];
+                fill(v, piece.clone(), values)?;
+                let bound = if short { m.norm } else { self.half_q };
+                if values.iter().any(|c| c.unsigned_abs() > bound) {
+                    return Err(Error::Overflow);
+                }
+                for (batch_index, batch) in values.chunks(LANES * n).enumerate() {
+                    let lanes = batch.len() / n;
+                    let buffer = &mut lanes_buffer[..lanes * n];
+                    for (p, plan) in self.plans[..primes].iter().enumerate() {
+                        let direct = self.half_q < plan.modulus();
+                        for (lane, entry) in batch.chunks_exact(n).enumerate() {
+                            for (slot, c) in buffer[lane..].iter_mut().step_by(lanes).zip(entry) {
+                                *slot = if direct { *c as f64 } else { plan.lift(*c) };
+                            }
+                        }
+                        plan.forward(buffer, lanes);
+                        for lane in 0..lanes {
+                            let k = v * NADDS + batch_index * LANES + lane;
+                            let to = &mut transformed[(k * primes + p) * n..][..n];
+                            for (slot, x) in to.iter_mut().zip(buffer[lane..].iter().step_by(lanes))
+                            {
+                                *slot = *x;
+                            }
+                        }
+                    }
+                }
+            }
+            for (r, row) in m.rows.iter().enumerate() {
+                for (k, x) in row[piece.clone()].iter().enumerate() {
+                    for (v, acc) in accs.iter_mut().enumerate() {
+                        let at = (v * NADDS + k) * primes * n;
+                        self.mac_flat(acc, x, &transformed[at..][..primes * n]);
+                    }
+                }
+                for (acc, vector) in accs.iter_mut().zip(out.iter_mut()) {
+                    self.flush_into(acc, &mut vector[r]);
+                }
+            }
+            next = piece.end;
+        }
+        if next != len {
+            return Err(Error::Length {
+                expected: len,
+                actual: next,
+            });
+        }
+        Ok(out)
+    }
+
+    /// [`Plan::mac`] with `y` given as the residues of its primes side by side, $n$ each.
+    fn mac_flat(&self, acc: &mut Accumulator, x: &Residues, y: &[f64]) {
+        let n = self.n;
+        for (p, ((values, x), plan)) in acc.values.iter_mut().zip(x).zip(&self.plans).enumerate() {
+            plan.mac(values, x, &y[p * n..][..n]);
+        }
+        acc.pending += 1;
+        if acc.pending == LAZY_SUMS {
+            for (values, plan) in acc.values.iter_mut().zip(&self.plans) {
+                plan.reduce(values);
+            }
+            acc.pending = 0;
+        }
+    }
+
+    /// Adds the value of `acc` modulo $q$ to `out`, as [`Plan::flushed`] forms it (the inverse
+    /// transforms, then the CRT of each coefficient), and clears `acc`.
+    fn flush_into(&self, acc: &mut Accumulator, out: &mut [u64]) {
+        for (values, plan) in acc.values.iter_mut().zip(&self.plans) {
+            plan.inverse(values);
+        }
+        let crt = &self.crts[acc.values.len() - 1];
+        for (j, o) in out.iter_mut().enumerate() {
+            let v = crt.reconstruct_with(|i| self.plans[i].residue(acc.values[i][j]));
+            *o = add_mod(*o, v, self.q);
+        }
+        for values in &mut acc.values {
+            values.fill(0.0);
+        }
+        acc.pending = 0;
+    }
+
     /// The exact matrix-vector product $(\sum_j m_{ij} v_j)\_i$ over $\mathbb Z_q\[X\]/(X^n + 1)$,
     /// as for the commitments $\mathbf t = \mathbf A \mathbf s$ (draft
     /// `6_Collaborative_Hachi.tex`:375-381).
@@ -614,6 +832,133 @@ mod tests {
                     assert_eq!(rows[0], want, "q {q} n {n} len {len}");
                     let prepared = plan.prepare(&m).unwrap();
                     assert_eq!(plan.mat_vec_prepared(&prepared, b).unwrap(), rows);
+                }
+            }
+        }
+    }
+
+    /// [`Plan::mat_vec_prepared_pieces`] against [`Plan::mat_vec_prepared`]: full-range and
+    /// short vectors (at the largest norm of each smaller prime count, with worst-case entries),
+    /// pieces of 1, 7, [`LANES`] + 1 and [`NADDS`] entries and an irregular cover; and the
+    /// refusals (a gap, an empty or a too long piece, an incomplete cover, a coefficient above
+    /// the norm).
+    #[test]
+    fn pieces_give_the_prepared_products() {
+        let mut rng = SplitMix(9);
+        let centered = |q: u64, x: u64| -> i64 {
+            let v = x % q;
+            if v > q / 2 {
+                v as i64 - q as i64
+            } else {
+                v as i64
+            }
+        };
+        let run = |plan: &Plan, prepared: &Prepared, v: &[Vec<u64>], cover: &[Range<usize>]| {
+            let q = plan.q;
+            plan.mat_vec_prepared_pieces(prepared, cover.iter().cloned(), |piece, out| {
+                for (k, entry) in v[piece].iter().enumerate() {
+                    for (o, x) in out[k * plan.n..(k + 1) * plan.n].iter_mut().zip(entry) {
+                        *o = centered(q, *x);
+                    }
+                }
+                Ok(())
+            })
+        };
+        let covers = |len: usize| -> Vec<Vec<Range<usize>>> {
+            let even = |size: usize| -> Vec<Range<usize>> {
+                (0..len)
+                    .step_by(size)
+                    .map(|s| s..(s + size).min(len))
+                    .collect()
+            };
+            let mut irregular: Vec<Range<usize>> = core::iter::once(0..3.min(len)).collect();
+            let mut at = 3.min(len);
+            for size in [NADDS, 1, 50, NADDS - 1] {
+                if at < len {
+                    irregular.push(at..(at + size).min(len));
+                    at = (at + size).min(len);
+                }
+            }
+            while at < len {
+                irregular.push(at..(at + NADDS).min(len));
+                at = (at + NADDS).min(len);
+            }
+            vec![even(1), even(7), even(LANES + 1), even(NADDS), irregular]
+        };
+        for q in [
+            13u64,
+            4294967197,
+            34801213478789,
+            384156492036173,
+            9223372036854775549,
+        ] {
+            for (n, len) in [(4usize, 2 * NADDS + 5), (64, NADDS + 3), (256, 40)] {
+                let plan = Plan::new(q, n).unwrap();
+                let random = |rng: &mut SplitMix, rows: usize| -> Vec<Vec<Vec<u64>>> {
+                    (0..rows)
+                        .map(|_| {
+                            (0..len)
+                                .map(|_| (0..n).map(|_| rng.next() % q).collect())
+                                .collect()
+                        })
+                        .collect()
+                };
+                let m = random(&mut rng, 3);
+                let v = random(&mut rng, 1).pop().unwrap();
+                let prepared = plan.prepare(&m).unwrap();
+                let want = plan.mat_vec_prepared(&prepared, &v).unwrap();
+                for cover in covers(len) {
+                    assert_eq!(
+                        run(&plan, &prepared, &v, &cover).unwrap(),
+                        want,
+                        "q {q} n {n}"
+                    );
+                }
+                // Short vectors at the largest norm of each smaller prime count.
+                for primes in 1..plan.plans.len() {
+                    if plan.primes_for(1) > primes {
+                        continue;
+                    }
+                    let (mut low, mut high) = (0, plan.half_q);
+                    while high - low > 1 {
+                        let middle = low + (high - low) / 2;
+                        if plan.primes_for(middle) <= primes {
+                            low = middle;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    let norm = low.max(1);
+                    let short = plan.prepare_short(&m, norm).unwrap();
+                    let v: Vec<Vec<u64>> = (0..len).map(|_| extreme(q, n, norm)).collect();
+                    let want = plan.mat_vec_prepared(&short, &v).unwrap();
+                    for cover in covers(len) {
+                        assert_eq!(
+                            run(&plan, &short, &v, &cover).unwrap(),
+                            want,
+                            "q {q} norm {norm}"
+                        );
+                    }
+                    let mut above = v.clone();
+                    above[len - 1][1] = norm + 1;
+                    assert!(matches!(
+                        run(&plan, &short, &above, &covers(len)[3]),
+                        Err(Error::Overflow)
+                    ));
+                }
+                // Covers that are not covers.
+                let bad = |cover: Vec<Range<usize>>| run(&plan, &prepared, &v, &cover).is_err();
+                assert!(bad(vec![0..1, 2..len]), "a gap");
+                assert!(bad(vec![0..0, 0..len.min(NADDS)]), "an empty piece");
+                assert!(
+                    bad(core::iter::once(0..len - 1).collect()),
+                    "an incomplete cover"
+                );
+                if len > NADDS {
+                    assert!(
+                        bad(vec![0..NADDS + 1, NADDS + 1..len]),
+                        "a piece above NADDS"
+                    );
                 }
             }
         }

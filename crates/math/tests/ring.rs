@@ -345,6 +345,76 @@ fn sparse_products_equal_the_exact_product() {
     assert!(ring.add_sparse_product(&mut ok, &sparse, &short).is_err());
 }
 
+/// The sparse product over the integers, reduced afterwards, against the one in $\mathcal R_q$:
+/// two products accumulated on a signed start, with the challenges of the test above (but
+/// coefficients small enough for `i64`), small signed operands and some larger ones; and the
+/// $\ell_1$ norm.
+#[test]
+fn signed_sparse_products_reduce_to_the_products_in_the_ring() {
+    let mut rng = rng(18);
+    for q in [5u64, Q32, Q52, Q61, Q63] {
+        for d in [2usize, 16, 256] {
+            let ring = Ring::new(q, d).unwrap();
+            for round in 0..12 {
+                let mut start: Vec<i64> = (0..d).map(|_| rng.random_range(-40..40)).collect();
+                let mut narrow: Vec<i32> = start.iter().map(|x| *x as i32).collect();
+                let mut acc = ring.from_i64(&start).unwrap();
+                for _ in 0..2 {
+                    let mut c = vec![0i64; d];
+                    let weight = [0, 1, 2, d / 2, d][round % 5];
+                    for _ in 0..weight {
+                        let j = rng.random_range(0..d);
+                        c[j] = [1, -1, 2, -2, 7, -3][round % 6];
+                    }
+                    if round == 7 {
+                        c[d - 1] = 1;
+                        c[0] = -1;
+                    }
+                    let bound = if round % 3 == 0 { 1000 } else { 8 };
+                    let a: Vec<i64> = (0..d).map(|_| rng.random_range(-bound..bound)).collect();
+                    let sparse = ring.sparse(&c).unwrap();
+                    assert_eq!(
+                        sparse.l1_norm(),
+                        c.iter().map(|x| x.unsigned_abs() % q).sum::<u64>()
+                    );
+                    ring.add_sparse_product_signed(&mut start, &sparse, &a)
+                        .unwrap();
+                    let a32: Vec<i32> = a.iter().map(|x| *x as i32).collect();
+                    ring.add_sparse_product_signed_i32(&mut narrow, &sparse, &a32)
+                        .unwrap();
+                    ring.add_sparse_product(&mut acc, &sparse, &ring.from_i64(&a).unwrap())
+                        .unwrap();
+                }
+                assert_eq!(
+                    ring.from_i64(&start).unwrap(),
+                    acc,
+                    "q {q} d {d} round {round}"
+                );
+                // The sums stay far within i32 here, so the 32-bit form has the same integers.
+                assert_eq!(
+                    narrow.iter().map(|x| i64::from(*x)).collect::<Vec<_>>(),
+                    start,
+                    "q {q} d {d} round {round}, i32"
+                );
+            }
+        }
+    }
+    let ring = Ring::new(Q32, 16).unwrap();
+    let sparse = ring.sparse(&[0; 16]).unwrap();
+    assert!(
+        ring.add_sparse_product_signed(&mut [0; 15], &sparse, &[0; 16])
+            .is_err()
+    );
+    assert!(
+        ring.add_sparse_product_signed(&mut [0; 16], &sparse, &[0; 15])
+            .is_err()
+    );
+    assert!(
+        ring.add_sparse_product_signed_i32(&mut [0; 15], &sparse, &[0; 16])
+            .is_err()
+    );
+}
+
 #[test]
 fn invalid_rings_and_shapes_are_rejected() {
     assert_eq!(Ring::new(15, 16).unwrap_err(), Error::Modulus(15));
@@ -380,6 +450,33 @@ fn invalid_rings_and_shapes_are_rejected() {
     );
     assert!(
         ring.mat_vec(&[vec![ok.clone()]], &[ok.clone(), ok])
+            .is_err()
+    );
+}
+
+/// The products by a scalar written in place (`scalar_mul_into`, `neg_scalar_mul_into`) are
+/// `scalar_mul` and `neg` of it, over output polynomials of any former content, for scalars read
+/// modulo q; outputs or inputs of another length are refused.
+#[test]
+fn the_products_by_a_scalar_in_place_are_the_products() {
+    let q = 15395032342003157u64;
+    let ring = Ring::new(q, 16).unwrap();
+    let a = Poly((0..16).map(|j| (j * 1_000_003 + 7) % q).collect());
+    for c in [0u64, 1, 2, q - 1, q / 2, q + 5, u64::MAX] {
+        let mut out = Poly((0..16).map(|j| j * 3).collect());
+        ring.scalar_mul_into(c, &a, &mut out).unwrap();
+        assert_eq!(out, ring.scalar_mul(c, &a).unwrap(), "c = {c}");
+        ring.neg_scalar_mul_into(c, &a, &mut out).unwrap();
+        assert_eq!(
+            out,
+            ring.neg(&ring.scalar_mul(c, &a).unwrap()).unwrap(),
+            "c = {c}"
+        );
+    }
+    let mut short = Poly(vec![0; 15]);
+    assert!(ring.scalar_mul_into(3, &a, &mut short).is_err());
+    assert!(
+        ring.neg_scalar_mul_into(3, &short.clone(), &mut Poly(vec![0; 16]))
             .is_err()
     );
 }

@@ -115,6 +115,22 @@ impl Transcript {
         self.step(b"message", &[label, message]);
     }
 
+    /// [`append_message`](Self::append_message) of the concatenation of `parts`, which is
+    /// not formed: the same state (the field is framed by its total length, then hashed part
+    /// by part).
+    pub fn append_message_parts(&mut self, label: &[u8], parts: &[&[u8]]) {
+        let mut h = Shake128::default();
+        h.update(&self.state);
+        frame(&mut h, b"message");
+        frame(&mut h, label);
+        let total: usize = parts.iter().map(|p| p.len()).sum();
+        h.update(&(total as u64).to_le_bytes());
+        for part in parts {
+            h.update(part);
+        }
+        h.finalize_xof().read(&mut self.state);
+    }
+
     /// Absorb an integer: [`append_message`](Self::append_message)`(label, LE64(value))`.
     pub fn append_u64(&mut self, label: &[u8], value: u64) {
         self.append_message(label, &value.to_le_bytes());

@@ -1,15 +1,15 @@
 //! Decompositions: $\delta$ and $\tau$ against brute force and the toy table of
 //! `docs/m0-spec.md`; $\mathbf G^{-1}$ exhaustively for small moduli and at the window boundary
 //! for the test moduli; $\mathbf J^{-1}$ at both ends of the representable window and one
-//! beyond; the vector forms and their gadgets (seeds 30-39).
+//! beyond; the vector forms and their gadgets; the decomposition by digit rows (seeds 30-40).
 mod common;
 
 use common::*;
 use hachi_co_math::{
     Error, Poly, Ring, Zq,
     decompose::{
-        digit_range, draft_tau, g_apply, g_inv, g_inv_scalar, j_apply, j_inv, j_inv_scalar,
-        num_digits, representable_range, tight_tau,
+        digit_range, draft_tau, g_apply, g_inv, g_inv_rows, g_inv_scalar, j_apply, j_inv,
+        j_inv_scalar, num_digits, representable_range, tight_tau,
     },
 };
 use num_bigint::{BigInt, BigUint};
@@ -227,6 +227,51 @@ fn g_inverse_at_the_window_boundary_of_the_test_moduli() {
             assert!(g_inv_scalar(&zq, 1, delta, 0, &mut vec![0; delta]).is_err());
             assert!(
                 g_inv_scalar(&zq, b, delta - 1, 0, &mut vec![0; delta - 1]).is_err(),
+                "b^(delta-1) < q"
+            );
+        }
+    }
+}
+
+/// [`g_inv_rows`] is [`g_inv`] by digit: for the test moduli, bases that are powers of two and
+/// bases that are not, the least number of digits and one more (a window of about $bq$), the
+/// boundary residues of the test above and random ones; and its errors.
+#[test]
+fn g_inverse_by_rows_is_g_inverse() {
+    let mut rng = rng(40);
+    let d = 16;
+    for q in ALL_MODULI {
+        let ring = Ring::new(q, d).unwrap();
+        let zq = ring.zq();
+        for b in [2u64, 3, 4, 5, 8, 16, 1 << 16] {
+            let least = num_digits(q, b).unwrap();
+            for delta in [least, least + 1] {
+                let (_, top) = representable_range(b, delta);
+                let mut xs = vec![0u64, 1, (q - 1) / 2, q.div_ceil(2), q - 2, q - 1];
+                if top < i128::from(q) {
+                    xs.extend([top as u64, (top + 1).min(i128::from(q) - 1) as u64]);
+                }
+                xs.extend(residues(&mut rng, q, 3 * d - xs.len()));
+                let (mut out, mut scratch) = (vec![0i64; delta * d], vec![0i64; d]);
+                for x in xs.chunks_exact(d) {
+                    let want = g_inv(&ring, b, delta, &[Poly(x.to_vec())]).unwrap();
+                    g_inv_rows(zq, b, delta, x, &mut out, &mut scratch).unwrap();
+                    for (k, row) in out.chunks_exact(d).enumerate() {
+                        assert!(in_digit_range(row, b), "q {q} b {b} delta {delta}");
+                        let got: Vec<u64> = row.iter().map(|a| zq.from_i64(*a)).collect();
+                        assert_eq!(got, want[k].0, "q {q} b {b} delta {delta} digit {k}");
+                    }
+                }
+            }
+            let delta = least;
+            let (mut out, mut scratch) = (vec![0i64; delta * d], vec![0i64; d]);
+            let x = vec![0u64; d];
+            assert!(g_inv_rows(zq, b, delta, &x, &mut out[1..], &mut scratch).is_err());
+            assert!(g_inv_rows(zq, b, delta, &x, &mut out, &mut scratch[1..]).is_err());
+            assert!(g_inv_rows(zq, 1, delta, &x, &mut out, &mut scratch).is_err());
+            assert!(g_inv_rows(zq, b, 0, &x, &mut [], &mut scratch).is_err());
+            assert!(
+                g_inv_rows(zq, b, delta - 1, &x, &mut out[d..], &mut scratch).is_err(),
                 "b^(delta-1) < q"
             );
         }
