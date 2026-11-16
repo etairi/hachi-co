@@ -3,6 +3,8 @@
 
 use crate::error::{Error, Result, check_len};
 use hachi_co_core::{Context, LinearShare, Poly};
+use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// How many products [`quotient_share`] hands to one exact inner product of
 /// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$ (bounds the memory of the zero-padded operands).
@@ -52,9 +54,25 @@ pub fn quotient_share<const K: usize>(
     share: &LinearShare,
 ) -> Result<Vec<Poly>> {
     let l = &ctx.layout;
+    check_matrix(m, l.n_prime, l.len_z, l.d)?;
+    quotient_share_rows(ctx, |i| Ok(Cow::Borrowed(&m[i][..])), share)
+}
+
+/// [`quotient_share`] with the rows of $\mathbf M$ read one at a time from `rows` (row $i$ of the
+/// $n'$, each read once, in order), so that $\mathbf M$ need not be held whole
+/// ([`hachi_co_core::MRows`]). Each row of the result depends on its row of $\mathbf M$ only, so
+/// it is the result of [`quotient_share`].
+///
+/// # Errors
+/// As [`quotient_share`], for a row of the wrong shape when it is read, and those of `rows`.
+pub fn quotient_share_rows<'m, const K: usize>(
+    ctx: &Context<K>,
+    mut rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+    share: &LinearShare,
+) -> Result<Vec<Poly>> {
+    let l = &ctx.layout;
     let (d, q) = (l.d, ctx.q());
     let two_d = 2 * d;
-    check_matrix(m, l.n_prime, l.len_z, d)?;
     share.validate(l)?;
     let zq = ctx.ring.zq();
     let inv2 = zq
@@ -64,24 +82,37 @@ pub fn quotient_share<const K: usize>(
         .filter(|j| !is_zero(&share.z_prime[*j], q))
         .collect();
     let mut out = Vec::with_capacity(l.n_prime);
-    for (row, y) in m.iter().zip(&share.y) {
+    for (i, y) in share.y.iter().enumerate() {
+        let row = rows(i)?;
+        check_row(&row, l.len_z, d)?;
+        // The columns in order, filtered in parallel.
         let columns: Vec<usize> = nonzero
-            .iter()
+            .par_iter()
             .copied()
             .filter(|j| !is_zero(&row[*j], q))
             .collect();
-        // P = M_i <z'>_p over Z_q[X], degree <= 2d - 2.
+        // P = M_i <z'>_p over Z_q[X], degree <= 2d - 2: the chunks' products in parallel, added
+        // in order (exact modulo q).
+        let parts = columns
+            .par_chunks(CHUNK)
+            .map(|chunk| {
+                let a: Vec<Poly> = chunk.iter().map(|j| pad(&row[*j], two_d)).collect();
+                let b: Vec<Poly> = chunk
+                    .iter()
+                    .map(|j| pad(&share.z_prime[*j], two_d))
+                    .collect();
+                Ok(ctx.ring2.inner(&a, &b)?)
+            })
+            .collect::<Result<Vec<Poly>>>()?;
         let mut full = vec![0u64; two_d];
-        for chunk in columns.chunks(CHUNK) {
-            let a: Vec<Poly> = chunk.iter().map(|j| pad(&row[*j], two_d)).collect();
-            let b: Vec<Poly> = chunk
-                .iter()
-                .map(|j| pad(&share.z_prime[*j], two_d))
-                .collect();
-            let part = ctx.ring2.inner(&a, &b)?;
+        for part in &parts {
             for (acc, x) in full.iter_mut().zip(&part.0) {
                 *acc = zq.add(*acc, *x);
             }
+        }
+        // A row built for this call is dropped in parallel (its ring elements are many).
+        if let Cow::Owned(row) = row {
+            row.into_par_iter().for_each(drop);
         }
         for (acc, yj) in full.iter_mut().zip(&y.0) {
             *acc = zq.sub(*acc, *yj);
@@ -101,10 +132,16 @@ pub fn quotient_share<const K: usize>(
 pub(crate) fn check_matrix(m: &[Vec<Poly>], rows: usize, cols: usize, d: usize) -> Result<()> {
     check_len("M (rows)", rows, m.len())?;
     for row in m {
-        check_len("M (columns)", cols, row.len())?;
-        for p in row {
-            check_len("M (coefficients)", d, p.0.len())?;
-        }
+        check_row(row, cols, d)?;
+    }
+    Ok(())
+}
+
+/// Checks that a row of $\mathbf M$ has `cols` polynomials with `d` coefficients each.
+pub(crate) fn check_row(row: &[Poly], cols: usize, d: usize) -> Result<()> {
+    check_len("M (columns)", cols, row.len())?;
+    for p in row {
+        check_len("M (coefficients)", d, p.0.len())?;
     }
     Ok(())
 }

@@ -27,6 +27,7 @@ use crate::data::check_len;
 use crate::{Error, Result};
 use core::fmt::Debug;
 use hachi_co_math::{Ext, Fqk, Zq};
+use rayon::prelude::*;
 
 /// A base polynomial commitment scheme over $\mathbb F\_{q^K}$, as the collaborative sumcheck
 /// uses it (`5_Building_Blocks.tex`:238-273, 346-365): every prover commits on its own, before
@@ -129,6 +130,87 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         seed: &[u8; 32],
     ) -> Result<(Self::Commitment, Self::State)>;
 
+    /// [`commit_multilinear_ext`](Self::commit_multilinear_ext) with the coefficients handed over,
+    /// so that an implementation may free them while it commits. The commitment and the state are
+    /// those of [`commit_multilinear_ext`](Self::commit_multilinear_ext); by default it commits
+    /// from a borrow.
+    ///
+    /// # Errors
+    /// As [`commit_multilinear_ext`](Self::commit_multilinear_ext).
+    fn commit_multilinear_ext_owned(
+        &self,
+        coeffs: Vec<Ext<K>>,
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)> {
+        self.commit_multilinear_ext(&coeffs, seed)
+    }
+
+    /// Lets the state of [`commit_multilinear_ext`](Self::commit_multilinear_ext) drop what it can
+    /// form again from the committed coefficients, until its opening by
+    /// [`prove_multilinear_ext_rebuilt`](Self::prove_multilinear_ext_rebuilt), which is then the
+    /// only way to open it. Returns whether it did; by default nothing is dropped.
+    fn shed(&self, st: &mut Self::State) -> bool {
+        let _ = st;
+        false
+    }
+
+    /// [`prove_multilinear_ext_owned`](Self::prove_multilinear_ext_owned) on a state that
+    /// [`shed`](Self::shed) may have reduced: `coeffs` gives the committed coefficients again,
+    /// and is called only if the state needs them. The value and the proof are those of
+    /// [`prove_multilinear_ext`](Self::prove_multilinear_ext) on the whole state; by default
+    /// `coeffs` is not called.
+    ///
+    /// # Errors
+    /// As [`prove_multilinear_ext`](Self::prove_multilinear_ext), those of `coeffs`, and
+    /// implementation-specific ones for coefficients other than the committed ones.
+    fn prove_multilinear_ext_rebuilt(
+        &self,
+        st: Self::State,
+        coeffs: impl FnOnce() -> Result<Vec<Ext<K>>>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Self::Proof)> {
+        let _ = coeffs;
+        self.prove_multilinear_ext_owned(st, point, context, seed)
+    }
+
+    /// [`commit_multilinear_ext`](Self::commit_multilinear_ext) on the coefficients `coeffs`
+    /// given as [`LiftedCoeffs`], which an implementation may read one at a time instead of
+    /// holding them over the field. The commitment is that of [`LiftedCoeffs::to_vec`], and the
+    /// state opens by [`prove_multilinear_ext_lifted`](Self::prove_multilinear_ext_lifted); by
+    /// default the coefficients are formed and committed.
+    ///
+    /// # Errors
+    /// As [`commit_multilinear_ext`](Self::commit_multilinear_ext).
+    fn commit_multilinear_ext_lifted(
+        &self,
+        coeffs: &LiftedCoeffs<K>,
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)> {
+        self.commit_multilinear_ext_owned(coeffs.to_vec(), seed)
+    }
+
+    /// [`prove_multilinear_ext_rebuilt`](Self::prove_multilinear_ext_rebuilt) on a state of
+    /// [`commit_multilinear_ext_lifted`](Self::commit_multilinear_ext_lifted), given the same
+    /// coefficients again. The value and the proof are those of
+    /// [`prove_multilinear_ext`](Self::prove_multilinear_ext) on the state of
+    /// [`commit_multilinear_ext`](Self::commit_multilinear_ext); by default the coefficients are
+    /// formed if the state needs them.
+    ///
+    /// # Errors
+    /// As [`prove_multilinear_ext_rebuilt`](Self::prove_multilinear_ext_rebuilt).
+    fn prove_multilinear_ext_lifted(
+        &self,
+        st: Self::State,
+        coeffs: LiftedCoeffs<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Self::Proof)> {
+        self.prove_multilinear_ext_rebuilt(st, move || Ok(coeffs.to_vec()), point, context, seed)
+    }
+
     /// Opens a commitment of [`commit_multilinear`](Self::commit_multilinear) at `point`
     /// ($\ell$ coordinates) under `context`, with the secret `seed`: returns $f(\mathbf a)$ and
     /// a proof of it.
@@ -158,6 +240,23 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         context: &[u8; 32],
         seed: &[u8; 32],
     ) -> Result<(Ext<K>, Self::Proof)>;
+
+    /// [`prove_multilinear_ext`](Self::prove_multilinear_ext) on a state that the caller does not
+    /// need afterwards, so that an implementation may free parts of it while it proves. The value
+    /// and the proof are those of [`prove_multilinear_ext`](Self::prove_multilinear_ext); by
+    /// default it proves from a borrow of the state.
+    ///
+    /// # Errors
+    /// As [`prove_multilinear_ext`](Self::prove_multilinear_ext).
+    fn prove_multilinear_ext_owned(
+        &self,
+        st: Self::State,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Self::Proof)> {
+        self.prove_multilinear_ext(&st, point, context, seed)
+    }
 
     /// Opens a commitment of [`commit_vector`](Self::commit_vector) against `weights` (one per
     /// entry) under `context`, with the secret `seed`: returns $\langle \mathbf v, \mathbf e
@@ -342,6 +441,78 @@ fn butterflies<T: Copy>(table: &mut [T], op: impl Fn(T, T) -> T) {
     }
 }
 
+/// The entries of a block of [`butterflies_par`]: its passes run within blocks of this many
+/// entries (128 KiB of residues), so that they stay in a core's cache.
+const BUTTERFLY_BLOCK: usize = 1 << 14;
+
+/// The passes over higher bits that [`butterflies_par`] runs in one pass over the table: at 2^27
+/// residues on the shared instance, three took 0.63 to 0.72 s against 0.86 to 0.94 s one at a
+/// time, and four (16 rows at once) 0.90 to 0.94 s.
+const FUSED_LEVELS: u32 = 3;
+
+/// [`butterflies`] on the Rayon pool: the passes over the bits below [`BUTTERFLY_BLOCK`] pair
+/// entries of the same block, so they run block by block, the blocks in parallel, each as
+/// [`butterflies`] runs them. The higher passes then run [`FUSED_LEVELS`] at a time
+/// ([`fused_passes`]), so that a table larger than the caches is read and written once for every
+/// [`FUSED_LEVELS`] passes instead of once per pass. Every pair gets the same operation after the
+/// same passes, so the table is the same.
+fn butterflies_par<T: Copy + Send + Sync>(table: &mut [T], op: impl Fn(T, T) -> T + Sync) {
+    let n = table.len();
+    let block = BUTTERFLY_BLOCK.min(n).max(1);
+    table
+        .par_chunks_mut(block)
+        .for_each(|chunk| butterflies(chunk, &op));
+    let mut half = block;
+    while half < n {
+        let levels = (n / half).trailing_zeros().min(FUSED_LEVELS);
+        let span = half << levels;
+        table.par_chunks_mut(span).for_each(|group| match levels {
+            1 => fused_passes::<T, 2>(group, half, &op),
+            2 => fused_passes::<T, 4>(group, half, &op),
+            _ => fused_passes::<T, 8>(group, half, &op),
+        });
+        half = span;
+    }
+}
+
+/// The passes over the bits of `half`, `2 half`, ... (`R = 2^levels` rows) on `group`, whose `R`
+/// rows of `half` entries each hold the entries that these passes pair: the entries of a column
+/// go through the passes in order, as [`butterflies`] runs them (the pass over the bit of
+/// `half · step` pairs rows `r` and `r + step`, for the `r` without that bit). The columns run
+/// in parallel, by blocks of [`BUTTERFLY_BLOCK`].
+fn fused_passes<T: Copy + Send + Sync, const R: usize>(
+    group: &mut [T],
+    half: usize,
+    op: &(impl Fn(T, T) -> T + Sync),
+) {
+    let cols = half.div_ceil(BUTTERFLY_BLOCK);
+    let mut tasks: Vec<Vec<&mut [T]>> = (0..cols).map(|_| Vec::with_capacity(R)).collect();
+    for row in group.chunks_mut(half) {
+        for (task, part) in tasks.iter_mut().zip(row.chunks_mut(BUTTERFLY_BLOCK)) {
+            task.push(part);
+        }
+    }
+    tasks.into_par_iter().for_each(|mut rows| {
+        debug_assert_eq!(rows.len(), R, "a group has R rows");
+        let len = rows[0].len();
+        for o in 0..len {
+            let mut v: [T; R] = core::array::from_fn(|r| rows[r][o]);
+            let mut step = 1;
+            while step < R {
+                for r in 0..R {
+                    if r & step == 0 {
+                        v[r + step] = op(v[r], v[r + step]);
+                    }
+                }
+                step <<= 1;
+            }
+            for (row, x) in rows.iter_mut().zip(v) {
+                row[o] = x;
+            }
+        }
+    });
+}
+
 /// The Möbius transform over $\mathbb Z\_q$, in place: the values $f(\mathbf x)$ of a multilinear
 /// polynomial $f$ on $\lbrace 0, 1 \rbrace^\ell$, at index $\mathrm{nat}(\mathbf x)$, become its
 /// monomial coefficients in the convention of [`BasePcs`]. With $S(i)$ the set of positions of
@@ -359,10 +530,8 @@ fn butterflies<T: Copy>(table: &mut [T], op: impl Fn(T, T) -> T) {
 /// [`Error::Shape`] unless the length is a power of two.
 pub fn mobius(zq: &Zq, table: &mut [u64]) -> Result<()> {
     check_power_of_two("hypercube table (2^l entries)", table.len())?;
-    for x in table.iter_mut() {
-        *x = zq.reduce(*x);
-    }
-    butterflies(table, |low, high| zq.sub(high, low));
+    table.par_iter_mut().for_each(|x| *x = zq.reduce(*x));
+    butterflies_par(table, |low, high| zq.sub(high, low));
     Ok(())
 }
 
@@ -373,25 +542,157 @@ pub fn mobius(zq: &Zq, table: &mut [u64]) -> Result<()> {
 /// [`Error::Shape`] unless the length is a power of two.
 pub fn mobius_ext<const K: usize>(field: &Fqk<K>, table: &mut [Ext<K>]) -> Result<()> {
     check_power_of_two("hypercube table (2^l entries)", table.len())?;
-    for x in table.iter_mut() {
-        *x = field.reduce(x);
-    }
-    butterflies(table, |low, high| field.sub(&high, &low));
+    table.par_iter_mut().for_each(|x| *x = field.reduce(x));
+    butterflies_par(table, |low, high| field.sub(&high, &low));
     Ok(())
+}
+
+/// The monomial coefficients of a multilinear polynomial over $\mathbb F\_{q^K}$ whose values on
+/// the hypercube lie in $\mathbb Z\_q$ but at one entry, the pad: the Möbius transform over
+/// $\mathbb Z\_q$ of the base values ([`mobius`], with 0 at the pad's entry) and the pad's index
+/// $p$ and value $v$. Since the transform is linear, coefficient $i$ is the base coefficient
+/// lifted to the field, plus $(-1)^{\lvert S(i) \rvert - \lvert S(p) \rvert} v$ when
+/// $S(p) \subseteq S(i)$ (the Möbius transform of $v$ at $p$): the coefficients of [`mobius_ext`]
+/// on the table over the field, held in a quarter of the memory at $K = 4$ and formed one at a time.
+#[derive(Clone, Debug)]
+pub struct LiftedCoeffs<const K: usize> {
+    field: Fqk<K>,
+    /// The Möbius coefficients of the base values.
+    base: Vec<u64>,
+    /// The pad's index and value, reduced.
+    pad: Option<(usize, Ext<K>)>,
+    /// The table's entry at the pad's index, reduced, which [`LiftedCoeffs::from_table`] set to
+    /// 0 and [`LiftedCoeffs::into_table`] puts back (0 without a pad).
+    replaced: u64,
+}
+
+impl<const K: usize> LiftedCoeffs<K> {
+    /// The coefficients of the hypercube table that is `table` (values in $\mathbb Z\_q$) with the
+    /// field element `pad.1` at the index `pad.0`, which `table`'s entry there does not count for
+    /// (as when the pad replaces it): `table` becomes the Möbius transform of its base values in
+    /// place.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless the length is a power of two and the pad's index lies in it.
+    pub fn from_table(
+        field: &Fqk<K>,
+        mut table: Vec<u64>,
+        pad: Option<(usize, Ext<K>)>,
+    ) -> Result<Self> {
+        let mut replaced = 0;
+        if let Some((at, _)) = pad {
+            let len = table.len();
+            let entry = table.get_mut(at).ok_or(Error::Shape {
+                what: "hypercube table holding the pad's index",
+                expected: at + 1,
+                actual: len,
+            })?;
+            replaced = field.zq().reduce(*entry);
+            *entry = 0;
+        }
+        mobius(field.zq(), &mut table)?;
+        Ok(Self {
+            field: field.clone(),
+            base: table,
+            pad: pad.map(|(at, value)| (at, field.reduce(&value))),
+            replaced,
+        })
+    }
+
+    /// The table given to [`LiftedCoeffs::from_table`], every entry reduced modulo $q$: the zeta
+    /// transform of the base coefficients ([`zeta`], the inverse of [`mobius`]) with the entry at
+    /// the pad's index put back. A caller that keeps its table (reduced) can lend it for the
+    /// coefficients instead of copying it.
+    ///
+    /// # Errors
+    /// None for coefficients of [`LiftedCoeffs::from_table`] (a power-of-two length).
+    pub fn into_table(self) -> Result<Vec<u64>> {
+        let mut table = self.base;
+        zeta(self.field.zq(), &mut table)?;
+        if let Some((at, _)) = self.pad {
+            table[at] = self.replaced;
+        }
+        Ok(table)
+    }
+
+    /// The number of coefficients, $2^\ell$.
+    pub fn len(&self) -> usize {
+        self.base.len()
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty()
+    }
+
+    /// Coefficient `i` (reduced).
+    pub fn coeff(&self, i: usize) -> Ext<K> {
+        let f = &self.field;
+        let x = f.from_base(self.base[i]);
+        match self.pad {
+            Some((p, v)) if i & p == p => {
+                if (i ^ p).count_ones().is_multiple_of(2) {
+                    f.add(&x, &v)
+                } else {
+                    f.sub(&x, &v)
+                }
+            }
+            _ => x,
+        }
+    }
+
+    /// Coefficients `start .. start + out.len()` into `out`.
+    pub fn coeffs_into(&self, start: usize, out: &mut [Ext<K>]) {
+        for (i, o) in (start..).zip(out.iter_mut()) {
+            *o = self.coeff(i);
+        }
+    }
+
+    /// All the coefficients, those of [`mobius_ext`] on the table over the field.
+    pub fn to_vec(&self) -> Vec<Ext<K>> {
+        (0..self.len()).map(|i| self.coeff(i)).collect()
+    }
+
+    /// A fingerprint of the coefficients (FNV-1a over the base coefficients and the pad), against
+    /// which an opening checks that it was given those of the commitment. Not a cryptographic
+    /// binding (the commitment is).
+    pub fn fingerprint(&self) -> u64 {
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        let fnv = |h: u64, w: u64| (h ^ w).wrapping_mul(PRIME);
+        // The hashes of the chunks in parallel, folded in order: the same value.
+        let mut h = self
+            .base
+            .par_chunks(1 << 16)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .fold(0xcbf2_9ce4_8422_2325u64, |h, x| fnv(h, *x))
+            })
+            .collect::<Vec<u64>>()
+            .into_iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, fnv);
+        h = fnv(h, self.len() as u64);
+        if let Some((at, value)) = self.pad {
+            h = value
+                .0
+                .iter()
+                .fold(fnv(h, at as u64 + 1), |h, x| fnv(h, *x));
+        }
+        h
+    }
 }
 
 /// The zeta transform over $\mathbb Z\_q$, in place: the inverse of [`mobius`], from the
 /// monomial coefficients of a multilinear polynomial to its values on the hypercube,
-/// $f(x) = \sum\_{i \,:\, S(i) \subseteq S(x)} c\_i$. Every entry is reduced modulo $q$.
+/// $f(x) = \sum\_{i \,:\, S(i) \subseteq S(x)} c\_i$. Every entry is reduced modulo $q$. On the
+/// Rayon pool, as [`mobius`].
 ///
 /// # Errors
 /// [`Error::Shape`] unless the length is a power of two.
 pub fn zeta(zq: &Zq, table: &mut [u64]) -> Result<()> {
     check_power_of_two("monomial coefficients (2^l entries)", table.len())?;
-    for x in table.iter_mut() {
-        *x = zq.reduce(*x);
-    }
-    butterflies(table, |low, high| zq.add(high, low));
+    table.par_iter_mut().for_each(|x| *x = zq.reduce(*x));
+    butterflies_par(table, |low, high| zq.add(high, low));
     Ok(())
 }
 
@@ -520,6 +821,152 @@ mod tests {
         (i >> (ell - j)) & 1 == 1
     }
 
+    /// The passes on the Rayon pool against the passes in order, for tables below, at and above
+    /// the block of [`BUTTERFLY_BLOCK`] entries (so that the passes over the higher bits run),
+    /// over Z_q and over the field: the same tables.
+    #[test]
+    fn the_parallel_butterflies_are_the_butterflies() {
+        let q = 15395032342003157u64; // secure-l24
+        let zq = Zq::new(q).unwrap();
+        let field = Fqk::<4>::new(q).unwrap();
+        let mut state = 0x5eed_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // 2^17 to 2^20: three to six passes above the blocks, so groups of 8, 2 and 4 rows.
+        for log in [0usize, 1, 5, 14, 15, 16, 17, 18, 19, 20] {
+            let table: Vec<u64> = (0..1usize << log).map(|_| next() % q).collect();
+            let mut want = table.clone();
+            butterflies(&mut want, |low, high| zq.sub(high, low));
+            let mut got = table.clone();
+            butterflies_par(&mut got, |low, high| zq.sub(high, low));
+            assert_eq!(got, want, "2^{log} residues");
+            let mut by_mobius = table;
+            mobius(&zq, &mut by_mobius).unwrap();
+            assert_eq!(by_mobius, want, "mobius, 2^{log} residues");
+        }
+        for log in [3usize, 15, 18] {
+            let table: Vec<Ext<4>> = (0..1usize << log)
+                .map(|_| Ext(core::array::from_fn(|_| next() % q)))
+                .collect();
+            let mut want = table.clone();
+            butterflies(&mut want, |low, high| field.sub(&high, &low));
+            let mut got = table;
+            mobius_ext(&field, &mut got).unwrap();
+            assert_eq!(got, want, "mobius_ext, 2^{log} entries");
+        }
+    }
+
+    /// The higher passes one at a time, as [`butterflies_par`] ran them before its passes were
+    /// fused: the reference of [`timings_transforms`].
+    fn levelwise_par<T: Copy + Send + Sync>(table: &mut [T], op: impl Fn(T, T) -> T + Sync) {
+        let n = table.len();
+        let block = BUTTERFLY_BLOCK.min(n).max(1);
+        table
+            .par_chunks_mut(block)
+            .for_each(|chunk| butterflies(chunk, &op));
+        let mut half = block;
+        while half < n {
+            table.par_chunks_mut(2 * half).for_each(|chunk| {
+                let (low, high) = chunk.split_at_mut(half);
+                low.par_iter()
+                    .zip(high.par_iter_mut())
+                    .with_min_len(BUTTERFLY_BLOCK)
+                    .for_each(|(l, h)| *h = op(*l, *h));
+            });
+            half *= 2;
+        }
+    }
+
+    /// Timings of the two transforms of a table of `2^HCO_TRANSFORM_LOG` residues (27 by default,
+    /// the share's table at secure-l24-n2-a8), the passes one at a time against the fused passes,
+    /// with the same tables; the zeta transform of the Möbius transform is the table. Run with
+    /// `cargo test --release -p hachi-co-core --lib timings_transforms -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn timings_transforms() {
+        use std::time::Instant;
+        let log: u32 = std::env::var("HCO_TRANSFORM_LOG")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(27);
+        let q = 15395032342003157u64; // secure-l24
+        let zq = Zq::new(q).unwrap();
+        let table: Vec<u64> = (0..1u64 << log)
+            .into_par_iter()
+            .map(|i| i.wrapping_mul(0x9e37_79b9_7f4a_7c15) % q)
+            .collect();
+        for round in 1..=3 {
+            let mut old = table.clone();
+            let mut new = table.clone();
+            let t = Instant::now();
+            levelwise_par(&mut old, |low, high| zq.sub(high, low));
+            let old_mobius = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            butterflies_par(&mut new, |low, high| zq.sub(high, low));
+            let new_mobius = t.elapsed().as_secs_f64();
+            assert_eq!(old, new);
+            let t = Instant::now();
+            levelwise_par(&mut old, |low, high| zq.add(high, low));
+            let old_zeta = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            butterflies_par(&mut new, |low, high| zq.add(high, low));
+            let new_zeta = t.elapsed().as_secs_f64();
+            assert_eq!(old, new);
+            assert_eq!(new, table);
+            println!(
+                "2^{log} residues, {} threads, round {round}: mobius {old_mobius:.3} -> {new_mobius:.3} s, zeta {old_zeta:.3} -> {new_zeta:.3} s",
+                rayon::current_num_threads()
+            );
+        }
+    }
+
+    /// The lifted coefficients are those of `mobius_ext` on the table over the field with the
+    /// pad at its index, for pads at every index of small tables and none, whatever the table's
+    /// entry at the pad was; their fingerprint follows the table and the pad.
+    #[test]
+    fn lifted_coefficients_are_the_mobius_transform_over_the_field() {
+        let field = Fqk::<4>::new(Q).unwrap();
+        let mut rng = Stream(0x6c69_6674_6564);
+        for ell in 0..=6usize {
+            let size = 1usize << ell;
+            let table = rng.residues(size);
+            let value = rng.ext();
+            let pads = (0..size).map(Some).chain([None]);
+            for pad in pads {
+                let mut over_field: Vec<Ext<4>> =
+                    table.iter().map(|x| field.from_base(*x)).collect();
+                if let Some(at) = pad {
+                    over_field[at] = value;
+                }
+                mobius_ext(&field, &mut over_field).unwrap();
+                let lifted =
+                    LiftedCoeffs::from_table(&field, table.clone(), pad.map(|at| (at, value)))
+                        .unwrap();
+                assert_eq!(lifted.len(), size);
+                assert_eq!(lifted.to_vec(), over_field, "ell {ell} pad {pad:?}");
+                let mut run = vec![field.zero(); size / 2];
+                lifted.coeffs_into(size - size / 2, &mut run);
+                assert_eq!(run, over_field[size - size / 2..], "ell {ell} pad {pad:?}");
+            }
+            let a = LiftedCoeffs::from_table(&field, table.clone(), Some((0, value))).unwrap();
+            let b = LiftedCoeffs::from_table(&field, table.clone(), Some((0, rng.ext()))).unwrap();
+            let c = LiftedCoeffs::from_table(&field, table.clone(), None).unwrap();
+            assert_ne!(a.fingerprint(), b.fingerprint());
+            assert_ne!(a.fingerprint(), c.fingerprint());
+            assert_eq!(
+                a.fingerprint(),
+                LiftedCoeffs::from_table(&field, table.clone(), Some((0, value)))
+                    .unwrap()
+                    .fingerprint()
+            );
+            assert!(LiftedCoeffs::from_table(&field, table, Some((size, value))).is_err());
+        }
+    }
+
     /// The Möbius transform from its definition, $c\_i = \sum\_{S(x) \subseteq S(i)}
     /// (-1)^{|S(i)| - |S(x)|} f(x)$, and the zeta transform as the subset sums, at every
     /// $\ell \le 6$; the two are inverse; the transforms of an unreduced table are those of its
@@ -561,6 +1008,45 @@ mod tests {
             let mut unreduced: Vec<u64> = values.iter().map(|v| v + Q).collect();
             mobius(&zq, &mut unreduced).unwrap();
             assert_eq!(unreduced, coeffs);
+        }
+    }
+
+    /// The table comes back from its lifted coefficients ([`LiftedCoeffs::into_table`]): with and
+    /// without a pad, whatever the entry at the pad's index, reduced if it was not; the parallel
+    /// zeta transform is the serial one, also at sizes whose passes leave the blocks of
+    /// [`butterflies_par`].
+    #[test]
+    fn the_table_comes_back_from_its_coefficients() {
+        let zq = Zq::new(Q).unwrap();
+        let field = Fqk::<4>::new(Q).unwrap();
+        let mut rng = Stream(0x7a65_7461);
+        for ell in [0usize, 1, 2, 5, 15, 16] {
+            let size = 1usize << ell;
+            let table = rng.residues(size);
+            let value = rng.ext();
+            for pad in [
+                None,
+                Some((0, value)),
+                Some((size - 1, value)),
+                Some((size / 2, value)),
+            ] {
+                let lifted = LiftedCoeffs::from_table(&field, table.clone(), pad).unwrap();
+                assert_eq!(
+                    lifted.into_table().unwrap(),
+                    table,
+                    "l = {ell}, pad {pad:?}"
+                );
+            }
+            let unreduced: Vec<u64> = table.iter().map(|v| v + Q).collect();
+            let lifted = LiftedCoeffs::from_table(&field, unreduced, Some((size - 1, value)));
+            assert_eq!(lifted.unwrap().into_table().unwrap(), table, "l = {ell}");
+            let mut coeffs = table.clone();
+            mobius(&zq, &mut coeffs).unwrap();
+            let mut serial = coeffs.clone();
+            butterflies(&mut serial, |low, high| zq.add(high, low));
+            zeta(&zq, &mut coeffs).unwrap();
+            assert_eq!(coeffs, serial, "l = {ell}");
+            assert_eq!(coeffs, table, "l = {ell}");
         }
     }
 

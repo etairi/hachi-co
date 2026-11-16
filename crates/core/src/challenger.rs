@@ -8,6 +8,7 @@ use hachi_co_math::{Ext, Fqk, Poly};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::l1ball::L1Ball;
 use hachi_co_transcript::Transcript;
+use rayon::prelude::*;
 
 /// The transcript label of the seed of the ring-to-linear challenges.
 const LABEL_R2L_C: &[u8] = b"hachi-co/r2l/c";
@@ -54,6 +55,13 @@ pub trait Challenger<const K: usize> {
     /// Absorbs a public message made of ring elements (or of polynomials of another length),
     /// under `label`.
     fn absorb_polys(&mut self, label: &'static str, polys: &[Poly]);
+
+    /// [`Challenger::absorb_polys`] of the rows of a matrix one after the other, the message of
+    /// their concatenation, which an implementation need not form.
+    fn absorb_poly_rows(&mut self, label: &'static str, rows: &[Vec<Poly>]) {
+        let polys: Vec<Poly> = rows.iter().flatten().cloned().collect();
+        self.absorb_polys(label, &polys);
+    }
 
     /// Absorbs a public message made of elements of $\mathbb F\_{q^K}$, under `label`.
     fn absorb_exts(&mut self, label: &'static str, exts: &[Ext<K>]);
@@ -107,6 +115,23 @@ pub trait Challenger<const K: usize> {
     /// # Errors
     /// [`Error::Challenger`] for round 0, and implementation-specific errors.
     fn round_coin(&mut self, field: &Fqk<K>, round: usize) -> Result<Ext<K>>;
+}
+
+/// The ring elements of a chunk that [`FsChallenger::absorb_poly_rows`] encodes on one thread.
+const ROW_CHUNK: usize = 4096;
+
+/// The part of [`encode_polys`] after its header for the polynomials `polys`: for each, its
+/// length and its residues as $\mathrm{LE64}$.
+fn encode_poly_bodies(polys: &[Poly]) -> Vec<u8> {
+    let coeffs: usize = polys.iter().map(|p| p.0.len()).sum();
+    let mut out = Vec::with_capacity(8 * (polys.len() + coeffs));
+    for p in polys {
+        out.extend_from_slice(&(p.0.len() as u64).to_le_bytes());
+        for c in &p.0 {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    out
 }
 
 /// The message bytes of [`Challenger::absorb_polys`]: `b"P"`, the number of polynomials as
@@ -215,6 +240,27 @@ impl<const K: usize> Challenger<K> for FsChallenger {
     fn absorb_polys(&mut self, label: &'static str, polys: &[Poly]) {
         self.transcript
             .append_message(label.as_bytes(), &encode_polys(polys));
+    }
+
+    /// The bytes of [`encode_polys`] of the rows' concatenation, formed by chunks of ring
+    /// elements in parallel and hashed in order ([`Transcript::append_message_parts`]): the
+    /// same state, without the copy of the matrix or of its bytes (the setup matrices at the
+    /// start of every Eval).
+    fn absorb_poly_rows(&mut self, label: &'static str, rows: &[Vec<Poly>]) {
+        let count: usize = rows.iter().map(Vec::len).sum();
+        let mut header = Vec::with_capacity(9);
+        header.push(b'P');
+        header.extend_from_slice(&(count as u64).to_le_bytes());
+        let chunks: Vec<Vec<u8>> = rows
+            .par_iter()
+            .flat_map(|row| row.par_chunks(ROW_CHUNK))
+            .map(encode_poly_bodies)
+            .collect();
+        let parts: Vec<&[u8]> = core::iter::once(header.as_slice())
+            .chain(chunks.iter().map(Vec::as_slice))
+            .collect();
+        self.transcript
+            .append_message_parts(label.as_bytes(), &parts);
     }
 
     fn absorb_exts(&mut self, label: &'static str, exts: &[Ext<K>]) {

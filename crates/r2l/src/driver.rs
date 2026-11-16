@@ -4,7 +4,8 @@
 
 use crate::accept::{check_accept_set, encode_accept_set, select_iteration};
 use crate::local::{
-    check_challenges, check_polys, d_slice, fah_d_input, fold, owned_w, respond, sample_masks,
+    check_challenges, check_len, check_polys, d_slice, fah_d_input, fold, mask_groups, owned_w,
+    respond, response_len, sample_mask_images,
 };
 use crate::prover1::{norm_check, z_hat, z_of_sum};
 use crate::share::{y_share, z_prime_share};
@@ -14,6 +15,7 @@ use hachi_co_core::{
     Challenger, Context, LinearShare, PartyRandomness, PartyState, Poly, PublicVectors,
 };
 use hachi_co_mpc::Comm;
+use rayon::prelude::*;
 
 /// What one party keeps from the ring-to-linear step: what the sumcheck (WP10) and the PCS
 /// composition (WP11) need.
@@ -132,7 +134,7 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     check_polys("u (commitment)", u_com, l.n_b, l.d, q)?;
 
     let w = owned_w(ctx, pv, state)?;
-    let mut secrets = sample_masks(ctx, pv, rng)?;
+    let mut secrets = sample_mask_images(ctx, pv, rng)?;
     let local = fah_d_input(ctx, &d_slice(ctx, p, &w, &secrets)?)?;
     let v = unflatten_polys(&comm.fah(COMM_FAH_D, &flatten_polys(&local))?, l.n_d, l.d)?;
     check_polys("v (output of F_AH(D))", &v, l.n_d, l.d, q)?;
@@ -140,52 +142,88 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     let c = ch.r2l_challenges(l.n_blocks, l.d, ctx.omega())?;
     check_challenges(ctx, &c)?;
     let mut folded = fold(ctx, state, &c)?;
-    let responses = secrets
-        .masks
-        .iter()
-        .map(|mask| respond(ctx, &folded, mask))
-        .collect::<Result<Vec<_>>>();
-    crate::ct::wipe(&mut folded);
-    secrets.wipe_masks();
-    let mut responses = responses?;
-    let accepted: Vec<bool> = responses.iter().map(Option::is_some).collect();
-    let own = encode_accept_set(ctx, &accepted)?;
-    let accept_sets = comm.all_gather(COMM_ACCEPT, &own)?;
-    if accept_sets.len() != l.n {
-        return Err(Error::Protocol(format!(
-            "the broadcast of the accept sets returned {} sets for n = {}",
-            accept_sets.len(),
-            l.n
-        )));
-    }
-    for (p0, set) in accept_sets.iter().enumerate() {
-        check_accept_set(ctx, p0 + 1, set)?;
-    }
-    if accept_sets[p - 1] != own {
-        return Err(Error::Protocol(format!(
-            "party {p}'s own set of accepted iterations came back changed"
-        )));
-    }
-    ch.absorb_words(LABEL_ACCEPT, &accept_sets);
-    let j_star = select_iteration(ctx, &accept_sets)?;
-    let selected = j_star.and_then(|j| responses.get_mut(j).and_then(Option::take));
-    // Every other response is never sent (plan, finding F5).
-    for response in responses.iter_mut().flatten() {
-        crate::ct::wipe(response);
-    }
-    let (j_star, mut z_p) = match (j_star, selected) {
-        (None, _) => {
-            return Err(Error::NoCommonIteration {
-                iterations: l.rej_iterations,
-            });
+    let n = response_len(ctx);
+    // The rest uses the fold, which is wiped once z_p is formed, on errors as well.
+    let selected = (|| {
+        // One Rej per mask, each mask read again from its stream (`PartyRandomness::masks_again`)
+        // a group at a time, in parallel: only whether a response is accepted is kept, the
+        // accepted ones being wiped, and the selected one is formed again below.
+        let mut accepted = Vec::with_capacity(l.rej_iterations);
+        for range in mask_groups(l.rej_iterations) {
+            let mut masks = rng.masks_again(range.clone(), ctx.gamma(), n)?;
+            check_len(
+                "masks r_p^j read again (one per iteration)",
+                range.len(),
+                masks.len(),
+            )?;
+            let verdicts = masks
+                .par_iter()
+                .map(|mask| {
+                    Ok(respond(ctx, &folded, mask)?.is_some_and(|mut z| {
+                        crate::ct::wipe(&mut z);
+                        true
+                    }))
+                })
+                .collect::<Result<Vec<bool>>>();
+            for mask in &mut masks {
+                crate::ct::wipe(mask);
+            }
+            accepted.extend(verdicts?);
         }
-        (Some(j), Some(z_p)) => (j, z_p),
-        (Some(j), None) => {
+        let own = encode_accept_set(ctx, &accepted)?;
+        let accept_sets = comm.all_gather(COMM_ACCEPT, &own)?;
+        if accept_sets.len() != l.n {
             return Err(Error::Protocol(format!(
-                "iteration {j} is in every set, but party {p} rejected it"
+                "the broadcast of the accept sets returned {} sets for n = {}",
+                accept_sets.len(),
+                l.n
             )));
         }
-    };
+        for (p0, set) in accept_sets.iter().enumerate() {
+            check_accept_set(ctx, p0 + 1, set)?;
+        }
+        if accept_sets[p - 1] != own {
+            return Err(Error::Protocol(format!(
+                "party {p}'s own set of accepted iterations came back changed"
+            )));
+        }
+        ch.absorb_words(LABEL_ACCEPT, &accept_sets);
+        let j_star = select_iteration(ctx, &accept_sets)?;
+        // The selected response, formed again from its mask; every other one is never sent
+        // (plan, finding F5).
+        let (j_star, z_p) = match j_star {
+            None => {
+                return Err(Error::NoCommonIteration {
+                    iterations: l.rej_iterations,
+                });
+            }
+            Some(j) if accepted[j] => {
+                let mut mask = rng.masks_again(j..j + 1, ctx.gamma(), n)?;
+                let z = match mask.first() {
+                    Some(mask) => respond(ctx, &folded, mask)?,
+                    None => None,
+                };
+                for mask in &mut mask {
+                    crate::ct::wipe(mask);
+                }
+                let z = z.ok_or_else(|| {
+                    Error::Protocol(format!(
+                        "iteration {j} was accepted, but its response formed again was not"
+                    ))
+                })?;
+                (j, z)
+            }
+            Some(j) => {
+                return Err(Error::Protocol(format!(
+                    "iteration {j} is in every set, but party {p} rejected it"
+                )));
+            }
+        };
+        Ok((accept_sets, j_star, z_p))
+    })();
+    crate::ct::wipe(&mut folded);
+    secrets.wipe_masks();
+    let (accept_sets, j_star, mut z_p) = selected?;
     let mut local: Vec<u64> = z_p.iter().map(|x| ctx.ring.zq().from_i64(*x)).collect();
     let sum = comm.fah(COMM_FAH_Z, &local);
     crate::ct::wipe(&mut z_p);

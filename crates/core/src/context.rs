@@ -9,7 +9,7 @@ use hachi_co_math::decompose::digit_bound;
 use hachi_co_math::{Fqk, Poly, Prepared, Ring, Subfield};
 use hachi_co_params::Params;
 use hachi_co_sampling::matrix;
-use std::sync::OnceLock;
+use std::sync::{Arc, RwLock};
 
 /// The PRG domain of $\mathbf A$ in [`Context::setup`].
 pub const SETUP_DOMAIN_A: &[u8] = b"hachi-co/setup/A";
@@ -35,6 +35,25 @@ pub struct PublicParams {
     /// $\mathbf D$, the key of the first message $\mathbf v$ of the ring-to-linear step
     /// (`5_Building_Blocks.tex`:132).
     pub d: Matrix,
+}
+
+/// The matrices of [`Context::setup`] from its seed.
+///
+/// # Errors
+/// [`Error::Sampling`] if the samplers fail.
+fn expand_public_params(layout: &Layout, q: u64, seed: &[u8; 32]) -> Result<PublicParams> {
+    let d = layout.d;
+    let expand = |domain: &[u8], rows: usize, cols: usize| -> Result<Matrix> {
+        Ok(matrix::expand(seed, domain, rows, cols, d, q)?
+            .into_iter()
+            .map(|row| row.into_iter().map(Poly).collect())
+            .collect())
+    };
+    Ok(PublicParams {
+        a: expand(SETUP_DOMAIN_A, layout.n_a, layout.width_a)?,
+        b: expand(SETUP_DOMAIN_B, layout.n_b, layout.width_b)?,
+        d: expand(SETUP_DOMAIN_D, layout.n_d, layout.width_d)?,
+    })
 }
 
 /// A matrix of `rows` rows of `cols` polynomials with $d$ canonical coefficients each.
@@ -77,10 +96,52 @@ impl PublicParams {
     }
 }
 
+/// A value of a context that is given or formed on first use, shared as an [`Arc`], and that a
+/// caller that no longer needs it may release ([`Context::release_public_params`],
+/// [`Context::release_a_prepared`]): it is then formed again if it is read again. It is formed
+/// outside the lock, so that a parallel formation never waits on it.
+struct Releasable<T>(RwLock<Option<Arc<T>>>);
+
+impl<T> Releasable<T> {
+    fn new(value: Option<T>) -> Self {
+        Self(RwLock::new(value.map(Arc::new)))
+    }
+
+    fn get(&self) -> Option<Arc<T>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// `value`, kept unless another one was kept first, which is returned instead.
+    fn keep(&self, value: Arc<T>) -> Arc<T> {
+        let mut held = self.0.write().unwrap_or_else(|e| e.into_inner());
+        held.get_or_insert(value).clone()
+    }
+
+    fn release(&self) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+impl<T> Clone for Releasable<T> {
+    fn clone(&self) -> Self {
+        Self(RwLock::new(self.get()))
+    }
+}
+
+impl<T: core::fmt::Debug> core::fmt::Debug for Releasable<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.get() {
+            Some(value) => value.fmt(f),
+            None => f.write_str("(released)"),
+        }
+    }
+}
+
 /// Everything the parties and the verifier share about one instance (`docs/m1-spec.md`,
 /// `hachi-co-core`): the parameters, the [`Layout`], $\mathcal R\_q$ (`ring`),
 /// $\mathbb Z\_q\[X\]/(X^{2d} + 1)$ (`ring2`, for the quotients of `5_Building_Blocks.tex`:227-229),
-/// the subfield $\mathcal R\_q^H \cong \mathbb F\_{q^K}$ (`sub`) and the public matrices (`pp`).
+/// the subfield $\mathcal R\_q^H \cong \mathbb F\_{q^K}$ (`sub`) and the public matrices
+/// ([`Context::pp`]).
 ///
 /// Built by [`Context::new`], [`Context::setup`] or (feature `fixtures`) `Fixture::context`. The
 /// fields are public for reading; the struct is non-exhaustive so that it is always built through
@@ -100,10 +161,12 @@ pub struct Context<const K: usize> {
     /// $\mathcal R\_q^H \cong \mathbb F\_{q^K}$ with $\psi$, $\psi^{-1}$, $\mathrm{Tr}\_H$ and $E$
     /// (`4_preliminaries.tex`:73-84; Hachi, Lemma 5 and Theorem 2).
     pub sub: Subfield<K>,
-    /// The public matrices $\mathbf A, \mathbf B, \mathbf D$.
-    pub pp: PublicParams,
+    /// The public matrices $\mathbf A, \mathbf B, \mathbf D$ ([`Context::pp`]).
+    pp: Releasable<PublicParams>,
     /// $\mathbf A$ in the NTT form, made on first use ([`Context::a_prepared`]).
-    a_prepared: OnceLock<Prepared>,
+    a_prepared: Releasable<Prepared>,
+    /// The seed of [`Context::setup`], from which the matrices are formed again once released.
+    seed: Option<[u8; 32]>,
 }
 
 impl<const K: usize> Context<K> {
@@ -158,24 +221,61 @@ impl<const K: usize> Context<K> {
             ring,
             ring2,
             sub,
-            pp,
-            a_prepared: OnceLock::new(),
+            pp: Releasable::new(Some(pp)),
+            a_prepared: Releasable::new(None),
+            seed: None,
         })
+    }
+
+    /// The public matrices $\mathbf A, \mathbf B, \mathbf D$: those given to [`Context::new`],
+    /// or those of [`Context::setup`], formed again from its seed if they were released.
+    ///
+    /// # Panics
+    /// If the matrices of a seed cannot be formed again, which they were once from the same
+    /// seed and parameters.
+    pub fn pp(&self) -> Arc<PublicParams> {
+        if let Some(pp) = self.pp.get() {
+            return pp;
+        }
+        let seed = self
+            .seed
+            .expect("the public matrices are released only for a context of a seed");
+        let pp = expand_public_params(&self.layout, self.q(), &seed)
+            .expect("the public matrices of this seed were formed once");
+        self.pp.keep(Arc::new(pp))
+    }
+
+    /// Releases the public matrices of a context of [`Context::setup`] for a caller that no
+    /// longer reads them (Eval after its last row of $\mathbf M$, `hachi_co::eval_lean`): a later
+    /// [`Context::pp`] forms the same matrices again from the seed. A context of
+    /// [`Context::new`] keeps them.
+    pub fn release_public_params(&self) {
+        if self.seed.is_some() {
+            self.pp.release();
+        }
+    }
+
+    /// Releases $\mathbf A$ in the NTT form ([`Context::a_prepared`]) for a caller that no longer
+    /// multiplies by it: a later call prepares it again.
+    pub fn release_a_prepared(&self) {
+        self.a_prepared.release();
     }
 
     /// $\mathbf A$ in the NTT form ([`Ring::prepare_short`]): every block, in digits of base $b$,
     /// and every mask, in $[-\gamma, \gamma]$, multiplies it, so it is transformed once. It takes a
-    /// few times the memory of $\mathbf A$ and is kept with the context.
+    /// few times the memory of $\mathbf A$ and is kept with the context until
+    /// [`Context::release_a_prepared`]. Concurrent first calls may each prepare it (the first one
+    /// kept), so a caller that multiplies in parallel prepares it before.
     ///
     /// # Errors
     /// [`Error::Math`] if an entry of $\mathbf A$ lost its shape after [`Context::new`].
-    pub fn a_prepared(&self) -> Result<&Prepared> {
+    pub fn a_prepared(&self) -> Result<Arc<Prepared>> {
         if let Some(prepared) = self.a_prepared.get() {
             return Ok(prepared);
         }
         let norm = digit_bound(self.b()).max(self.gamma());
-        let prepared = self.ring.prepare_short(&self.pp.a, norm)?;
-        Ok(self.a_prepared.get_or_init(|| prepared))
+        let prepared = self.ring.prepare_short(&self.pp().a, norm)?;
+        Ok(self.a_prepared.keep(Arc::new(prepared)))
     }
 
     /// $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:287-292) from a 32-byte seed: entry
@@ -189,19 +289,10 @@ impl<const K: usize> Context<K> {
     /// As [`Context::new`], and [`Error::Sampling`] if the samplers fail.
     pub fn setup(params: Params, seed: &[u8; 32]) -> Result<Self> {
         let layout = Layout::new(&params)?;
-        let (q, d) = (params.q, layout.d);
-        let expand = |domain: &[u8], rows: usize, cols: usize| -> Result<Matrix> {
-            Ok(matrix::expand(seed, domain, rows, cols, d, q)?
-                .into_iter()
-                .map(|row| row.into_iter().map(Poly).collect())
-                .collect())
-        };
-        let pp = PublicParams {
-            a: expand(SETUP_DOMAIN_A, layout.n_a, layout.width_a)?,
-            b: expand(SETUP_DOMAIN_B, layout.n_b, layout.width_b)?,
-            d: expand(SETUP_DOMAIN_D, layout.n_d, layout.width_d)?,
-        };
-        Self::new(params, pp)
+        let pp = expand_public_params(&layout, params.q, seed)?;
+        let mut ctx = Self::new(params, pp)?;
+        ctx.seed = Some(*seed);
+        Ok(ctx)
     }
 
     /// The field $\mathbb F\_{q^K} \cong \mathcal R\_q^H$ of the coordinates (Hachi, Lemma 5).

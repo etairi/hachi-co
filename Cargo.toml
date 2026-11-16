@@ -25,6 +25,7 @@ license = "MIT"
 
 [workspace.dependencies]
 crypto-bigint = "0.7"
+mimalloc = { version = "0.1", default-features = false }
 num-bigint = "0.5"
 num-traits = "0.2"
 rand = "0.10.3"

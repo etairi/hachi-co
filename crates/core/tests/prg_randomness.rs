@@ -196,3 +196,57 @@ fn every_stream_is_served_once_and_failures_do_not_use_it_up() {
     assert!(debug.starts_with("PrgRandomness"));
     assert!(!debug.contains("seed") && !debug.contains("48, 97, 99"));
 }
+
+/// `masks` against `mask` for every iteration on the same seed (the streams drawn in parallel
+/// give the masks drawn one by one), then reuse refused both ways.
+#[test]
+fn the_masks_drawn_together_are_the_masks_drawn_one_by_one() {
+    let (gamma, len) = (1u64 << 20, 1000);
+    let mut together = PrgRandomness::new([42; 32]);
+    let mut one_by_one = PrgRandomness::new([42; 32]);
+    let got = PartyRandomness::<4>::masks(&mut together, 7, gamma, len).unwrap();
+    let want: Vec<Vec<i64>> = (0..7)
+        .map(|j| PartyRandomness::<4>::mask(&mut one_by_one, j, gamma, len).unwrap())
+        .collect();
+    assert_eq!(got, want);
+    assert!(PartyRandomness::<4>::masks(&mut together, 7, gamma, len).is_err());
+    assert!(PartyRandomness::<4>::mask(&mut together, 3, gamma, len).is_err());
+    assert!(PartyRandomness::<4>::masks(&mut one_by_one, 1, gamma, len).is_err());
+    let mut fresh = PrgRandomness::new([42; 32]);
+    PartyRandomness::<4>::mask(&mut fresh, 2, gamma, len).unwrap();
+    assert!(
+        PartyRandomness::<4>::masks(&mut fresh, 3, gamma, len).is_err(),
+        "stream 2 is used"
+    );
+}
+
+/// A mask is read again (`mask_again`, `masks_again`) only once it was drawn, as the same mask,
+/// in groups (`masks_in`); a fresh draw of a mask read again is still refused.
+#[test]
+fn masks_are_read_again_only_once_drawn() {
+    let (gamma, len) = (1u64 << 20, 1000);
+    let mut rng = PrgRandomness::new([43; 32]);
+    let mut reference = PrgRandomness::new([43; 32]);
+    assert!(matches!(
+        PartyRandomness::<4>::masks_again(&mut rng, 0..2, gamma, len),
+        Err(Error::MaskNotDrawn { index: 0 })
+    ));
+    let first = PartyRandomness::<4>::masks_in(&mut rng, 0..3, gamma, len).unwrap();
+    let second = PartyRandomness::<4>::masks_in(&mut rng, 3..5, gamma, len).unwrap();
+    let want = PartyRandomness::<4>::masks(&mut reference, 5, gamma, len).unwrap();
+    assert_eq!([first, second].concat(), want);
+    assert_eq!(
+        PartyRandomness::<4>::masks_again(&mut rng, 1..5, gamma, len).unwrap(),
+        want[1..5]
+    );
+    assert_eq!(
+        PartyRandomness::<4>::mask_again(&mut rng, 4, gamma, len).unwrap(),
+        want[4]
+    );
+    assert!(matches!(
+        PartyRandomness::<4>::mask_again(&mut rng, 5, gamma, len),
+        Err(Error::MaskNotDrawn { index: 5 })
+    ));
+    assert!(PartyRandomness::<4>::masks_in(&mut rng, 4..6, gamma, len).is_err());
+    assert!(PartyRandomness::<4>::mask(&mut rng, 2, gamma, len).is_err());
+}

@@ -86,15 +86,34 @@ pub fn linear_relation<const K: usize>(
     j_star: usize,
     u_com: &[Poly],
 ) -> Result<LinearRelation> {
+    check_relation(ctx, pv, v, c, u_com)?;
+    Ok(LinearRelation {
+        m: build_m(ctx, &pv.b_ring, &pv.a_ring, c, j_star)?,
+        y: build_y(ctx, v, u_com)?,
+    })
+}
+
+/// The checks of [`linear_relation`] without forming $\mathbf M$ and $\mathbf y$: the shapes of the
+/// public vectors, $\mathbf c \in \mathcal C^{2^r}$ ([`check_challenges`]), and the shapes and
+/// canonical residues of $\mathbf v$ and $\mathbf u$; for a prover that then reads $\mathbf M$ one row
+/// at a time ([`hachi_co_core::MRows`], which checks $j^\ast \lt L$ and the other inputs of
+/// [`build_m`]).
+///
+/// # Errors
+/// As [`linear_relation`], except for $j^\ast$.
+pub fn check_relation<const K: usize>(
+    ctx: &Context<K>,
+    pv: &PublicVectors<K>,
+    v: &[Poly],
+    c: &[Vec<i64>],
+    u_com: &[Poly],
+) -> Result<()> {
     let l = &ctx.layout;
     pv.validate(l)?;
     check_challenges(ctx, c)?;
     check_polys("v", v, l.n_d, l.d, ctx.q())?;
     check_polys("u (commitment)", u_com, l.n_b, l.d, ctx.q())?;
-    Ok(LinearRelation {
-        m: build_m(ctx, &pv.b_ring, &pv.a_ring, c, j_star)?,
-        y: build_y(ctx, v, u_com)?,
-    })
+    Ok(())
 }
 
 #[cfg(test)]

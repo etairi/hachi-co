@@ -19,14 +19,21 @@ hachi-co-r2l.workspace = true
 hachi-co-sampling.workspace = true
 hachi-co-sumcheck.workspace = true
 hachi-co-transcript.workspace = true
+mimalloc = { workspace = true, optional = true }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [features]
+default = ["alloc-mimalloc"]
 # The binary hachi-co-party-profile: hachi-co-party under a counting allocator, for memory profiles.
 alloc-profile = []
+# hachi-co-party with mimalloc as its allocator, by default: glibc keeps freed memory in its arenas
+# and serializes some allocations, mimalloc returns the memory and allocates per thread (on the
+# shared instance at secure-l24-n2-a8, Eval about -7%, Commit about -22%, resident peaks about
+# -15%). `--no-default-features` builds it with the system's allocator.
+alloc-mimalloc = ["dep:mimalloc"]
 
 [[bin]]
 name = "hachi-co-party-profile"

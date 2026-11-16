@@ -238,7 +238,7 @@ pub fn row_block_checks<const K: usize>(
     let row_c = lhs == a_times_g(ctx, &pv.a_ring, &z)?;
 
     // sum_i c_i t_i + sum_p t_0p = A z.
-    let az = ring.mat_vec(&ctx.pp.a, &z)?;
+    let az = ring.mat_vec(&ctx.pp().a, &z)?;
     let mut row_a = true;
     for (a, az_a) in az.iter().enumerate() {
         let t_col: Vec<Poly> = wit.t.iter().map(|t| t[a].clone()).collect();

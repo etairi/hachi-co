@@ -10,10 +10,9 @@
 
 use crate::{Error, Layout, PartyId, Poly, Result};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// Tells apart the files of one process.
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
@@ -21,9 +20,66 @@ static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 struct Inner {
     path: PathBuf,
-    file: Mutex<File>,
+    /// Read and written at offsets ([`at`]), so that threads read blocks at once without a
+    /// lock or a shared position.
+    file: File,
+    /// The position's lock, on systems without reads and writes at offsets.
+    #[cfg(not(unix))]
+    position: std::sync::Mutex<()>,
     block_bytes: usize,
     d: usize,
+}
+
+/// Reads or writes at offsets: `pread` and `pwrite` on Unix, a seek and the transfer under the
+/// position's lock elsewhere.
+mod at {
+    use std::fs::File;
+
+    #[cfg(unix)]
+    pub(super) fn read(
+        file: &File,
+        _: &super::Inner,
+        buf: &mut [u8],
+        offset: u64,
+    ) -> std::io::Result<()> {
+        std::os::unix::fs::FileExt::read_exact_at(file, buf, offset)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn write(
+        file: &File,
+        _: &super::Inner,
+        buf: &[u8],
+        offset: u64,
+    ) -> std::io::Result<()> {
+        std::os::unix::fs::FileExt::write_all_at(file, buf, offset)
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn read(
+        mut file: &File,
+        inner: &super::Inner,
+        buf: &mut [u8],
+        offset: u64,
+    ) -> std::io::Result<()> {
+        use std::io::{Read, Seek, SeekFrom};
+        let _position = inner.position.lock().expect("the position's lock");
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buf)
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn write(
+        mut file: &File,
+        inner: &super::Inner,
+        buf: &[u8],
+        offset: u64,
+    ) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let _position = inner.position.lock().expect("the position's lock");
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(buf)
+    }
 }
 
 impl Drop for Inner {
@@ -68,7 +124,9 @@ impl SpillFile {
         let file = options.open(&path).map_err(|e| io_error(&path, &e))?;
         Ok(Self(Arc::new(Inner {
             path,
-            file: Mutex::new(file),
+            file,
+            #[cfg(not(unix))]
+            position: std::sync::Mutex::new(()),
             block_bytes: layout.block_len * layout.d * 8,
             d: layout.d,
         })))
@@ -79,14 +137,11 @@ impl SpillFile {
         &self.0.path
     }
 
-    /// Moves to the start of block slot `slot`.
-    fn seek(&self, file: &mut File, slot: usize) -> Result<()> {
-        let offset = (slot as u64)
+    /// The offset of block slot `slot`.
+    fn offset(&self, slot: usize) -> Result<u64> {
+        (slot as u64)
             .checked_mul(self.0.block_bytes as u64)
-            .ok_or(Error::Overflow("the offset of a spilled block"))?;
-        file.seek(SeekFrom::Start(offset))
-            .map(|_| ())
-            .map_err(|e| io_error(&self.0.path, &e))
+            .ok_or(Error::Overflow("the offset of a spilled block"))
     }
 
     /// Writes block slot `slot`.
@@ -108,25 +163,19 @@ impl SpillFile {
                 actual: bytes.len(),
             });
         }
-        let mut file = inner.file.lock().expect("the file's lock");
-        self.seek(&mut file, slot)?;
-        file.write_all(&bytes)
+        at::write(&inner.file, inner, &bytes, self.offset(slot)?)
             .map_err(|e| io_error(&inner.path, &e))
     }
 
-    /// Reads block slot `slot`.
+    /// Reads block slot `slot`; several threads may read blocks at once.
     ///
     /// # Errors
     /// [`Error::Spill`] if the read fails.
     pub fn read_block(&self, slot: usize) -> Result<Vec<Poly>> {
         let inner = &self.0;
         let mut bytes = vec![0u8; inner.block_bytes];
-        {
-            let mut file = inner.file.lock().expect("the file's lock");
-            self.seek(&mut file, slot)?;
-            file.read_exact(&mut bytes)
-                .map_err(|e| io_error(&inner.path, &e))?;
-        }
+        at::read(&inner.file, inner, &mut bytes, self.offset(slot)?)
+            .map_err(|e| io_error(&inner.path, &e))?;
         Ok(bytes
             .chunks_exact(8 * inner.d)
             .map(|poly| {

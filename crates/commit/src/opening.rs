@@ -223,7 +223,7 @@ pub fn open<const K: usize>(
     for (i, ci) in c_polys.iter().enumerate() {
         let g_s = decompose::g_apply(ring, b, delta, s_of(i))?;
         f_prime_eq_g_s &= f_prime_of(i).as_slice() == g_s.as_slice();
-        let lhs = ring.mat_vec(&ctx.pp.a, s_of(i))?;
+        let lhs = ring.mat_vec(&ctx.pp().a, s_of(i))?;
         let rhs = decompose::g_apply(ring, b, delta, t_hat_of(i))?;
         a_s_eq_g_t_hat &= lhs == rhs;
         for s_e in s_of(i) {
@@ -234,7 +234,7 @@ pub fn open<const K: usize>(
         .flat_map(|i| t_hat_of(i).iter().cloned())
         .chain(states.iter().flat_map(|s| s.rho_u.iter().cloned()))
         .collect();
-    let b_t_hat_eq_u = ring.mat_vec(&ctx.pp.b, &t_rho)? == u;
+    let b_t_hat_eq_u = ring.mat_vec(&ctx.pp().b, &t_rho)? == u;
     let max_norm_t_hat = hachi_co_core::short::inf_norm_polys(ring, &t_rho)?;
     let is_zero = |polys: &[Poly]| polys.iter().all(|p| p.0.iter().all(|x| *x == 0));
     let unheld_blocks_zero = (0..l.n_blocks)

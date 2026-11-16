@@ -41,7 +41,9 @@
 //! verifier checks the counts of the header (iterations, rounds) against the schedule.
 
 use crate::error::Error;
+use hachi::pcs::ExtSource;
 use hachi::{Commitment, HachiChoices, HachiPcs, Hiding, Proof, State};
+use hachi_co_core::base_pcs::LiftedCoeffs;
 use hachi_co_core::{BasePcs, Context, Layout};
 use hachi_co_math::Ext;
 use hachi_co_params::{BasePcsWords, PadRule};
@@ -284,6 +286,21 @@ fn base_error(e: hachi::Error) -> hachi_co_core::Error {
     hachi_co_core::Error::BasePcs(format!("Hachi: {e}"))
 }
 
+/// The number of variables and the fingerprint of `coeffs`, for their [`ExtSource`].
+///
+/// # Errors
+/// [`hachi_co_core::Error::Shape`] unless there are $2^\ell$ coefficients.
+fn lifted_shape<const K: usize>(coeffs: &LiftedCoeffs<K>) -> hachi_co_core::Result<(usize, u64)> {
+    if !coeffs.len().is_power_of_two() {
+        return Err(hachi_co_core::Error::Shape {
+            what: "lifted coefficients (2^l)",
+            expected: coeffs.len().next_power_of_two(),
+            actual: coeffs.len(),
+        });
+    }
+    Ok((coeffs.len().trailing_zeros() as usize, coeffs.fingerprint()))
+}
+
 impl<const K: usize> BasePcs<K> for HachiBase<K> {
     type Commitment = Commitment;
     type State = State<K>;
@@ -333,6 +350,83 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
             .map_err(base_error)
     }
 
+    /// [`HachiPcs::commit_multilinear_ext_owned`], which frees the coefficients as it packs them.
+    fn commit_multilinear_ext_owned(
+        &self,
+        coeffs: Vec<Ext<K>>,
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        self.pcs
+            .commit_multilinear_ext_owned(coeffs, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::commit_multilinear_ext_source`] on the coefficients read one run at a time from
+    /// `coeffs`: neither they nor their packed message are held over the field.
+    fn commit_multilinear_ext_lifted(
+        &self,
+        coeffs: &LiftedCoeffs<K>,
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        let (vars, fingerprint) = lifted_shape(coeffs)?;
+        let source = ExtSource {
+            vars,
+            read: std::sync::Arc::new(|start: usize, out: &mut [Ext<K>]| {
+                coeffs.coeffs_into(start, out);
+            }),
+            fingerprint,
+        };
+        self.pcs
+            .commit_multilinear_ext_source(&source, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext_source`] with the coefficients read from `coeffs`.
+    fn prove_multilinear_ext_lifted(
+        &self,
+        st: State<K>,
+        coeffs: LiftedCoeffs<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
+        // The source owns the coefficients, so that the opening frees them after its first
+        // iteration has read them.
+        let (vars, fingerprint) = lifted_shape(&coeffs)?;
+        let source = ExtSource {
+            vars,
+            read: std::sync::Arc::new(move |start: usize, out: &mut [Ext<K>]| {
+                coeffs.coeffs_into(start, out);
+            }),
+            fingerprint,
+        };
+        self.pcs
+            .prove_multilinear_ext_source(st, source, point, context, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::shed_message`]: the state keeps its masking rows and a fingerprint of the
+    /// packed coefficients.
+    fn shed(&self, st: &mut State<K>) -> bool {
+        self.pcs.shed_message(st)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext_rebuilt`] with the coefficients from `coeffs` if the
+    /// state was shed.
+    fn prove_multilinear_ext_rebuilt(
+        &self,
+        st: State<K>,
+        coeffs: impl FnOnce() -> hachi_co_core::Result<Vec<Ext<K>>>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
+        let coeffs = if st.is_shed() { coeffs()? } else { Vec::new() };
+        self.pcs
+            .prove_multilinear_ext_rebuilt(st, coeffs, point, context, seed)
+            .map_err(base_error)
+    }
+
     /// [`HachiPcs::prove_multilinear_ext`].
     fn prove_multilinear_ext(
         &self,
@@ -343,6 +437,20 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
     ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
         self.pcs
             .prove_multilinear_ext(st, point, context, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext_owned`], which frees the committed message once the first
+    /// iteration has read it.
+    fn prove_multilinear_ext_owned(
+        &self,
+        st: State<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
+        self.pcs
+            .prove_multilinear_ext_owned(st, point, context, seed)
             .map_err(base_error)
     }
 

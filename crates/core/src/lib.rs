@@ -82,7 +82,7 @@ pub use data::{
 };
 pub use error::{Error, Result};
 pub use layout::{Layout, NamedBlock};
-pub use linear::{build_m, build_y};
+pub use linear::{MRows, build_m, build_y};
 pub use randomness::{
     DOMAIN_BASE_PCS, DOMAIN_BLINDER_G0, DOMAIN_BLINDER_G1, DOMAIN_MASK, DOMAIN_RHO_U, DOMAIN_RHO_V,
     DOMAIN_RHO_W, PartyRandomness, PrgRandomness,

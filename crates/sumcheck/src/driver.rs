@@ -4,15 +4,14 @@
 //! crate.
 
 use crate::blinder::{blinder_coefficients, blinder_weights};
-use crate::eq::eq_table;
 use crate::error::{Error, Result, check_len};
 use crate::prover::PartyProver;
-use crate::quotient::quotient_share;
-use crate::tables::{mstar_table, put_pad_residues, w_table};
+use crate::quotient::{check_matrix, quotient_share_rows};
+use crate::tables::{EqSplit, MStarParts, put_pad_residues, w_table};
 use crate::transcript::{
     ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
 };
-use hachi_co_core::base_pcs::{mobius, mobius_ext};
+use hachi_co_core::base_pcs::{LiftedCoeffs, mobius, mobius_ext};
 use hachi_co_core::wire::{flatten_exts, join_words, split_words, unflatten_exts};
 use hachi_co_core::{
     BasePcs, BlinderKind, Challenger, Context, LinearShare, PartyRandomness, Poly,
@@ -20,6 +19,7 @@ use hachi_co_core::{
 use hachi_co_math::Ext;
 use hachi_co_mpc::{Comm, PartyId};
 use hachi_co_params::PadRule;
+use std::borrow::Cow;
 
 /// The absorb label of the hypercube sums $G\_{0,1}, \dots, G\_{0,n}$ (absorbed before
 /// [`Challenger::sumcheck_coins`]).
@@ -141,7 +141,7 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///
 /// **Steps** (each party; the coins come from `ch`; the blinders and the base PCS's six seeds,
 /// [`PartyRandomness::base_pcs`] at [`ClaimedPoly::seed_index`], from `rng`):
-/// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share`]) and the table of
+/// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share_rows`], one row of $\mathbf M$ at a time) and the table of
 ///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), with the pad $\rho^w\_p$
 ///    ([`PartyRandomness::rho_w`]), lines 227-259;
 /// 2. $g\_{0,p}, g\_{1,p}$ from [`PartyRandomness::blinder`] ($\ell'' \times d\_0$ and
@@ -158,7 +158,10 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///    ([`Challenger::absorb_words`]: [`LABEL_COMMIT_W`], [`LABEL_COMMIT_G0`],
 ///    [`LABEL_COMMIT_G1`], one word vector per party each); draw $\alpha, \rho, \tau\_0,
 ///    \tau\_1$ ([`Challenger::sumcheck_coins`]), lines 275-282;
-/// 5. the tables $\widetilde{eq}(\tau\_1, \cdot)$ and $M^\ast$ ([`mstar_table`]);
+/// 5. $\widetilde{eq}(\tau\_1, \cdot)$ as two halves ([`EqSplit`]) and $M^\ast$ by its parts
+///    ([`MStarParts`], the entries of [`mstar_table_rows`](crate::mstar_table_rows) formed when
+///    they are read), the second read of $\mathbf M$ after the quotient of step 1, one row at
+///    a time ([`prove_rebuilding`] builds each row again here rather than keeping $\mathbf M$);
 /// 6. for $r = 1, \dots, \ell''$: the round values ([`PartyProver::round_values`]),
 ///    $\mathcal F\_{\mathsf{AH}}(\mathbb I)$ on $H\_{0,p,r}(1..d\_0+1) \Vert H\_{1,p,r}(1..d\_1+1)$
 ///    (label [`FAH_ROUND`], lines 325-332), absorb $H\_{0,r}$ ([`LABEL_H0`]) and $H\_{1,r}$
@@ -197,6 +200,137 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     share: &LinearShare,
 ) -> Result<(SumcheckTranscript<K>, SumcheckPrivate<K>)> {
     let l = &ctx.layout;
+    check_matrix(m, l.n_prime, l.len_z, l.d)?;
+    prove_with(
+        ctx,
+        pcs,
+        comm,
+        rng,
+        ch,
+        |i| Ok(Cow::Borrowed(&m[i][..])),
+        e_matrix,
+        Share::Borrowed(share),
+        false,
+    )
+}
+
+/// [`prove`] with the rows of $\mathbf M$ built by `row` at each of its two reads, the quotient of
+/// step 1 and the column weights of $M^\ast$ in step 5, instead of given: the driver then holds one
+/// row at a time and no copy of $\mathbf M$ ([`hachi_co_core::MRows`]). `row(i)` must return row
+/// $i$ of the same matrix both times, as $\mathbf M$ is a function of public data; the messages are
+/// those of [`prove`].
+///
+/// # Errors
+/// As [`prove`], and those of `row`.
+#[allow(clippy::too_many_arguments)] // the inputs of the driver and the base PCS
+pub fn prove_rebuilding<
+    const K: usize,
+    P: BasePcs<K>,
+    C: Comm,
+    R: PartyRandomness<K>,
+    H: Challenger<K>,
+    B: FnMut(usize) -> Result<Vec<Poly>>,
+>(
+    ctx: &Context<K>,
+    pcs: &P,
+    comm: &mut C,
+    rng: &mut R,
+    ch: &mut H,
+    mut row: B,
+    e_matrix: &[Vec<u64>],
+    share: &LinearShare,
+) -> Result<(SumcheckTranscript<K>, SumcheckPrivate<K>)> {
+    prove_with(
+        ctx,
+        pcs,
+        comm,
+        rng,
+        ch,
+        |i| row(i).map(Cow::Owned),
+        e_matrix,
+        Share::Borrowed(share),
+        false,
+    )
+}
+
+/// [`prove_rebuilding`] for a caller that only needs the transcript (Eval's proof,
+/// `hachi_co::eval_lean`): the share is taken over and dropped once the table of step 2 is formed
+/// (its last reader), the context's public matrices are released once the column weights of
+/// $M^\ast$ are formed in step 5 ([`Context::release_public_params`]; they are formed again if read
+/// later), and the private output's table is not formed again at the end:
+/// [`SumcheckPrivate::w_table`] is empty. The same transcript.
+///
+/// # Errors
+/// As [`prove_rebuilding`].
+#[allow(clippy::too_many_arguments)] // the inputs of the driver and the base PCS
+pub fn prove_rebuilding_lean<
+    const K: usize,
+    P: BasePcs<K>,
+    C: Comm,
+    R: PartyRandomness<K>,
+    H: Challenger<K>,
+    B: FnMut(usize) -> Result<Vec<Poly>>,
+>(
+    ctx: &Context<K>,
+    pcs: &P,
+    comm: &mut C,
+    rng: &mut R,
+    ch: &mut H,
+    mut row: B,
+    e_matrix: &[Vec<u64>],
+    share: LinearShare,
+) -> Result<(SumcheckTranscript<K>, SumcheckPrivate<K>)> {
+    prove_with(
+        ctx,
+        pcs,
+        comm,
+        rng,
+        ch,
+        |i| row(i).map(Cow::Owned),
+        e_matrix,
+        Share::Owned(share),
+        true,
+    )
+}
+
+/// The share of [`prove_with`]: borrowed, or taken over by [`prove_rebuilding_lean`].
+enum Share<'a> {
+    Borrowed(&'a LinearShare),
+    Owned(LinearShare),
+}
+
+impl Share<'_> {
+    fn get(&self) -> &LinearShare {
+        match self {
+            Self::Borrowed(share) => share,
+            Self::Owned(share) => share,
+        }
+    }
+}
+
+/// [`prove`], reading the rows of $\mathbf M$ from `rows` at steps 1 and 5; `lean` as in
+/// [`prove_rebuilding_lean`].
+#[allow(clippy::too_many_arguments)] // the inputs of the driver and the base PCS
+fn prove_with<
+    'm,
+    const K: usize,
+    P: BasePcs<K>,
+    C: Comm,
+    R: PartyRandomness<K>,
+    H: Challenger<K>,
+    G: FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+>(
+    ctx: &Context<K>,
+    pcs: &P,
+    comm: &mut C,
+    rng: &mut R,
+    ch: &mut H,
+    mut rows: G,
+    e_matrix: &[Vec<u64>],
+    share: Share<'_>,
+    lean: bool,
+) -> Result<(SumcheckTranscript<K>, SumcheckPrivate<K>)> {
+    let l = &ctx.layout;
     let field = ctx.field();
     let (n, party) = (comm.n(), comm.id());
     if n != l.n || comm.modulus() != ctx.q() {
@@ -211,15 +345,24 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         return Err(Error::InvalidParty { party, n });
     }
     // Steps 1-2.
-    let quotient = quotient_share(ctx, m, share)?;
-    let mut table = w_table(ctx, &share.z_prime, &quotient)?;
+    let quotient = quotient_share_rows(ctx, &mut rows, share.get())?;
+    let mut table = w_table(ctx, &share.get().z_prime, &quotient)?;
+    // A lean run drops the share here, after its last reader.
+    let share = if lean {
+        drop(share);
+        None
+    } else {
+        Some(share)
+    };
     let g0 = rng.blinder(field, BlinderKind::G0, l.ell_pp, l.d0)?;
     let g1 = rng.blinder(field, BlinderKind::G1, l.ell_pp, l.d1)?;
+    let mut pad_residues = None;
     let pad = match l.pad_rule {
         PadRule::Field => Some(rng.rho_w(field)?),
         PadRule::Residues => {
             let residues = rng.rho_w_residues(ctx.q(), 2 * l.k)?;
             put_pad_residues(l, &mut table, &residues)?;
+            pad_residues = Some(residues);
             None
         }
     };
@@ -251,9 +394,20 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
             let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
             let (com, st) = match l.pad_rule {
                 PadRule::Field => {
-                    let mut coeffs = prover.w_field_table();
-                    mobius_ext(field, &mut coeffs)?;
-                    pcs.commit_multilinear_ext(&coeffs, &seed)?
+                    // The coefficients as the Möbius transform of the base table and the pad
+                    // (`LiftedCoeffs`), which the base PCS may read one at a time instead of
+                    // holding them, or their packed message, over the field; the state then holds
+                    // no message until the opening, which reads the same coefficients again
+                    // (`BasePcs::shed` for a base PCS that formed them). The prover lends its
+                    // table, which becomes the coefficients in place and comes back by the
+                    // inverse transform (`LiftedCoeffs::into_table`): the same table, as its
+                    // entries are reduced (`w_table`), without a copy next to it.
+                    let coeffs =
+                        LiftedCoeffs::from_table(field, prover.take_w_table(), prover.pad_entry())?;
+                    let (com, mut st) = pcs.commit_multilinear_ext_lifted(&coeffs, &seed)?;
+                    prover.restore_w_table(coeffs.into_table()?)?;
+                    pcs.shed(&mut st);
+                    (com, st)
                 }
                 PadRule::Residues => {
                     let mut coeffs = prover.w_table().to_vec();
@@ -294,10 +448,16 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     let coins = ch.sumcheck_coins(field, l.ell_pp, l.log_n, l.log_nu)?;
     coins.validate(l, ctx.q())?;
     // Step 5.
-    let eq1 = eq_table(field, &coins.tau1)?;
-    let mstar = mstar_table(ctx, m, e_matrix, &eq1, &coins.alpha)?;
-    drop(eq1);
-    prover.start(&coins, mstar)?;
+    // M* by its parts: round 1 forms its entries where it reads them, and the first bind forms
+    // the table bound to a_1, so that the table of 2^l'' entries is never held.
+    let eq1 = EqSplit::new(field, &coins.tau1)?;
+    let mstar = MStarParts::from_rows(ctx, &mut rows, e_matrix, eq1, &coins.alpha)?;
+    drop(rows);
+    if lean {
+        // The last row of M is read: a lean run releases the public matrices.
+        ctx.release_public_params();
+    }
+    prover.start_parts(&coins, mstar)?;
     // Step 6.
     let mut rounds = Vec::with_capacity(l.ell_pp);
     let mut values = Vec::with_capacity(l.ell_pp);
@@ -329,8 +489,11 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
     ch.absorb_exts(LABEL_FINAL_W, &finals.w);
     ch.absorb_exts(LABEL_FINAL_G0, &finals.g0);
     ch.absorb_exts(LABEL_FINAL_G1, &finals.g1);
-    // Step 8.
-    let point = prover.point().to_vec();
+    // Step 8. The prover's parts: its table goes to the share's opening, which forms the
+    // coefficients of step 3 again from it and frees it, so that it is not held through the
+    // opening (the private output forms it again at the end).
+    let (w_base, pad, g0, g1, point) = prover.into_parts();
+    let mut base = Some(w_base);
     let expected = [mine.0, mine.1, mine.2];
     let mut proofs: [Vec<u64>; 3] = Default::default();
     // The contexts in the order of the verifier, whatever the base PCS does with them.
@@ -343,14 +506,15 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
             .unwrap_or(0);
         contexts[i]
     };
-    match &states {
+    match states {
         States::Merged(st) => {
             // One proof of the three values, under the share polynomial's context.
+            drop(base.take());
             let seed = rng.base_pcs(ClaimedPoly::W.seed_index(true))?;
             let weights0 = blinder_weights(field, &point, l.d0);
             let weights1 = blinder_weights(field, &point, l.d1);
             let (values, proof) = pcs.prove_merged(
-                st,
+                &st,
                 &point,
                 &weights0,
                 &weights1,
@@ -372,26 +536,44 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
             g0: st_g0,
             g1: st_g1,
         } => {
+            // The share's state goes to its opening, the last of the three (`ClaimedPoly::ORDER`),
+            // which may free what it no longer reads (`BasePcs::prove_multilinear_ext_owned`) and
+            // forms again what the state shed after its commitment.
+            let mut st_w = Some(st_w);
+            if l.pad_rule != PadRule::Field {
+                drop(base.take());
+            }
             for poly in ClaimedPoly::ORDER {
                 let context = context_of(poly);
                 let seed = rng.base_pcs(poly.seed_index(true))?;
                 let (value, words) = match poly {
                     ClaimedPoly::W => {
+                        let st = st_w.take().ok_or_else(|| {
+                            Error::State("the share polynomial is opened once".into())
+                        })?;
                         let (value, proof) = match l.pad_rule {
                             PadRule::Field => {
-                                pcs.prove_multilinear_ext(st_w, &point, &context, &seed)?
+                                // The coefficients of step 3 again, from the same table, which is
+                                // not read again: its Möbius transform in place.
+                                let base = base.take().ok_or_else(|| {
+                                    Error::State("the share's table is read once".into())
+                                })?;
+                                let coeffs = LiftedCoeffs::from_table(field, base, pad)?;
+                                pcs.prove_multilinear_ext_lifted(
+                                    st, coeffs, &point, &context, &seed,
+                                )?
                             }
                             PadRule::Residues => {
-                                pcs.prove_multilinear(st_w, &point, &context, &seed)?
+                                pcs.prove_multilinear(&st, &point, &context, &seed)?
                             }
                         };
                         (value, pcs.proof_to_words(&proof))
                     }
                     ClaimedPoly::G0 | ClaimedPoly::G1 => {
                         let (st, degree) = if poly == ClaimedPoly::G0 {
-                            (st_g0, l.d0)
+                            (&st_g0, l.d0)
                         } else {
-                            (st_g1, l.d1)
+                            (&st_g1, l.d1)
                         };
                         let weights = blinder_weights(field, &point, degree);
                         let (value, proof) =
@@ -407,7 +589,19 @@ pub fn prove<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: C
         }
     }
     let openings = all_gather_words(comm, ALL_GATHER_OPENINGS, n, &proofs)?;
-    let (w_table, pad, g0, g1, point) = prover.into_parts();
+    drop(base);
+    // The private output's table, formed again as in steps 1 and 2 (the prover never changes
+    // its table, so this is the same table); a lean run leaves it empty.
+    let w_table = match &share {
+        Some(share) => {
+            let mut table = w_table(ctx, &share.get().z_prime, &quotient)?;
+            if let Some(residues) = &pad_residues {
+                put_pad_residues(l, &mut table, residues)?;
+            }
+            table
+        }
+        None => Vec::new(),
+    };
     Ok((
         SumcheckTranscript {
             g0_sums,

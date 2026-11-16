@@ -19,6 +19,7 @@ hachi-co-params.workspace = true
 hachi-co-sampling.workspace = true
 hachi-co-transcript.workspace = true
 rand.workspace = true
+rayon.workspace = true
 serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true

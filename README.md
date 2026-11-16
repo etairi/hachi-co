@@ -59,7 +59,10 @@ and benchmark harness, not a deployment: the parties derive the instance and the
 connections are neither encrypted nor authenticated, and the parameters are insecure.
 
 Build it, write one configuration per party (here the three parties of `toy-n3` on one machine), start the
-parties (in any order) and verify the proof:
+parties (in any order) and verify the proof. The binary uses mimalloc as its allocator, which needs a C compiler to
+build (`--no-default-features` builds it with the system's allocator instead). For runs short of memory,
+`MIMALLOC_PURGE_DELAY=3` returns freed memory sooner: at secure-l24-n2-a8 it lowered the resident peak from 3.1 to
+3.5 GiB to 2.9 GiB per party, for about 5% more Eval time:
 
 ```text
 cargo build --release -p hachi-co --bin hachi-co-party

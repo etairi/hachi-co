@@ -96,7 +96,7 @@ pub use driver::{R2lOutput, run};
 pub use error::{Error, Result};
 pub use local::{
     BlockW, MaskImages, MaskSecrets, a_times_g, block_w, check_challenges, d_slice, fah_d_input,
-    fold, mask_images, owned_w, respond, response_len, sample_masks,
+    fold, mask_images, owned_w, respond, response_len, sample_mask_images, sample_masks,
 };
 pub use prover1::{norm_check, z_hat, z_of_sum};
 pub use relation::{
@@ -104,7 +104,9 @@ pub use relation::{
     row_block_checks, sum_shares,
 };
 pub use share::{y_share, z_prime_share};
-pub use verifier::{LinearRelation, linear_relation, verifier_challenges, verifier_iteration};
+pub use verifier::{
+    LinearRelation, check_relation, linear_relation, verifier_challenges, verifier_iteration,
+};
 
 /// The label under which provers and verifier absorb the first message $\mathbf v$ before
 /// drawing $\mathbf c$ (`5_Building_Blocks.tex`:133-138).

@@ -11,6 +11,7 @@
 
 use crate::ct::{lift_polys, wipe_polys};
 use crate::{Error, Result};
+use core::ops::Range;
 use hachi_co_core::short::center_poly;
 use hachi_co_core::{BlockState, Context, PartyId, PartyRandomness, PartyState, PublicVectors};
 use hachi_co_math::{Poly, decompose};
@@ -38,7 +39,16 @@ pub(crate) fn check_polys(
     q: u64,
 ) -> Result<()> {
     check_len(what, count, polys.len())?;
-    for p in polys {
+    // In parallel for long vectors (z-hat), the first wrong entry found in order and reported as
+    // the loop below reports it.
+    let bad = |p: &Poly| p.0.len() != d || p.0.iter().any(|x| *x >= q);
+    let first = if polys.len() >= 4096 {
+        polys.par_iter().position_first(bad)
+    } else {
+        polys.iter().position(bad)
+    };
+    if let Some(i) = first {
+        let p = &polys[i];
         check_len(what, d, p.0.len())?;
         if let Some(value) = p.0.iter().copied().find(|x| *x >= q) {
             return Err(Error::NonCanonical { what, value, q });
@@ -121,7 +131,12 @@ pub fn block_w<const K: usize>(
 }
 
 /// Step 1 for prover $p$ (`5_Building_Blocks.tex`:115-120): [`block_w`] of every block it holds,
-/// in increasing order of index ([`hachi_co_core::Layout::blocks_of`]).
+/// in increasing order of index ([`hachi_co_core::Layout::blocks_of`]). Commit forms
+/// $\mathbf s\_i = \mathbf G^{-1}(\mathbf f'\_i)$, so $\mathbf G \mathbf s\_i$ is $\mathbf f'\_i$
+/// read modulo $q$, as the product reads it: $w\_i$ is formed from $\mathbf f'\_i$, and a state on
+/// disk is read back without being decomposed
+/// ([`PartyState::for_each_f_prime_group`](hachi_co_core::PartyState::for_each_f_prime_group)),
+/// a group of blocks at a time, in parallel.
 ///
 /// # Errors
 /// [`Error::Core`] if the state or the public vectors have the wrong shape; as [`block_w`].
@@ -131,30 +146,35 @@ pub fn owned_w<const K: usize>(
     state: &PartyState<K>,
 ) -> Result<Vec<BlockW>> {
     state.validate(&ctx.layout)?;
-    let mut out = Vec::with_capacity(state.blocks.len());
     pv.validate(&ctx.layout)?;
     let a_ring = ctx.ring.prepare(core::slice::from_ref(&pv.a_ring))?;
-    state.for_each_block(ctx, |block| {
-        block.validate(&ctx.layout)?;
-        let g = decompose::g_apply(&ctx.ring, ctx.b(), ctx.layout.delta, &block.s)?;
-        let [w] = <[Poly; 1]>::try_from(ctx.ring.mat_vec_prepared(&a_ring, &g)?).map_err(|_| {
-            Error::Shape {
-                what: "a^T G s_i (one row)",
-                expected: 1,
-                actual: 0,
-            }
-        })?;
-        let w_hat = decompose::g_inv(
-            &ctx.ring,
-            ctx.b(),
-            ctx.layout.delta,
-            core::slice::from_ref(&w),
-        )?;
-        out.push(BlockW {
-            index: block.index,
-            w,
-            w_hat,
-        });
+    let mut out = Vec::with_capacity(state.blocks.len());
+    state.for_each_f_prime_group(ctx, |blocks, f_primes| {
+        let ws = blocks
+            .par_iter()
+            .zip(f_primes.par_iter())
+            .map(|(block, f_prime)| {
+                block.validate_commitment(&ctx.layout)?;
+                let [w] = <[Poly; 1]>::try_from(ctx.ring.mat_vec_prepared(&a_ring, f_prime)?)
+                    .map_err(|_| Error::Shape {
+                        what: "a^T G s_i (one row)",
+                        expected: 1,
+                        actual: 0,
+                    })?;
+                let w_hat = decompose::g_inv(
+                    &ctx.ring,
+                    ctx.b(),
+                    ctx.layout.delta,
+                    core::slice::from_ref(&w),
+                )?;
+                Ok(BlockW {
+                    index: block.index,
+                    w,
+                    w_hat,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        out.extend(ws);
         Ok::<(), Error>(())
     })?;
     Ok(out)
@@ -229,7 +249,7 @@ pub fn mask_images<const K: usize>(
         hachi_co_sampling::Error::MaskOutOfRange.into()
     })?;
     let images = (|| {
-        let t0 = ctx.ring.mat_vec_prepared(ctx.a_prepared()?, &r)?;
+        let t0 = ctx.ring.mat_vec_prepared(&*ctx.a_prepared()?, &r)?;
         let t0_hat = decompose::g_inv(&ctx.ring, ctx.b(), l.delta, &t0)?;
         let w0 = a_times_g(ctx, &pv.a_ring, &r)?;
         let w0_hat = decompose::g_inv(&ctx.ring, ctx.b(), l.delta, core::slice::from_ref(&w0))?;
@@ -244,6 +264,16 @@ pub fn mask_images<const K: usize>(
     images
 }
 
+/// The groups of iterations $0, \dots, L - 1$ in which the masks are drawn ([`sample_masks`]) and
+/// read again for their responses (`run`): as many as threads, so that the masks of a group are
+/// formed in parallel and few are held at once.
+pub(crate) fn mask_groups(count: usize) -> impl Iterator<Item = Range<usize>> {
+    let group = rayon::current_num_threads().max(1);
+    (0..count)
+        .step_by(group)
+        .map(move |start| start..(start + group).min(count))
+}
+
 /// Prover $p$'s private values of the ring-to-linear step (`fig:ring-to-linear`, step 3, since
 /// the draft's commit `1096ea2`): the $L$ masks, their images and $\boldsymbol\rho^v\_p$.
 ///
@@ -255,7 +285,8 @@ pub fn mask_images<const K: usize>(
 /// also when an error ends the step early.
 pub struct MaskSecrets {
     /// The masks $\mathbf r\_p^j \leftarrow \chi\_r$, $j \lt L$ (0-indexed, the draft's $j + 1$),
-    /// each uniform in $\[-\gamma, \gamma\]^N$ and flat.
+    /// each uniform in $\[-\gamma, \gamma\]^N$ and flat: held by [`sample_masks`], empty in the
+    /// secrets of [`sample_mask_images`] (the driver's), which never holds them all.
     pub masks: Vec<Vec<i64>>,
     /// $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$, one for all iterations, flat ($m\_v d$
     /// integers in $\[\lceil -b/2 \rceil, \lceil b/2 \rceil - 1\]$).
@@ -319,45 +350,83 @@ impl MaskSecrets {
     }
 }
 
-/// Step 3 (`fig:ring-to-linear`, since the draft's commit `1096ea2`): draws the $L$ masks
+/// Step 3 (`fig:ring-to-linear`, since the draft's commit `1096ea2`) as the driver runs it: draws the $L$ masks
 /// $\mathbf r\_p^j \leftarrow \chi\_r$ ([`PartyRandomness::mask`] with index $j$, $N$ entries,
 /// width $\gamma$) and one $\boldsymbol\rho^v\_p \leftarrow S\_b^{m\_v}$
 /// ([`PartyRandomness::rho_v`], $m\_v d$ entries), checks what the randomness source returned
-/// (lengths and ranges), and computes the [`mask_images`] of every mask, in parallel.
+/// (lengths and ranges), and computes the [`mask_images`] of every mask, in parallel, a group of masks at a
+/// time, each group wiped once its images are formed: the returned secrets hold no masks, which
+/// the driver reads again for their responses ([`PartyRandomness::masks_again`]).
 ///
 /// # Errors
 /// The errors of the randomness source ([`Error::Core`], e.g.
 /// [`RandomnessReuse`](hachi_co_core::Error::RandomnessReuse) for a second call on one
 /// [`hachi_co_core::PrgRandomness`]); [`Error::Shape`] or [`Error::OutOfRange`] if it returned
 /// malformed values; as [`mask_images`].
+pub fn sample_mask_images<const K: usize, R: PartyRandomness<K>>(
+    ctx: &Context<K>,
+    pv: &PublicVectors<K>,
+    rng: &mut R,
+) -> Result<MaskSecrets> {
+    let l = &ctx.layout;
+    let (count, n) = (l.rej_iterations, response_len(ctx));
+    let mut secrets = MaskSecrets {
+        masks: Vec::new(),
+        rho_v: Vec::new(),
+        images: Vec::with_capacity(count),
+    };
+    // On an error below, dropping `secrets` wipes what was drawn. The masks come from their own
+    // streams, a group at a time (in parallel where the randomness allows it,
+    // `PartyRandomness::masks_in`): each group's images are formed and the group is wiped, so the
+    // L masks are never held at once; `run` reads each mask again for its response
+    // (`PartyRandomness::masks_again`).
+    for range in mask_groups(count) {
+        secrets.masks = rng.masks_in(range.clone(), ctx.gamma(), n)?;
+        check_len(
+            "masks r_p^j (one per iteration)",
+            range.len(),
+            secrets.masks.len(),
+        )?;
+        for mask in &secrets.masks {
+            check_len("mask r_p^j (N = d delta 2^m)", n, mask.len())?;
+        }
+        let images = secrets
+            .masks
+            .par_iter()
+            .map(|mask| mask_images(ctx, pv, mask))
+            .collect::<Result<Vec<_>>>()?;
+        secrets.wipe_masks();
+        secrets.masks.clear();
+        secrets.images.extend(images);
+    }
+    secrets.rho_v = rng.rho_v(ctx.b(), l.m_v * l.d)?;
+    secrets.rho_polys(ctx)?;
+    Ok(secrets)
+}
+
+/// [`sample_mask_images`] with the masks held in the returned secrets, read again from the
+/// randomness once their images are formed ([`PartyRandomness::masks_again`]): the same masks, for
+/// callers that use them directly.
+///
+/// # Errors
+/// As [`sample_mask_images`].
 pub fn sample_masks<const K: usize, R: PartyRandomness<K>>(
     ctx: &Context<K>,
     pv: &PublicVectors<K>,
     rng: &mut R,
 ) -> Result<MaskSecrets> {
     let l = &ctx.layout;
-    let mut secrets = MaskSecrets {
-        masks: Vec::with_capacity(l.rej_iterations),
-        rho_v: Vec::new(),
-        images: Vec::new(),
-    };
-    // On an error below, dropping `secrets` wipes what was drawn.
-    for j in 0..l.rej_iterations {
-        let mask = rng.mask(j as u64, ctx.gamma(), response_len(ctx))?;
-        secrets.masks.push(mask);
-        check_len(
-            "mask r_p^j (N = d delta 2^m)",
-            response_len(ctx),
-            secrets.masks[j].len(),
-        )?;
+    let n = response_len(ctx);
+    let mut secrets = sample_mask_images(ctx, pv, rng)?;
+    secrets.masks = rng.masks_again(0..l.rej_iterations, ctx.gamma(), n)?;
+    check_len(
+        "masks r_p^j (one per iteration)",
+        l.rej_iterations,
+        secrets.masks.len(),
+    )?;
+    for mask in &secrets.masks {
+        check_len("mask r_p^j (N = d delta 2^m)", n, mask.len())?;
     }
-    secrets.rho_v = rng.rho_v(ctx.b(), l.m_v * l.d)?;
-    secrets.rho_polys(ctx)?;
-    secrets.images = secrets
-        .masks
-        .par_iter()
-        .map(|mask| mask_images(ctx, pv, mask))
-        .collect::<Result<Vec<_>>>()?;
     Ok(secrets)
 }
 
@@ -441,7 +510,7 @@ pub fn fah_d_input<const K: usize>(ctx: &Context<K>, slice: &[Poly]) -> Result<V
         ctx.layout.t,
         slice.len(),
     )?;
-    Ok(ctx.ring.mat_vec(&ctx.pp.d, slice)?)
+    Ok(ctx.ring.mat_vec(&ctx.pp().d, slice)?)
 }
 
 /// Checks $\mathbf c \in \mathcal C^{2^r}$ (`5_Building_Blocks.tex`:134-138): $2^r$ challenges
@@ -497,6 +566,9 @@ pub fn fold<const K: usize>(
     let l = &ctx.layout;
     state.validate(l)?;
     check_challenges(ctx, c)?;
+    if state.spill.is_some() {
+        return fold_from_disk(ctx, state, c);
+    }
     let (d, q) = (l.d, ctx.q());
     let mut acc = vec![0i64; response_len(ctx)];
     state.for_each_block(ctx, |block| {
@@ -516,6 +588,64 @@ pub fn fold<const K: usize>(
             })
     })?;
     Ok(acc)
+}
+
+/// [`fold`] for a state on disk: the digits of $\mathbf s\_i = \mathbf G^{-1}(\mathbf f'\_i)$
+/// formed as signed integers where they are multiplied, entry by entry of $\mathbf f'\_i$
+/// ([`decompose::g_inv_rows`], the digits of [`decompose::g_inv`]), so that $\mathbf s\_i$ is
+/// neither formed as residues nor centered again: the same digits, the same products and sums.
+fn fold_from_disk<const K: usize>(
+    ctx: &Context<K>,
+    state: &PartyState<K>,
+    c: &[Vec<i64>],
+) -> Result<Vec<i64>> {
+    let l = &ctx.layout;
+    let (d, delta, b, zq) = (l.d, l.delta, ctx.b(), ctx.ring.zq());
+    let mut acc = vec![0i64; response_len(ctx)];
+    state.for_each_f_prime_group(ctx, |blocks, f_primes| {
+        for (block, f_prime) in blocks.iter().zip(f_primes) {
+            let ci = &c[block.index];
+            // The delta rows of the fold that the digits of entry e of f'_i reach: e delta + k.
+            acc.par_chunks_mut(delta * d)
+                .zip(f_prime.par_iter())
+                .try_for_each_init(
+                    || (vec![0i64; delta * d], vec![0i64; d]),
+                    |(digits, scratch), (rows, entry)| {
+                        let got =
+                            add_digit_products(zq, b, delta, ci, entry, rows, digits, scratch);
+                        crate::ct::wipe(digits);
+                        crate::ct::wipe(scratch);
+                        got
+                    },
+                )?;
+        }
+        Ok::<(), Error>(())
+    })?;
+    Ok(acc)
+}
+
+/// Adds $c\_i$ times digit $k$ of `entry` to row $k$ of `rows`, for $k \lt \delta$.
+#[allow(clippy::too_many_arguments)]
+fn add_digit_products(
+    zq: &hachi_co_math::Zq,
+    b: u64,
+    delta: usize,
+    ci: &[i64],
+    entry: &Poly,
+    rows: &mut [i64],
+    digits: &mut [i64],
+    scratch: &mut [i64],
+) -> Result<()> {
+    let d = entry.0.len();
+    decompose::g_inv_rows(zq, b, delta, &entry.0, digits, scratch)?;
+    for (row, digit_row) in rows.chunks_exact_mut(d).zip(digits.chunks_exact(d)) {
+        let mut product = hachi_co_core::short::negacyclic_mul(ci, digit_row)?;
+        for (a, x) in row.iter_mut().zip(&product) {
+            *a = a.checked_add(*x).ok_or(Error::Overflow("the fold"))?;
+        }
+        crate::ct::wipe(&mut product);
+    }
+    Ok(())
 }
 
 /// The centered digits of one entry of $\mathbf s\_i$ ([`center_poly`]); a digit $\ge q$ is this

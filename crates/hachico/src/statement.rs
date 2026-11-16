@@ -12,7 +12,7 @@
 //! the transcript.
 
 use crate::error::StatementError;
-use hachi_co_core::{Challenger, Context, Ext, Matrix, Poly};
+use hachi_co_core::{Challenger, Context, Ext, Poly};
 use hachi_co_params::{ChallengeSet, PadRule, Params, TauRule};
 
 /// The domain of the Fiat-Shamir transcript of one $\mathsf{Eval}$
@@ -104,12 +104,6 @@ pub fn statement_words(params: &Params) -> [(&'static str, u64); 18] {
     core::array::from_fn(|i| (LABELS_PARAMS[i], values[i]))
 }
 
-/// A matrix as one list of ring elements, row after row (its shape is fixed by the parameter
-/// words absorbed before it).
-fn rows(m: &Matrix) -> Vec<Poly> {
-    m.iter().flatten().cloned().collect()
-}
-
 /// Absorbs the statement of $\mathsf{Eval}$ into `ch`, before any coin is drawn
 /// (`docs/m1-spec.md`, WP11), in this order:
 ///
@@ -139,9 +133,11 @@ pub fn absorb_statement<const K: usize, H: Challenger<K>>(
     for (label, value) in statement_words(&ctx.params) {
         ch.absorb_u64(label, value);
     }
-    ch.absorb_polys(LABEL_PP_A, &rows(&ctx.pp.a));
-    ch.absorb_polys(LABEL_PP_B, &rows(&ctx.pp.b));
-    ch.absorb_polys(LABEL_PP_D, &rows(&ctx.pp.d));
+    // The rows' concatenation, as the message of `absorb_polys` (`absorb_poly_rows`).
+    let pp = ctx.pp();
+    ch.absorb_poly_rows(LABEL_PP_A, &pp.a);
+    ch.absorb_poly_rows(LABEL_PP_B, &pp.b);
+    ch.absorb_poly_rows(LABEL_PP_D, &pp.d);
     let digest: Vec<u64> = base_digest
         .as_chunks::<8>()
         .0

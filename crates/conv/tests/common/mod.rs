@@ -48,7 +48,7 @@ pub fn state_from_share(ctx: &Context<K>, p: PartyId, share: Vec<Ext<K>>) -> Par
                 })
                 .collect();
             let s = decompose::g_inv(ring, b, delta, &f_prime).unwrap();
-            let t = ring.mat_vec(&ctx.pp.a, &s).unwrap();
+            let t = ring.mat_vec(&ctx.pp().a, &s).unwrap();
             let t_hat = decompose::g_inv(ring, b, delta, &t).unwrap();
             BlockState {
                 index,

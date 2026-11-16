@@ -3,9 +3,11 @@
 
 use crate::data::{Blinder, BlinderKind};
 use crate::{Error, Result};
+use core::ops::Range;
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::{ShakePrg, rej, uniform};
 use rand::Rng;
+use rayon::prelude::*;
 use std::collections::BTreeSet;
 
 #[cfg(doc)]
@@ -67,6 +69,55 @@ pub trait PartyRandomness<const K: usize> {
     /// # Errors
     /// [`Error::Sampling`] if $\gamma \gt 2^{63} - 1$, and implementation-specific errors.
     fn mask(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>>;
+
+    /// The masks of the iterations $0, \dots, $ `count` $- 1$, in order: [`PartyRandomness::mask`]
+    /// of each ([`PartyRandomness::masks_in`]).
+    ///
+    /// # Errors
+    /// As [`PartyRandomness::mask`].
+    fn masks(&mut self, count: usize, gamma: u64, len: usize) -> Result<Vec<Vec<i64>>> {
+        self.masks_in(0..count, gamma, len)
+    }
+
+    /// The masks of the iterations in `range`, in order: [`PartyRandomness::mask`] of each. An
+    /// implementation whose masks come from separate streams may draw them in parallel; the
+    /// default draws them one after the other.
+    ///
+    /// # Errors
+    /// As [`PartyRandomness::mask`].
+    fn masks_in(&mut self, range: Range<usize>, gamma: u64, len: usize) -> Result<Vec<Vec<i64>>> {
+        range.map(|j| self.mask(j as u64, gamma, len)).collect()
+    }
+
+    /// The mask of iteration `iteration` again, the one already served for it, for its response:
+    /// the ring-to-linear step forms a mask's images when it draws it and its response after the
+    /// challenges, and reads it again then rather than holding the $L$ masks in between. A source
+    /// that refuses to serve a stream twice ([`PrgRandomness`]) serves a mask again only once it
+    /// was drawn, and still refuses a second fresh draw ([`PartyRandomness::mask`]), so that a
+    /// mask never serves two evaluations. The default reads it as [`PartyRandomness::mask`] does,
+    /// for sources that serve the same value again.
+    ///
+    /// # Errors
+    /// As [`PartyRandomness::mask`].
+    fn mask_again(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
+        self.mask(iteration, gamma, len)
+    }
+
+    /// The masks of the iterations in `range` again, in order ([`PartyRandomness::mask_again`]
+    /// of each); in parallel where the masks come from separate streams.
+    ///
+    /// # Errors
+    /// As [`PartyRandomness::mask_again`].
+    fn masks_again(
+        &mut self,
+        range: Range<usize>,
+        gamma: u64,
+        len: usize,
+    ) -> Result<Vec<Vec<i64>>> {
+        range
+            .map(|j| self.mask_again(j as u64, gamma, len))
+            .collect()
+    }
 
     /// The commitment's randomness $\boldsymbol\rho^u\_i \leftarrow S\_b^{m\_u}$
     /// (`6_Collaborative_Hachi.tex`:382; $S\_b$ of `4_preliminaries.tex`:88): `len` $= m\_u d$
@@ -164,6 +215,19 @@ impl PrgRandomness {
         }
     }
 
+    /// The masks of the streams $(\mathrm{seed}, $ [`DOMAIN_MASK`] $, j)$ for $j$ in `range`, in
+    /// parallel, as [`PartyRandomness::mask`] draws each.
+    fn mask_streams(&self, range: Range<u64>, gamma: u64, len: usize) -> Result<Vec<Vec<i64>>> {
+        let seed = self.seed;
+        range
+            .into_par_iter()
+            .map(|j| {
+                let mut prg = ShakePrg::new(&seed, DOMAIN_MASK.as_bytes(), j);
+                Ok(rej::mask(&mut prg, gamma, len)?)
+            })
+            .collect()
+    }
+
     /// Runs `draw` on the stream `(seed, domain, index)` and marks the stream used if it
     /// succeeds.
     fn draw<T>(
@@ -189,6 +253,52 @@ impl<const K: usize> PartyRandomness<K> for PrgRandomness {
         self.draw(DOMAIN_MASK, iteration, |prg| {
             Ok(rej::mask(prg, gamma, len)?)
         })
+    }
+
+    /// Mask $j$ from its own stream $(\mathrm{seed}, $ [`DOMAIN_MASK`] $, j)$, as
+    /// [`PartyRandomness::mask`] draws it, the streams in parallel: the same masks. Every stream
+    /// is checked unused first, and all are marked used once all are drawn.
+    fn masks_in(&mut self, range: Range<usize>, gamma: u64, len: usize) -> Result<Vec<Vec<i64>>> {
+        let range = range.start as u64..range.end as u64;
+        if let Some(index) = range
+            .clone()
+            .find(|j| self.used.contains(&(DOMAIN_MASK, *j)))
+        {
+            return Err(Error::RandomnessReuse {
+                kind: DOMAIN_MASK,
+                index,
+            });
+        }
+        let masks = self.mask_streams(range.clone(), gamma, len)?;
+        self.used.extend(range.map(|j| (DOMAIN_MASK, j)));
+        Ok(masks)
+    }
+
+    /// The mask already drawn for `iteration`, from its stream again ([`PrgRandomness`] refuses a
+    /// mask never drawn with [`Error::MaskNotDrawn`]).
+    fn mask_again(&mut self, iteration: u64, gamma: u64, len: usize) -> Result<Vec<i64>> {
+        let j = usize::try_from(iteration).unwrap_or(usize::MAX);
+        let mut masks =
+            PartyRandomness::<K>::masks_again(self, j..j.saturating_add(1), gamma, len)?;
+        Ok(masks.pop().unwrap_or_default())
+    }
+
+    /// The masks already drawn for the iterations in `range`, from their streams again, the
+    /// streams in parallel; a mask never drawn is refused ([`Error::MaskNotDrawn`]).
+    fn masks_again(
+        &mut self,
+        range: Range<usize>,
+        gamma: u64,
+        len: usize,
+    ) -> Result<Vec<Vec<i64>>> {
+        let range = range.start as u64..range.end as u64;
+        if let Some(index) = range
+            .clone()
+            .find(|j| !self.used.contains(&(DOMAIN_MASK, *j)))
+        {
+            return Err(Error::MaskNotDrawn { index });
+        }
+        self.mask_streams(range, gamma, len)
     }
 
     fn rho_u(&mut self, b: u64, len: usize) -> Result<Vec<i64>> {

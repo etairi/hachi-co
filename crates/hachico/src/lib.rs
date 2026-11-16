@@ -161,7 +161,7 @@ mod verifier;
 pub use base::{HACHI_BASE_DIGEST_DOMAIN, HachiBase, SETUP_DOMAIN_BASE_PCS, base_pcs_seed};
 pub use error::{DecodeError, Error, ProofError, StatementError, VerifyError};
 pub use proof::{EvalProof, HEADER_LEN, MAGIC, VERSION, encoded_len};
-pub use prover::{EvalOutput, commit, commit_streaming, eval, eval_with, setup};
+pub use prover::{EvalOutput, commit, commit_streaming, eval, eval_lean, eval_with, setup};
 pub use statement::{
     EVAL_DOMAIN, LABEL_PP_A, LABEL_PP_B, LABEL_PP_BASE, LABEL_PP_D, LABEL_X, LABELS_PARAMS,
     absorb_statement, check_statement, statement_words,

@@ -26,19 +26,47 @@ fn setup_expands_the_documented_streams() {
                 .map(|r| r.into_iter().map(Poly).collect())
                 .collect()
         };
-        assert_eq!(ctx.pp.a, expected(SETUP_DOMAIN_A, l.n_a, l.width_a));
-        assert_eq!(ctx.pp.b, expected(SETUP_DOMAIN_B, l.n_b, l.width_b));
-        assert_eq!(ctx.pp.d, expected(SETUP_DOMAIN_D, l.n_d, l.width_d));
+        assert_eq!(ctx.pp().a, expected(SETUP_DOMAIN_A, l.n_a, l.width_a));
+        assert_eq!(ctx.pp().b, expected(SETUP_DOMAIN_B, l.n_b, l.width_b));
+        assert_eq!(ctx.pp().d, expected(SETUP_DOMAIN_D, l.n_d, l.width_d));
         // Deterministic, seed-dependent, and the three domains differ.
         let again = Context::<4>::setup(params.clone(), &SEED).unwrap();
-        assert_eq!(again.pp, ctx.pp);
+        assert_eq!(*again.pp(), *ctx.pp());
         let mut other_seed = SEED;
         other_seed[31] ^= 1;
         let other = Context::<4>::setup(params, &other_seed).unwrap();
-        assert_ne!(other.pp.a, ctx.pp.a);
-        assert_ne!(ctx.pp.a[0][0], ctx.pp.b[0][0]);
-        assert_ne!(ctx.pp.b[0][0], ctx.pp.d[0][0]);
+        assert_ne!(other.pp().a, ctx.pp().a);
+        assert_ne!(ctx.pp().a[0][0], ctx.pp().b[0][0]);
+        assert_ne!(ctx.pp().b[0][0], ctx.pp().d[0][0]);
     }
+}
+
+/// A context of a seed releases its public matrices and A in the NTT form and forms the same
+/// again when they are read; a context of given matrices keeps them.
+#[test]
+fn released_matrices_are_formed_again() {
+    let params = toy(2);
+    let ctx = Context::<4>::setup(params.clone(), &SEED).unwrap();
+    let (pp, prepared) = ((*ctx.pp()).clone(), ctx.a_prepared().unwrap());
+    let held = ctx.pp();
+    ctx.release_public_params();
+    ctx.release_a_prepared();
+    assert_eq!(*ctx.pp(), pp, "formed again from the seed");
+    assert_eq!(
+        *held, pp,
+        "a handle taken before the release still reads them"
+    );
+    let again = ctx.a_prepared().unwrap();
+    let probe = vec![ctx.ring.zero(); ctx.layout.width_a];
+    assert_eq!(
+        ctx.ring.mat_vec_prepared(&again, &probe).unwrap(),
+        ctx.ring.mat_vec_prepared(&prepared, &probe).unwrap()
+    );
+    let given = Context::<4>::new(params, pp.clone()).unwrap();
+    given.release_public_params();
+    assert_eq!(*given.pp(), pp, "given matrices are kept");
+    let copy = ctx.clone();
+    assert_eq!(*copy.pp(), pp);
 }
 
 #[test]
@@ -63,7 +91,7 @@ fn accessors_and_rings() {
 fn inconsistent_inputs_are_rejected() {
     let params = toy(3);
     let ctx = Context::<4>::setup(params.clone(), &SEED).unwrap();
-    let pp = ctx.pp.clone();
+    let pp = (*ctx.pp()).clone();
     // K must equal k.
     assert!(matches!(
         Context::<2>::new(params.clone(), pp.clone()),
@@ -124,9 +152,9 @@ fn context_from_every_fixture() {
         let fx = Fixture::load(name).unwrap();
         let ctx = fx.context::<4>().unwrap();
         assert_eq!(ctx.params, fx.params().unwrap());
-        assert_eq!(ctx.pp.a, fx.matrix("/setup/A").unwrap());
-        assert_eq!(ctx.pp.b, fx.matrix("/setup/B").unwrap());
-        assert_eq!(ctx.pp.d, fx.matrix("/setup/D").unwrap());
+        assert_eq!(ctx.pp().a, fx.matrix("/setup/A").unwrap());
+        assert_eq!(ctx.pp().b, fx.matrix("/setup/B").unwrap());
+        assert_eq!(ctx.pp().d, fx.matrix("/setup/D").unwrap());
         assert_eq!(ctx.layout.n, fx.n());
         assert_eq!(
             (ctx.q(), ctx.layout.d, ctx.layout.k),

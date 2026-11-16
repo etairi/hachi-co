@@ -6,11 +6,11 @@ use crate::proof::EvalProof;
 use crate::statement::{EVAL_DOMAIN, absorb_statement, check_statement};
 use hachi_co_conv::{ConvOutput, LABEL_E_U, e_matrix, pi_conv};
 use hachi_co_core::{
-    BasePcs, Challenger, Context, Ext, FsChallenger, PartyRandomness, PartyState, Poly,
+    BasePcs, Challenger, Context, Ext, FsChallenger, MRows, PartyRandomness, PartyState, Poly,
 };
 use hachi_co_mpc::Comm;
 use hachi_co_params::Params;
-use hachi_co_r2l::{R2lOutput, linear_relation};
+use hachi_co_r2l::{R2lOutput, check_relation};
 use hachi_co_sumcheck::SumcheckPrivate;
 
 /// $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:265-303) from derived parameters and a 32-byte
@@ -102,6 +102,29 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
     Ok(eval_with(ctx, pcs, comm, rng, &mut ch, state, u, x)?.proof)
 }
 
+/// [`eval`] for a caller that keeps only the proof, as the benchmark harness does: each large
+/// value is freed after its last use. The context's $\mathbf A$ in the NTT form after the
+/// ring-to-linear step ([`Context::release_a_prepared`]), its public matrices after the last row of
+/// $\mathbf M$ ([`Context::release_public_params`]), both formed again if the context is read
+/// again, and the share $\mathbf z'$ after the sumcheck's table, whose private copy is not formed
+/// ([`hachi_co_sumcheck::prove_rebuilding_lean`]). The same proof as [`eval`].
+///
+/// # Errors
+/// As [`eval_with`].
+#[allow(clippy::too_many_arguments)] // eval's arguments and the base PCS
+pub fn eval_lean<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
+    ctx: &Context<K>,
+    pcs: &P,
+    comm: &mut C,
+    rng: &mut R,
+    state: &PartyState<K>,
+    u: &[Poly],
+    x: &[Ext<K>],
+) -> Result<EvalProof<K>, Error> {
+    let mut ch = FsChallenger::new(EVAL_DOMAIN);
+    Ok(eval_inner(ctx, pcs, comm, rng, &mut ch, state, u, x, true)?.proof)
+}
+
 /// $\mathsf{Eval}\langle \mathcal P\_1(\mathsf{st}\_1), \dots, \mathcal P\_n(\mathsf{st}\_n)
 /// \rangle(\mathsf{pp}, \mathbf u, \mathbf x)$ (`6_Collaborative_Hachi.tex`:426-437; at the draft's
 /// commit `c071784` the composition of $\Pi\_A$, $\Pi\_B$, $\Pi\_C$) for the party `comm.id()`,
@@ -118,8 +141,9 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 /// 3. the ring-to-linear step with its $L$ iterations of the rejection sampling
 ///    ([`hachi_co_r2l::run`], line 435; `fig:ring-to-linear` since the draft's commit `1096ea2`),
 ///    which absorbs $\mathbf v$, draws $\mathbf c$ and absorbs the sets of accepted iterations
-///    itself; $\mathbf M$ and $\mathbf y$ for the selected iteration $j^\ast$
-///    ([`linear_relation`]);
+///    itself; the checks of the linear relation for the selected iteration $j^\ast$
+///    ([`check_relation`]), whose matrix $\mathbf M$ the sumcheck reads one row at a time
+///    ([`MRows`]);
 /// 4. the sumcheck ([`hachi_co_sumcheck::prove`], line 437) with the matrix of $E$ at the point
 ///    $v$ ([`e_matrix`]), which makes its own absorbs and contexts, and in which each party
 ///    commits to $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$ with `pcs` before the
@@ -167,15 +191,65 @@ pub fn eval_with<
     u: &[Poly],
     x: &[Ext<K>],
 ) -> Result<EvalOutput<K>, Error> {
+    eval_inner(ctx, pcs, comm, rng, ch, state, u, x, false)
+}
+
+/// [`eval_with`], or with `lean` the work of [`eval_lean`].
+#[allow(clippy::too_many_arguments)] // eval_with's arguments and the mode
+fn eval_inner<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
+    ctx: &Context<K>,
+    pcs: &P,
+    comm: &mut C,
+    rng: &mut R,
+    ch: &mut H,
+    state: &PartyState<K>,
+    u: &[Poly],
+    x: &[Ext<K>],
+    lean: bool,
+) -> Result<EvalOutput<K>, Error> {
     check_statement(ctx, u, x)?;
     absorb_statement(ch, ctx, &pcs.params_digest(), u, x);
     let conv = pi_conv(ctx, comm, state, x)?;
     ch.absorb_polys(LABEL_E_U, core::slice::from_ref(&conv.e_u));
-    let r2l = hachi_co_r2l::run(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
+    let mut r2l = hachi_co_r2l::run(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
+    if lean {
+        // The ring-to-linear step was the last to multiply by A in the NTT form.
+        ctx.release_a_prepared();
+    }
     let (transcript, private) = {
-        let rel = linear_relation(ctx, &conv.public, &r2l.v, &r2l.c, r2l.j_star, u)?;
+        // The checks of `linear_relation`; M itself is read by rows below.
+        check_relation(ctx, &conv.public, &r2l.v, &r2l.c, u)?;
         let e = e_matrix(ctx, &conv.public.v_point)?;
-        hachi_co_sumcheck::prove(ctx, pcs, comm, rng, ch, &rel.m, &e, &r2l.share)?
+        // The driver reads M twice, for the quotient and for M*, with the commitments in between:
+        // it builds each row when it reads it (`MRows`, the rows of `build_m`, from public
+        // values), so that M is never held whole.
+        let pv = &conv.public;
+        let rows = MRows::new(ctx, &pv.b_ring, &pv.a_ring, &r2l.c, r2l.j_star)?;
+        if lean {
+            // The driver takes the share over and drops it after its last reader.
+            let share = core::mem::take(&mut r2l.share);
+            hachi_co_sumcheck::prove_rebuilding_lean(
+                ctx,
+                pcs,
+                comm,
+                rng,
+                ch,
+                |i| Ok(rows.row(i)?),
+                &e,
+                share,
+            )?
+        } else {
+            hachi_co_sumcheck::prove_rebuilding(
+                ctx,
+                pcs,
+                comm,
+                rng,
+                ch,
+                |i| Ok(rows.row(i)?),
+                &e,
+                &r2l.share,
+            )?
+        }
     };
     let proof = EvalProof {
         e_u: conv.e_u.clone(),

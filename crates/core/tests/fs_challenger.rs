@@ -387,3 +387,32 @@ fn contexts_are_forked_squeezes() {
     let mut t = main.transcript().clone();
     assert_ne!(t.challenge_seed(label.as_bytes()), c);
 }
+
+/// The rows of a matrix absorbed one after the other (`absorb_poly_rows`) are the message of
+/// `absorb_polys` on their concatenation: the same transcript, for rows of several lengths
+/// (empty ones, and longer than a chunk of the parallel encoding), and for no row at all.
+#[test]
+fn the_rows_of_a_matrix_are_absorbed_as_their_concatenation() {
+    let poly = |i: usize| Poly((0..D).map(|j| ((i * 31 + j * 7) as u64) % Q).collect());
+    let shapes: [&[usize]; 4] = [&[], &[0], &[3, 0, 5], &[5000, 1, 4097]];
+    for shape in shapes {
+        let mut next = 0;
+        let rows: Vec<Vec<Poly>> = shape
+            .iter()
+            .map(|&len| {
+                (0..len)
+                    .map(|_| {
+                        next += 1;
+                        poly(next)
+                    })
+                    .collect()
+            })
+            .collect();
+        let flat: Vec<Poly> = rows.iter().flatten().cloned().collect();
+        let mut by_rows = FsChallenger::new(DOMAIN);
+        let mut whole = FsChallenger::new(DOMAIN);
+        Challenger::<K>::absorb_poly_rows(&mut by_rows, "rows", &rows);
+        Challenger::<K>::absorb_polys(&mut whole, "rows", &flat);
+        assert_eq!(by_rows.transcript(), whole.transcript(), "rows {shape:?}");
+    }
+}

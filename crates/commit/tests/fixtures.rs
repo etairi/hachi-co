@@ -113,7 +113,7 @@ fn local_run(fx: &Fixture, ctx: &Context<K>) -> (Vec<PartyState<K>>, Vec<Vec<Pol
         slice.resize(l.width_b, ring.zero());
         let range = l.rho_u_range(p);
         slice[range.start - l.t..range.end - l.t].clone_from_slice(&state.rho_u);
-        assert_eq!(input, ring.mat_vec(&ctx.pp.b, &slice).unwrap());
+        assert_eq!(input, ring.mat_vec(&ctx.pp().b, &slice).unwrap());
         inputs.push(input);
         states.push(state);
     }
@@ -171,7 +171,7 @@ fn party_local_values_match_the_fixtures() {
         t_rho.extend(states.iter().flat_map(|s| s.rho_u.clone()));
         assert_eq!(
             u,
-            ring.mat_vec(&ctx.pp.b, &t_rho).unwrap(),
+            ring.mat_vec(&ctx.pp().b, &t_rho).unwrap(),
             "{name}: u = B (t-hat, rho^u)"
         );
     }

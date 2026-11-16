@@ -77,6 +77,13 @@ pub enum Error {
         /// The stream index (the iteration for masks, otherwise 0).
         index: u64,
     },
+    /// A mask was asked for again ([`PartyRandomness::mask_again`](crate::PartyRandomness)) before
+    /// it was drawn: only a mask already served is served again.
+    #[error("the mask of iteration {index} was never drawn, so it cannot be read again")]
+    MaskNotDrawn {
+        /// The iteration.
+        index: u64,
+    },
     /// A challenger was used out of order (for example a sumcheck round coin for round 0); the
     /// message names the misuse.
     #[error("challenger: {0}")]

@@ -6,6 +6,7 @@ use crate::local::{BlockW, check_len, check_polys, fill_first_message_part};
 use crate::{Error, MaskSecrets, Result};
 use hachi_co_core::{Context, PartyId, PartyState, build_y};
 use hachi_co_math::Poly;
+use rayon::prelude::*;
 
 /// Prover $p$'s share $\langle \mathbf z' \rangle\_p \in \mathcal R\_q^{\mu - 1}$ of
 /// $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0, \boldsymbol\rho^v,
@@ -39,7 +40,12 @@ pub fn z_prime_share<const K: usize>(
     let q = ctx.q();
     state.validate(l)?;
     let p = state.party;
-    let mut share = vec![ctx.ring.zero(); l.len_z];
+    // The zeros and the copies of t-hat and z-hat in parallel (z' has len_z ring elements); the
+    // checks in order, so that the first wrong entry is the one reported.
+    let mut share: Vec<Poly> = (0..l.len_z)
+        .into_par_iter()
+        .map(|_| ctx.ring.zero())
+        .collect();
     fill_first_message_part(ctx, p, w, secrets, &mut share[..l.t])?;
     for block in &state.blocks {
         check_polys("t_hat_i", &block.t_hat, l.n_a * l.delta, l.d, q)?;
@@ -50,7 +56,10 @@ pub fn z_prime_share<const K: usize>(
     match (p, z_hat) {
         (1, Some(z_hat)) => {
             check_polys("z_hat", z_hat, l.width_a * l.tau, l.d, q)?;
-            share[l.z_hat_range()].clone_from_slice(z_hat);
+            share[l.z_hat_range()]
+                .par_iter_mut()
+                .zip(z_hat.par_iter())
+                .for_each(|(out, z)| out.clone_from(z));
         }
         (1, None) => {
             return Err(Error::Shape {

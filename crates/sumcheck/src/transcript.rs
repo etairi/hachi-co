@@ -241,11 +241,7 @@ impl<const K: usize> SumcheckPrivate<K> {
     /// The hypercube values of $\langle \widetilde w \rangle\_p$ over $\mathbb F\_{q^K}$, the
     /// pad included.
     pub fn w_field_table(&self, field: &Fqk<K>) -> Vec<Ext<K>> {
-        let mut table: Vec<Ext<K>> = self.w_table.iter().map(|x| field.from_base(*x)).collect();
-        if let Some((at, value)) = self.pad {
-            table[at] = value;
-        }
-        table
+        crate::tables::lift_table(field, &self.w_table, self.pad)
     }
 }
 

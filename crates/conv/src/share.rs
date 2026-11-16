@@ -5,6 +5,7 @@
 use crate::error::{Error, Result};
 use hachi_co_core::{Context, PartyState, PublicVectors};
 use hachi_co_math::Poly;
+use rayon::prelude::*;
 
 /// Party $p$'s share $\langle u \rangle\_p = \mathbf d^T \lbrace \mathbf f' \rbrace\_p =
 /// \sum\_{i} \sum\_{j \lt 2^m} d\_{i 2^m + j} f'\_{i,j} \in \mathcal R\_q$ over the blocks $i$ of its
@@ -29,18 +30,29 @@ pub fn u_share<const K: usize>(
     state.validate(l)?;
     public.validate(l)?;
     let mut acc = ring.zero();
-    state.for_each_block(ctx, |block| {
-        let start = block.index * l.block_len;
-        let d_block = public
-            .d
-            .get(start..start + l.block_len)
-            .ok_or(Error::Shape {
-                what: "d (2^l' = 2^r 2^m entries)",
-                expected: start + l.block_len,
-                actual: public.d.len(),
-            })?;
-        let d_ring: Vec<Poly> = d_block.iter().map(|e| ctx.sub.embed(e)).collect();
-        acc = ring.add(&acc, &ring.inner(&d_ring, &block.f_prime)?)?;
+    // A group of blocks at a time, their terms in parallel and added in order; a state on disk is
+    // read back without being decomposed.
+    state.for_each_f_prime_group(ctx, |blocks, f_primes| {
+        let terms = blocks
+            .par_iter()
+            .zip(f_primes.par_iter())
+            .map(|(block, f_prime)| {
+                let start = block.index * l.block_len;
+                let d_block = public
+                    .d
+                    .get(start..start + l.block_len)
+                    .ok_or(Error::Shape {
+                        what: "d (2^l' = 2^r 2^m entries)",
+                        expected: start + l.block_len,
+                        actual: public.d.len(),
+                    })?;
+                let d_ring: Vec<Poly> = d_block.iter().map(|e| ctx.sub.embed(e)).collect();
+                Ok(ring.inner(&d_ring, f_prime)?)
+            })
+            .collect::<Result<Vec<Poly>>>()?;
+        for term in &terms {
+            acc = ring.add(&acc, term)?;
+        }
         Ok::<(), Error>(())
     })?;
     Ok(acc)

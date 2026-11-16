@@ -44,7 +44,7 @@ fn commitment(ctx: &Context<K>, states: &[PartyState<K>]) -> Vec<Poly> {
     let rho_u: Vec<Poly> = states.iter().flat_map(|s| s.rho_u.clone()).collect();
     let start = ctx.layout.width_b - rho_u.len();
     t_rho[start..].clone_from_slice(&rho_u);
-    ring.mat_vec(&ctx.pp.b, &t_rho).unwrap()
+    ring.mat_vec(&ctx.pp().b, &t_rho).unwrap()
 }
 
 fn failing(
@@ -234,7 +234,7 @@ fn the_norm_conditions_at_their_bounds() {
                     decompose::g_apply(ring, b, delta, &block.s).unwrap(),
                     block.f_prime
                 );
-                block.t = ring.mat_vec(&ctx.pp.a, &block.s).unwrap();
+                block.t = ring.mat_vec(&ctx.pp().a, &block.s).unwrap();
                 block.t_hat = decompose::g_inv(ring, b, delta, &block.t).unwrap();
             }
             let u = commitment(&ctx, &st);

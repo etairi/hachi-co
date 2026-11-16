@@ -21,6 +21,13 @@ use hachi_co::harness::{self, HarnessError, PROOF_FILE, PartyConfig, PartyReport
 use std::path::Path;
 use std::process::ExitCode;
 
+/// mimalloc in place of the system's allocator with the feature `alloc-mimalloc`, on by default:
+/// the same results, faster and with less memory kept from the system than glibc's allocator
+/// (`--no-default-features` for the system's allocator).
+#[cfg(feature = "alloc-mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "usage: hachi-co-party <config.json>
        hachi-co-party --verify <output directory>
        hachi-co-party --sizes <preset> <n>";

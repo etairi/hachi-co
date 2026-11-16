@@ -2,12 +2,13 @@
 //! of lines 308-313 since the draft's commit `1096ea2`), run against a [`Comm`].
 
 use crate::error::{Error, Result};
-use crate::inner::{block_state, fah_b_input, party_state, sample_rho_u};
+use crate::inner::{block_state_streamed, fah_b_input, party_state, sample_rho_u};
 use crate::share::{input_share, reduce_chunk};
 use hachi_co_core::wire::{flatten_polys, unflatten_polys};
 use hachi_co_core::{Context, PartyRandomness, PartyState, SpillFile};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_mpc::Comm;
+use rayon::prelude::*;
 use std::path::Path;
 
 /// The [`Comm::fah`] label of $\mathcal F\_{\mathsf{AH}}(\mathbf B)$ (step 6,
@@ -101,7 +102,8 @@ fn fah_b<const K: usize, C: Comm>(
 /// disk ([`SpillFile`], in the directory `dir`). `input(j)` returns the $j$-th chunk of
 /// $\mathbf f\_p$, of $2^m d/k$ elements, $j \lt$ `blocks_per_party`; its entries are the
 /// coefficients of the $j$-th of the party's blocks. Every chunk goes through the steps of
-/// [`commit`] on its own, so that memory holds one block of $\mathbf s\_i$ at a time.
+/// [`commit`] on its own, without $\mathbf s\_i$, and $2 \times$ the threads' chunks at a time, so
+/// that memory holds a few blocks at a time.
 ///
 /// The state has no `share` and no `f_prime` or `s` in its blocks
 /// ([`PartyState::for_each_block`]).
@@ -121,19 +123,41 @@ pub fn commit_streaming<const K: usize, C: Comm, R: PartyRandomness<K>>(
     let chunk_len = l.block_len * g;
     let spill = SpillFile::create(dir, party, l)?;
     let mut blocks = Vec::with_capacity(l.blocks_per_party);
-    for (slot, index) in l.blocks_of(party).enumerate() {
-        let chunk = input(slot)?;
-        crate::error::check_len("a chunk of <f>_p (2^m d/k entries)", chunk_len, chunk.len())?;
-        let share = reduce_chunk(ctx, &chunk);
-        let f_prime = share
-            .chunks_exact(g)
-            .map(|c| ctx.sub.psi(c))
-            .collect::<hachi_co_math::Result<Vec<_>>>()?;
-        let mut block = block_state(ctx, index, f_prime)?;
-        spill.write_block(slot, &block.f_prime)?;
-        block.f_prime = Vec::new();
-        block.s = Vec::new();
-        blocks.push(block);
+    // The chunks are read in order, a group at a time, and the blocks of a group are formed in
+    // parallel, each sequentially ([`block_state_streamed`]); then written in order. A is
+    // prepared first, by the whole pool, rather than by the first blocks.
+    ctx.a_prepared()?;
+    let slots: Vec<(usize, usize)> = l.blocks_of(party).enumerate().collect();
+    let group = 2 * rayon::current_num_threads().max(1);
+    for part in slots.chunks(group) {
+        let chunks = part
+            .iter()
+            .map(|&(slot, index)| {
+                let chunk = input(slot)?;
+                crate::error::check_len(
+                    "a chunk of <f>_p (2^m d/k entries)",
+                    chunk_len,
+                    chunk.len(),
+                )?;
+                Ok((slot, index, chunk))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let formed = chunks
+            .into_par_iter()
+            .map(|(slot, index, chunk)| {
+                let share = reduce_chunk(ctx, &chunk);
+                let f_prime = share
+                    .chunks_exact(g)
+                    .map(|c| ctx.sub.psi(c))
+                    .collect::<hachi_co_math::Result<Vec<_>>>()?;
+                Ok((slot, block_state_streamed(ctx, index, f_prime)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (slot, mut block) in formed {
+            spill.write_block(slot, &block.f_prime)?;
+            block.f_prime = Vec::new();
+            blocks.push(block);
+        }
     }
     let state = PartyState {
         party,

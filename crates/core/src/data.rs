@@ -8,6 +8,7 @@
 use crate::{Context, Error, Layout, Result, SpillFile};
 use hachi_co_math::{Ext, Poly, decompose};
 use hachi_co_mpc::PartyId;
+use rayon::prelude::*;
 
 /// A matrix over a polynomial ring, row-major: `m[i][j]` is entry $(i, j)$
 /// (`docs/m1-spec.md`, "Conventions").
@@ -166,9 +167,48 @@ impl<const K: usize> PartyState<K> {
         check_polys("rho^u_p", &self.rho_u, layout.m_u, layout.d)
     }
 
+    /// Calls `visit` on the blocks a group of as many blocks as threads at a time, in order, with
+    /// their $\mathbf f'\_i$ only, for the visitors that read nothing else and form a group's
+    /// blocks in parallel: `visit` gets the group's blocks (without $\mathbf f'\_i$ and
+    /// $\mathbf s\_i$ for a state on disk) and their $\mathbf f'\_i$, in the same order. A state
+    /// on disk reads a group back without decomposing it ([`PartyState::for_each_block`] forms
+    /// $\mathbf s\_i$ as well).
+    ///
+    /// # Errors
+    /// The first error of `visit`; [`Error::Spill`] for a state on disk, [`Error::Shape`] for an
+    /// $\mathbf f'\_i$ without $2^m$ entries of $d$ coefficients.
+    pub fn for_each_f_prime_group<E: From<Error>>(
+        &self,
+        ctx: &Context<K>,
+        mut visit: impl FnMut(&[BlockState], &[&[Poly]]) -> core::result::Result<(), E>,
+    ) -> core::result::Result<(), E> {
+        let l = &ctx.layout;
+        let group = rayon::current_num_threads().max(1);
+        for (g, part) in self.blocks.chunks(group).enumerate() {
+            // The group's blocks read in parallel ([`SpillFile::read_block`]), in order.
+            let read = match &self.spill {
+                None => Vec::new(),
+                Some(file) => (0..part.len())
+                    .into_par_iter()
+                    .map(|k| file.read_block(g * group + k))
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            let f_primes: Vec<&[Poly]> = if self.spill.is_some() {
+                read.iter().map(Vec::as_slice).collect()
+            } else {
+                part.iter().map(|b| b.f_prime.as_slice()).collect()
+            };
+            for f_prime in &f_primes {
+                check_polys("f'_i", f_prime, l.block_len, l.d)?;
+            }
+            visit(part, &f_primes)?;
+        }
+        Ok(())
+    }
+
     /// Calls `visit` on every block, in order, with $\mathbf f'\_i$ and $\mathbf s\_i$: the
-    /// blocks themselves, or for a state on disk each block read back and decomposed, one at a
-    /// time.
+    /// blocks themselves, or for a state on disk each block read back and decomposed, a group of
+    /// as many blocks as threads at a time (the group's blocks decomposed in parallel).
     ///
     /// # Errors
     /// The first error of `visit`; [`Error::Spill`] or [`Error::Math`] for a state on disk.
@@ -180,17 +220,29 @@ impl<const K: usize> PartyState<K> {
         let Some(file) = &self.spill else {
             return self.blocks.iter().try_for_each(visit);
         };
-        for (slot, block) in self.blocks.iter().enumerate() {
-            let f_prime = file.read_block(slot)?;
-            let s = decompose::g_inv(&ctx.ring, ctx.b(), ctx.layout.delta, &f_prime)
-                .map_err(Error::from)?;
-            visit(&BlockState {
-                index: block.index,
-                f_prime,
-                s,
-                t: block.t.clone(),
-                t_hat: block.t_hat.clone(),
-            })?;
+        // A group of blocks at a time: read and decomposed in parallel, visited in order.
+        let group = rayon::current_num_threads().max(1);
+        for (g, part) in self.blocks.chunks(group).enumerate() {
+            let f_primes = (0..part.len())
+                .into_par_iter()
+                .map(|k| file.read_block(g * group + k))
+                .collect::<Result<Vec<_>>>()?;
+            let decomposed = f_primes
+                .into_par_iter()
+                .map(|f_prime| {
+                    let s = decompose::g_inv(&ctx.ring, ctx.b(), ctx.layout.delta, &f_prime)?;
+                    Ok((f_prime, s))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (block, (f_prime, s)) in part.iter().zip(decomposed) {
+                visit(&BlockState {
+                    index: block.index,
+                    f_prime,
+                    s,
+                    t: block.t.clone(),
+                    t_hat: block.t_hat.clone(),
+                })?;
+            }
         }
         Ok(())
     }
@@ -244,7 +296,7 @@ impl<const K: usize> PublicVectors<K> {
 /// ring-to-linear step (`5_Building_Blocks.tex`:167-196): $\langle \mathbf z' \rangle\_p$ and
 /// $\lbrace \mathbf y \rbrace\_p$, with $\sum\_p \langle \mathbf z' \rangle\_p = \mathbf z'$ and
 /// $\sum\_p \lbrace \mathbf y \rbrace\_p = \mathbf y$.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinearShare {
     /// $\langle \mathbf z' \rangle\_p \in \mathcal R\_q^{\mu - 1}$: equal to $\mathbf z'$ on
     /// $S\_p$ ([`Layout::s_ranges`]) and $0$ elsewhere, except position $\mu - 2$, which holds

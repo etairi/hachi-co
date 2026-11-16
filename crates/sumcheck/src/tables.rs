@@ -9,11 +9,15 @@
 //! $V\_1$ the most significant bit. The draft's 1-indexed $\chi\_{\mathsf{bit}(u) \Vert
 //! \mathsf{bit}(\ell)}$ is the entry $(u - 1) \cdot 2d + (\ell - 1)$.
 
+use crate::arith::{Arith, Montgomery};
+use crate::eq::eq_table;
 use crate::error::{Error, Result, check_len, pow2};
-use crate::quotient::check_matrix;
+use crate::quotient::{check_matrix, check_row};
 use core::ops::Range;
 use hachi_co_core::{Context, Layout, Poly};
 use hachi_co_math::{Ext, Fqk, Zq};
+use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// $2^{\ell''}$, the number of points of the hypercube.
 ///
@@ -44,21 +48,53 @@ pub fn w_table<const K: usize>(
     let two_d = 2 * l.d;
     check_len("<z'>_p", l.len_z, z_share.len())?;
     check_len("<r>_p", l.n_prime, r_share.len())?;
-    let mut table = vec![0u64; table_size(l)?];
-    for (u0, p) in z_share.iter().enumerate() {
+    for p in z_share {
         check_len("<z'>_p (coefficients)", l.d, p.0.len())?;
-        for (l0, c) in p.0.iter().enumerate() {
-            table[u0 * two_d + l0] = c % q;
-        }
     }
-    for (i0, p) in r_share.iter().enumerate() {
+    for p in r_share {
         check_len("<r>_p (coefficients)", two_d, p.0.len())?;
-        let base = (l.mu + i0) * two_d;
-        for (l0, c) in p.0.iter().enumerate() {
-            table[base + l0] = c % q;
-        }
     }
+    let mut table = vec![0u64; table_size(l)?];
+    if l.len_z > l.mu || (l.mu + l.n_prime) * two_d > table.len() {
+        return Err(Error::Shape {
+            what: "rows of the table (z' then r from row mu)",
+            expected: table.len() / two_d,
+            actual: l.mu + l.n_prime,
+        });
+    }
+    // The rows of z' and of r, each written in parallel (disjoint rows).
+    let (z_rows, rest) = table.split_at_mut(l.mu * two_d);
+    z_rows
+        .par_chunks_mut(two_d)
+        .zip(z_share.par_iter())
+        .for_each(|(row, p)| {
+            for (t, c) in row.iter_mut().zip(&p.0) {
+                *t = c % q;
+            }
+        });
+    rest.par_chunks_mut(two_d)
+        .zip(r_share.par_iter())
+        .for_each(|(row, p)| {
+            for (t, c) in row.iter_mut().zip(&p.0) {
+                *t = c % q;
+            }
+        });
     Ok(table)
+}
+
+/// The table `base` of [`w_table`] over $\mathbb F\_{q^K}$, with the pad's entry `pad` (its index
+/// and value) set when the pad is a field element: the hypercube values of
+/// $\langle \widetilde w \rangle\_p$, the pad included.
+pub(crate) fn lift_table<const K: usize>(
+    field: &Fqk<K>,
+    base: &[u64],
+    pad: Option<(usize, Ext<K>)>,
+) -> Vec<Ext<K>> {
+    let mut table: Vec<Ext<K>> = base.iter().map(|x| field.from_base(*x)).collect();
+    if let Some((at, value)) = pad {
+        table[at] = value;
+    }
+    table
 }
 
 /// The table index of the pad's entry $(\mu, 1)$ (`5_Building_Blocks.tex`:256): row $\mu - 1$,
@@ -195,11 +231,7 @@ pub(crate) fn eval_at<const K: usize>(field: &Fqk<K>, coeffs: &[u64], powers: &[
 
 /// Checks the $d \times d$ matrix of $E$ and the length of the $\widetilde{eq}(\tau\_1, \cdot)$
 /// table ($2^{\lceil \log \nu \rceil}$).
-fn check_e_and_eq1<const K: usize>(
-    layout: &Layout,
-    e_matrix: &[Vec<u64>],
-    eq1: &[Ext<K>],
-) -> Result<()> {
+fn check_e_and_eq1(layout: &Layout, e_matrix: &[Vec<u64>], eq1_len: usize) -> Result<()> {
     check_len("E matrix (rows)", layout.d, e_matrix.len())?;
     for row in e_matrix {
         check_len("E matrix (columns)", layout.d, row.len())?;
@@ -207,8 +239,70 @@ fn check_e_and_eq1<const K: usize>(
     check_len(
         "eq(tau_1) table (2^ceil(log nu) entries)",
         pow2(layout.log_nu, "the eq(tau_1) table")?,
-        eq1.len(),
+        eq1_len,
     )
+}
+
+/// $\widetilde{eq}(\tau\_1, \cdot)$ as two half tables: entry $i$ of
+/// [`eq_table`](crate::eq_table)$(\tau\_1)$ is $\mathrm{hi}\[i \gg s\] \cdot \mathrm{lo}\[i \bmod 2^s\]$, with
+/// $\mathrm{hi}$ the table of the first $\lvert \tau\_1 \rvert - s$ coordinates and $\mathrm{lo}$
+/// that of the last $s = \lfloor \lvert \tau\_1 \rvert / 2 \rfloor$ (the most significant bit
+/// goes with the first coordinate, as in [`eq_table`](crate::eq_table)). The product is exact, so each entry is that of
+/// the whole table, which [`mstar_table_rows`] then never holds ($2^{\lceil \log \nu \rceil}$
+/// values, 2 GiB at secure-l24-n2-a8).
+///
+/// With Montgomery's form ([`Montgomery`], where the modulus admits it) `hi` is held in it, so
+/// that the product $\phi(\mathrm{hi}) \cdot \mathrm{lo}$ is the canonical entry, in about half the
+/// time of the canonical product.
+#[derive(Clone, Debug)]
+pub struct EqSplit<const K: usize> {
+    /// In the working representation of `mont`.
+    hi: Vec<Ext<K>>,
+    lo: Vec<Ext<K>>,
+    s: usize,
+    mont: Option<Montgomery<K>>,
+}
+
+impl<const K: usize> EqSplit<K> {
+    /// The two halves of $\widetilde{eq}(\boldsymbol\tau, \cdot)$.
+    ///
+    /// # Errors
+    /// As [`eq_table`](crate::eq_table).
+    pub fn new(field: &Fqk<K>, tau: &[Ext<K>]) -> Result<Self> {
+        let s = tau.len() / 2;
+        let (hi, lo) = tau.split_at(tau.len() - s);
+        let mont = Montgomery::<K>::new(field.modulus());
+        let mut hi = eq_table(field, hi)?;
+        if let Some(m) = &mont {
+            hi.iter_mut().for_each(|v| *v = m.enter(v));
+        }
+        Ok(Self {
+            hi,
+            lo: eq_table(field, lo)?,
+            s,
+            mont,
+        })
+    }
+
+    /// The number of entries, $2^{\lvert \boldsymbol\tau \rvert}$.
+    pub fn len(&self) -> usize {
+        self.hi.len() << self.s
+    }
+
+    /// Whether there are no entries (never: the empty point has the table $(1)$).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Entry $i$ of the whole table, for $i$ below [`EqSplit::len`].
+    #[inline]
+    pub fn at(&self, field: &Fqk<K>, i: usize) -> Ext<K> {
+        let (hi, lo) = (&self.hi[i >> self.s], &self.lo[i & ((1 << self.s) - 1)]);
+        match &self.mont {
+            Some(m) => m.mul(hi, lo),
+            None => field.mul(hi, lo),
+        }
+    }
 }
 
 /// The weights $c\_u = \sum\_{i' \lt n'} \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))\, M\_{i',u}(\alpha)$
@@ -220,22 +314,34 @@ pub(crate) fn column_weights<const K: usize>(
     eq1: &[Ext<K>],
     apow: &[Ext<K>],
 ) -> Vec<Ext<K>> {
-    let zq = field.zq();
     let cols = m.first().map_or(0, Vec::len);
     let mut c = vec![field.zero(); cols];
     for (row, e) in m.iter().zip(eq1) {
-        // beta_j = eq1[i'] alpha^j, so that c_u += sum_j M[i'][u][j] beta_j.
-        let beta: Vec<Ext<K>> = apow.iter().map(|p| field.mul(e, p)).collect();
-        for (cu, poly) in c.iter_mut().zip(row) {
-            for (coef, b) in poly.0.iter().zip(&beta) {
-                let coef = zq.reduce(*coef);
-                if coef != 0 {
-                    *cu = field.add(cu, &field.scale(b, coef));
-                }
-            }
-        }
+        add_row_weights(field, &mut c, row, e, apow);
     }
     c
+}
+
+/// Adds row $i'$ of $\mathbf M$, of weight $e = \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))$, to the
+/// column weights of [`column_weights`]: $c\_u \mathrel{+}= \sum\_j M\_{i',u,j} \beta\_j$ with
+/// $\beta\_j = e \alpha^j$. The columns run in parallel, each over its coefficients in order.
+fn add_row_weights<const K: usize>(
+    field: &Fqk<K>,
+    c: &mut [Ext<K>],
+    row: &[Poly],
+    e: &Ext<K>,
+    apow: &[Ext<K>],
+) {
+    let zq = field.zq();
+    let beta: Vec<Ext<K>> = apow.iter().map(|p| field.mul(e, p)).collect();
+    c.par_iter_mut().zip(row.par_iter()).for_each(|(cu, poly)| {
+        for (coef, b) in poly.0.iter().zip(&beta) {
+            let coef = zq.reduce(*coef);
+            if coef != 0 {
+                *cu = field.add(cu, &field.scale(b, coef));
+            }
+        }
+    });
 }
 
 /// The hypercube values of
@@ -272,24 +378,70 @@ pub fn mstar_table<const K: usize>(
     alpha: &Ext<K>,
 ) -> Result<Vec<Ext<K>>> {
     let l = &ctx.layout;
+    check_matrix(m, l.n_prime, l.len_z, l.d)?;
+    check_e_and_eq1(l, e_matrix, eq1.len())?;
+    mstar_table_with(
+        ctx,
+        |i| Ok(Cow::Borrowed(&m[i][..])),
+        e_matrix,
+        |i| eq1[i],
+        alpha,
+    )
+}
+
+/// [`mstar_table`] with the rows of $\mathbf M$ read one at a time from `rows` (row $i$ of the
+/// $n'$, each read once, in order) and $\mathrm{eq}\_1$ as an [`EqSplit`], so that neither
+/// $\mathbf M$ nor the whole $\mathrm{eq}\_1$ is held: the same table, as the column weights add
+/// up row by row in the same order and every entry of $\mathrm{eq}\_1$ is the same.
+///
+/// # Errors
+/// As [`mstar_table`], for a row of the wrong shape when it is read, and those of `rows`.
+pub fn mstar_table_rows<'m, const K: usize>(
+    ctx: &Context<K>,
+    rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+    e_matrix: &[Vec<u64>],
+    eq1: &EqSplit<K>,
+    alpha: &Ext<K>,
+) -> Result<Vec<Ext<K>>> {
+    check_e_and_eq1(&ctx.layout, e_matrix, eq1.len())?;
+    let field = ctx.field();
+    mstar_table_with(ctx, rows, e_matrix, |i| eq1.at(field, i), alpha)
+}
+
+/// The table of [`mstar_table`] from the rows of $\mathbf M$ and the entries of
+/// $\mathrm{eq}\_1$ (checked by the callers, but the rows' shapes, checked as they are read).
+fn mstar_table_with<'m, const K: usize>(
+    ctx: &Context<K>,
+    mut rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+    e_matrix: &[Vec<u64>],
+    eq1: impl Fn(usize) -> Ext<K> + Sync,
+    alpha: &Ext<K>,
+) -> Result<Vec<Ext<K>>> {
+    let l = &ctx.layout;
     let field = ctx.field();
     let (d, mu, np) = (l.d, l.mu, l.n_prime);
     let two_d = 2 * d;
-    check_matrix(m, np, l.len_z, d)?;
-    check_e_and_eq1(l, e_matrix, eq1)?;
     let apow = powers(field, alpha, two_d);
-    let c = column_weights(field, m, eq1, &apow[..d]);
-    let mut table = vec![field.zero(); table_size(l)?];
-    // First term, u0 < mu - 1: c_u alpha^{l0} for all l0 < 2d.
-    for (u0, cu) in c.iter().enumerate() {
-        for (l0, p) in apow.iter().enumerate() {
-            table[u0 * two_d + l0] = field.mul(cu, p);
-        }
+    let mut c = vec![field.zero(); l.len_z];
+    for i in 0..np {
+        let row = rows(i)?;
+        check_row(&row, l.len_z, d)?;
+        add_row_weights(field, &mut c, &row, &eq1(i), &apow[..d]);
     }
+    let mut table = vec![field.zero(); table_size(l)?];
+    // First term, u0 < mu - 1: c_u alpha^{l0} for all l0 < 2d (rows in parallel).
+    table
+        .par_chunks_mut(two_d)
+        .zip(c.par_iter())
+        .for_each(|(row, cu)| {
+            for (t, p) in row.iter_mut().zip(&apow) {
+                *t = field.mul(cu, p);
+            }
+        });
     // First term, u0 = mu + i0: -eq1[i0] (alpha^d + 1) alpha^{l0}.
     let ad1 = field.add(&apow[d], &field.one());
-    for (i0, e) in eq1.iter().take(np).enumerate() {
-        let coef = field.neg(&field.mul(e, &ad1));
+    for i0 in 0..np {
+        let coef = field.neg(&field.mul(&eq1(i0), &ad1));
         for (l0, p) in apow.iter().enumerate() {
             table[(mu + i0) * two_d + l0] = field.mul(&coef, p);
         }
@@ -301,21 +453,171 @@ pub fn mstar_table<const K: usize>(
         for (j0, row) in e_matrix.iter().enumerate() {
             let coef = zq.reduce(row[l0]);
             if coef != 0 {
-                acc = field.add(&acc, &field.scale(&eq1[np + j0], coef));
+                acc = field.add(&acc, &field.scale(&eq1(np + j0), coef));
             }
         }
         let x = l.u * two_d + l0;
         table[x] = field.add(&table[x], &acc);
     }
-    // Third term: u0 < mu + n', l0 >= d, i' - 1 = n' + d + u0 + (l0 - d)(mu + n').
-    for u0 in 0..mu + np {
-        for l0 in d..two_d {
-            let x = u0 * two_d + l0;
-            let i = np + d + u0 + (l0 - d) * (mu + np);
-            table[x] = field.add(&table[x], &eq1[i]);
-        }
-    }
+    // Third term: u0 < mu + n', l0 >= d, i' - 1 = n' + d + u0 + (l0 - d)(mu + n') (rows in
+    // parallel; the second term is on the columns l0 < d).
+    table
+        .par_chunks_mut(two_d)
+        .take(mu + np)
+        .enumerate()
+        .for_each(|(u0, row)| {
+            for (l0, t) in row.iter_mut().enumerate().skip(d) {
+                let i = np + d + u0 + (l0 - d) * (mu + np);
+                *t = field.add(t, &eq1(i));
+            }
+        });
     Ok(table)
+}
+
+/// The parts of [`mstar_table`] from which each entry is formed when it is read
+/// ([`MStarParts::at`]), so that the table of $2^{\ell''}$ entries is not held before the first
+/// bind (4 GiB at secure-l24-n2-a8): the row factors of the first term ($c\_u$ for
+/// $u\_0 \lt \mu - 1$, $-\mathrm{eq}\_1\[u\_0 - \mu\] (\alpha^d + 1)$ for $\mu \le u\_0 \lt \mu + n'$, zero
+/// otherwise), the powers $\alpha^{l\_0}$, the second term's row and $\mathrm{eq}\_1$ as an
+/// [`EqSplit`]. Each entry is formed by the field operations that [`mstar_table_rows`] uses for
+/// it, so it is the same element.
+#[derive(Clone, Debug)]
+pub struct MStarParts<const K: usize> {
+    d: usize,
+    mu: usize,
+    np: usize,
+    /// The row of the second term ($\mathbf E$).
+    u: usize,
+    /// $\log 2d$: the point $(u\_0, l\_0)$ has index $u\_0 \cdot 2d + l\_0$.
+    shift: usize,
+    size: usize,
+    apow: Vec<Ext<K>>,
+    /// The first term's factor of each row $u\_0 \lt \mu + n'$, in the working representation of
+    /// `mont`: $\phi(c) \alpha^{l\_0}$ is the canonical product.
+    rows: Vec<Ext<K>>,
+    /// Montgomery's form, where the modulus admits it.
+    mont: Option<Montgomery<K>>,
+    /// $\sum\_{j\_0} \mathrm{eq}\_1\[n' + j\_0\] E\[j\_0\]\[l\_0\]$ for $l\_0 \lt d$.
+    second: Vec<Ext<K>>,
+    eq1: EqSplit<K>,
+}
+
+impl<const K: usize> MStarParts<K> {
+    /// The parts of [`mstar_table_rows`] with the same inputs: the rows of $\mathbf M$ are read
+    /// once, in order, for the column weights.
+    ///
+    /// # Errors
+    /// As [`mstar_table_rows`]; [`Error::Parameter`] if $2d$ is not a power of two.
+    pub fn from_rows<'m>(
+        ctx: &Context<K>,
+        mut rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+        e_matrix: &[Vec<u64>],
+        eq1: EqSplit<K>,
+        alpha: &Ext<K>,
+    ) -> Result<Self> {
+        let l = &ctx.layout;
+        check_e_and_eq1(l, e_matrix, eq1.len())?;
+        let field = ctx.field();
+        let (d, mu, np) = (l.d, l.mu, l.n_prime);
+        let two_d = 2 * d;
+        if !two_d.is_power_of_two() {
+            return Err(Error::Parameter(format!(
+                "2d = {two_d} is not a power of two"
+            )));
+        }
+        let size = table_size(l)?;
+        if (mu + np) * two_d > size || l.len_z > mu + np || (l.u + 1) * two_d > size {
+            return Err(Error::Shape {
+                what: "rows of M* (mu + n' rows of 2d points)",
+                expected: size / two_d,
+                actual: mu + np,
+            });
+        }
+        let apow = powers(field, alpha, two_d);
+        let mut c = vec![field.zero(); l.len_z];
+        for i in 0..np {
+            let row = rows(i)?;
+            check_row(&row, l.len_z, d)?;
+            add_row_weights(field, &mut c, &row, &eq1.at(field, i), &apow[..d]);
+            // A row built for this call is dropped in parallel (its ring elements are many).
+            if let Cow::Owned(row) = row {
+                row.into_par_iter().for_each(drop);
+            }
+        }
+        let mut factors = vec![field.zero(); mu + np];
+        factors[..l.len_z].copy_from_slice(&c);
+        let ad1 = field.add(&apow[d], &field.one());
+        for i0 in 0..np {
+            factors[mu + i0] = field.neg(&field.mul(&eq1.at(field, i0), &ad1));
+        }
+        let zq = field.zq();
+        let second = (0..d)
+            .map(|l0| {
+                let mut acc = field.zero();
+                for (j0, row) in e_matrix.iter().enumerate() {
+                    let coef = zq.reduce(row[l0]);
+                    if coef != 0 {
+                        acc = field.add(&acc, &field.scale(&eq1.at(field, np + j0), coef));
+                    }
+                }
+                acc
+            })
+            .collect();
+        let mont = Montgomery::<K>::new(field.modulus());
+        if let Some(m) = &mont {
+            factors.iter_mut().for_each(|v| *v = m.enter(v));
+        }
+        Ok(Self {
+            d,
+            mu,
+            np,
+            u: l.u,
+            shift: two_d.trailing_zeros() as usize,
+            size,
+            apow,
+            rows: factors,
+            mont,
+            second,
+            eq1,
+        })
+    }
+
+    /// The number of entries, $2^{\ell''}$.
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    /// Whether there are no entries (never: the hypercube has at least $2d$ points).
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
+
+    /// Entry $x$ of [`mstar_table`], for $x$ below [`MStarParts::len`].
+    #[inline]
+    pub fn at(&self, field: &Fqk<K>, x: usize) -> Ext<K> {
+        let (u0, l0) = (x >> self.shift, x & ((1 << self.shift) - 1));
+        let mut v = match (self.rows.get(u0), &self.mont) {
+            (Some(factor), Some(m)) => m.mul(factor, &self.apow[l0]),
+            (Some(factor), None) => field.mul(factor, &self.apow[l0]),
+            (None, _) => field.zero(),
+        };
+        if u0 == self.u && l0 < self.d {
+            v = field.add(&v, &self.second[l0]);
+        }
+        if u0 < self.mu + self.np && l0 >= self.d {
+            let i = self.np + self.d + u0 + (l0 - self.d) * (self.mu + self.np);
+            v = field.add(&v, &self.eq1.at(field, i));
+        }
+        v
+    }
+
+    /// The whole table, [`MStarParts::at`] at every point.
+    pub fn table(&self, field: &Fqk<K>) -> Vec<Ext<K>> {
+        (0..self.size)
+            .into_par_iter()
+            .map(|x| self.at(field, x))
+            .collect()
+    }
 }
 
 /// The claimed sum
@@ -361,6 +663,104 @@ pub fn claimed_sum<const K: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// splitmix64.
+    fn next(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    #[test]
+    fn the_split_eq_table_is_the_eq_table() {
+        let q = 134217757u64; // toy-n4
+        let f = Fqk::<4>::new(q).unwrap();
+        let mut state = 51u64;
+        for len in 0..=9usize {
+            let tau: Vec<Ext<4>> = (0..len)
+                .map(|_| Ext(core::array::from_fn(|_| next(&mut state) % q)))
+                .collect();
+            let whole = eq_table(&f, &tau).unwrap();
+            let split = EqSplit::new(&f, &tau).unwrap();
+            assert_eq!(split.len(), whole.len(), "{len} coordinates");
+            for (i, want) in whole.iter().enumerate() {
+                assert_eq!(split.at(&f, i), *want, "{len} coordinates, entry {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn m_star_and_the_quotient_by_rows_are_those_of_the_whole_matrix() {
+        // Toy contexts of one and two parties, M from random public values, a random tau_1, E
+        // and alpha: the table from the whole M and the whole eq table against the table from
+        // rows (borrowed, and built by `MRows`) and the split table; the quotient share likewise.
+        use hachi_co_core::{LinearShare, MRows, build_m};
+        use hachi_co_params::{derive, presets::toy_choices};
+        for (n, seed) in [(1u64, 52u64), (2, 53)] {
+            let (params, _) = derive(&toy_choices(n)).unwrap();
+            let ctx = Context::<4>::setup(params, &[seed as u8; 32]).unwrap();
+            let (l, f) = (&ctx.layout, ctx.field());
+            let (q, d) = (ctx.q(), l.d);
+            let mut state = seed;
+            let mut ext = || Ext::<4>(core::array::from_fn(|_| next(&mut state) % q));
+            let b_ring: Vec<Poly> = (0..l.n_blocks).map(|_| ctx.sub.embed(&ext())).collect();
+            let a_ring: Vec<Poly> = (0..l.block_len).map(|_| ctx.sub.embed(&ext())).collect();
+            let tau1: Vec<Ext<4>> = (0..l.log_nu).map(|_| ext()).collect();
+            let alpha = ext();
+            let mut state = seed + 100;
+            let c: Vec<Vec<i64>> = (0..l.n_blocks)
+                .map(|_| (0..d).map(|_| (next(&mut state) % 3) as i64 - 1).collect())
+                .collect();
+            let e_matrix: Vec<Vec<u64>> = (0..d)
+                .map(|_| (0..d).map(|_| next(&mut state) % q).collect())
+                .collect();
+            let m = build_m(&ctx, &b_ring, &a_ring, &c, 0).unwrap();
+            let rows = MRows::new(&ctx, &b_ring, &a_ring, &c, 0).unwrap();
+            let eq1 = eq_table(f, &tau1).unwrap();
+            let split = EqSplit::new(f, &tau1).unwrap();
+            let want = mstar_table(&ctx, &m, &e_matrix, &eq1, &alpha).unwrap();
+            let borrowed = |i: usize| Ok(Cow::Borrowed(&m[i][..]));
+            assert_eq!(
+                mstar_table_rows(&ctx, borrowed, &e_matrix, &split, &alpha).unwrap(),
+                want,
+                "n = {n}, borrowed rows"
+            );
+            let built = |i: usize| Ok(Cow::Owned(rows.row(i)?));
+            assert_eq!(
+                mstar_table_rows(&ctx, built, &e_matrix, &split, &alpha).unwrap(),
+                want,
+                "n = {n}, rows of MRows"
+            );
+            // M* from its parts, each entry formed when read: the same table.
+            let built = |i: usize| Ok(Cow::Owned(rows.row(i)?));
+            let parts =
+                MStarParts::from_rows(&ctx, built, &e_matrix, split.clone(), &alpha).unwrap();
+            assert_eq!(parts.len(), want.len(), "n = {n}");
+            assert_eq!(parts.table(f), want, "n = {n}, parts");
+            for x in [0, 1, want.len() / 2, want.len() - 1] {
+                assert_eq!(parts.at(f, x), want[x], "n = {n}, entry {x}");
+            }
+            let short = &e_matrix[1..];
+            assert!(MStarParts::from_rows(&ctx, borrowed, short, split.clone(), &alpha).is_err());
+            let share = LinearShare {
+                z_prime: (0..l.len_z)
+                    .map(|_| Poly((0..d).map(|_| next(&mut state) % q).collect()))
+                    .collect(),
+                y: (0..l.n_prime)
+                    .map(|_| Poly((0..d).map(|_| next(&mut state) % q).collect()))
+                    .collect(),
+            };
+            let quotient = crate::quotient_share(&ctx, &m, &share).unwrap();
+            let built = |i: usize| Ok(Cow::Owned(rows.row(i)?));
+            assert_eq!(
+                crate::quotient_share_rows(&ctx, built, &share).unwrap(),
+                quotient,
+                "n = {n}"
+            );
+        }
+    }
 
     #[test]
     fn range_product_matches_the_literal_product() {

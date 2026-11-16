@@ -80,7 +80,7 @@
 
 use crate::error::{DecodeError, Error, VerifyError};
 use crate::proof::EvalProof;
-use crate::prover::{commit, commit_streaming, eval};
+use crate::prover::{commit, commit_streaming, eval_lean};
 use crate::verifier::verify;
 use crate::{Context, HachiBase};
 use hachi_co_core::{Ext, Fqk, Poly, PrgRandomness};
@@ -577,7 +577,8 @@ pub fn prove<C: Comm>(
     let (u, state) = commit(ctx, comm, &mut rng, share)?;
     let commit_time = start.elapsed();
     let start = Instant::now();
-    let proof = eval(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
+    // The harness keeps only the proof: the lean Eval frees each large value after its last use.
+    let proof = eval_lean(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
     Ok(PartyOutput {
         u,
         proof,
@@ -608,7 +609,8 @@ pub fn prove_streaming<C: Comm>(
     let (u, state) = commit_streaming(ctx, comm, &mut rng, dir, |_| Ok(chunks.next_chunk()?))?;
     let commit_time = start.elapsed();
     let start = Instant::now();
-    let proof = eval(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
+    // The harness keeps only the proof: the lean Eval frees each large value after its last use.
+    let proof = eval_lean(ctx, pcs, comm, &mut rng, &state, &u, &instance.x)?;
     Ok(PartyOutput {
         u,
         proof,
