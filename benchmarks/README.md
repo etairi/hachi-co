@@ -34,7 +34,11 @@ quiet, so read the times as indicative. Runs across real machines come later.
   The parameters of the first run differ from the others (b = 8 and height 11 at the first level, against b = 16 and
   height 8). One run each, on a laptop that was not quiet.
 
-  Every run here predates two later changes of the parameters: proof format version 7 sizes the masks with ⌈b/2⌉
+  Every run here predates proof format version 8 (2026-11-16), in which every later level of Hachi follows its Section
+  3.1, and the presets regenerated on the same day with Hachi-Co's challenge rule 2L·2^r/|𝒞| ≤ 2^−λ. The section
+  "Remote runs of 2026-11-16" below measures both changes.
+
+  Every run here also predates two earlier changes of the parameters: proof format version 7 sizes the masks with ⌈b/2⌉
   instead of b, and the draft's commit `2ee6507` sets β₁ = 2^(r − ⌈log n⌉) ω ⌊b/2⌋ instead of 2^(r − ⌈log n⌉) ω b,
   which halves β₁, γ and β at every preset and lowers q at 7 of the 26 secure presets. The two measured here,
   `secure-l16-n2-a8` and `secure-l16-n2-a10`, keep their q, and this change leaves their proof sizes as they were.
@@ -189,3 +193,51 @@ Also checked on 2026-11-12: `wan_grid.py` over the three settings of PPP26 in fo
 repetitions each, Eval growing with the RTT, and a rerun that skipped every cell), and PPP26's PCS mode built and run
 under Rosetta at n = 4 and 8 with 2^14 coefficients (508 queries, every rank's line parsed, the payload counter
 working). The cloud commands of `ppp26.py` were checked as dry runs.
+
+## Remote runs of 2026-11-16
+
+- **Machine.** A shared Linux instance: AMD EPYC-Milan, 2 sockets, 128 cores, 961 GiB, Linux 7.0, AVX2 and FMA. Its
+  other jobs kept about 113 to 129 of the 128 cores busy (the `load` field of each line, before and after the run), and
+  these runs ran at nice 19, so the times are indicative and compare variants measured side by side.
+- **Software.** rustc 1.99.1, release profile with mimalloc. `scripts/run_parties.py`: two parties of 5 threads each,
+  in memory, over the loopback, and `--single` (one prover, 5 threads). Two runs per variant in the order A B B A, all
+  accepted. Peak: the maximum resident size of `/usr/bin/time -v` (the parties keep f and their shares in memory, so it
+  is far above the streaming runs' peak). Proof: bytes per prover. Times: means of the two runs.
+- **Variants.** "Before" is commit `7702747` (proof format 7, Section 4.5 with ring-switching between levels). "Section
+  3.1" is the working tree that commits every later witness as Section 3.1 commits a polynomial over the field (proof
+  format 8), with `hachi.json` chosen for it at the presets of `7702747`, or kept ("same parameters"). "Final" adds the
+  challenge rule 2L·2^r/|𝒞| ≤ 2^−λ, the presets regenerated with it and `hachi.json` chosen again.
+
+**Hiding in the base PCS** (`remote-2026-11-16-hiding.jsonl`, the code of `7702747`, presets with and without
+`-nonhiding`):
+
+| preset | Hachi-Co Eval (s) | Hachi-Co proof (MB) | single Eval (s) | single proof (KB) |
+|---|---|---|---|---|
+| secure-l16-n2-a8 | 33.1 / 22.5 (x1.47) | 1.99 / 1.04 | 1.52 / 0.67 | 429 / 417 |
+| secure-l20-n2-a8 | 103.0 / 73.9 (x1.40) | 2.24 / 1.06 | 4.84 / 2.40 | 446 / 433 |
+| secure-l24-n2-a8 | 277.4 / 215.2 (x1.29) | 2.62 / 1.36 | 28.7 / 14.4 | 587 / 587 |
+
+**Section 4.5 against Section 3.1 at the presets of `7702747`** (`remote-2026-11-16-section31.jsonl`, parameters chosen
+for each, and `remote-2026-11-16-section31-same.jsonl`, the parameters of Section 4.5 for both):
+
+| preset | Hachi-Co Eval (s) | Hachi-Co proof (MB) | same parameters: Eval, proof | single Eval (s) | single proof (KB) |
+|---|---|---|---|---|---|
+| secure-l16-n2-a8 | 32.6 / 37.4 (x1.14) | 1.99 / 3.63 | x1.16, x2.56 | 1.42 / 0.99 | 429 / 1063 |
+| secure-l20-n2-a8 | 102.1 / 109.8 (x1.08) | 2.24 / 5.31 | x1.05, x2.38 | 4.90 / 6.76 | 446 / 1609 |
+| secure-l24-n2-a8 | 281.4 / 231.7 (x0.82) | 2.62 / 5.33 | x1.07, x4.18 | 29.0 / 23.4 | 587 / 1627 |
+
+**Final against before** (`remote-2026-11-16-final.jsonl`):
+
+| preset | Hachi-Co Eval (s) | Hachi-Co proof (MB) | peak per party (GiB) | single Eval (s) | single proof (KB) |
+|---|---|---|---|---|---|
+| secure-l16-n2-a8 | 32.3 / 37.7 (x1.17) | 1.99 / 3.64 (x1.83) | 0.60 / 0.51 | 1.47 / 1.08 | 429 / 1063 |
+| secure-l20-n2-a8 | 102.3 / 109.9 (x1.07) | 2.24 / 3.66 (x1.64) | 1.82 / 1.81 | 4.92 / 7.42 | 446 / 1097 |
+| secure-l24-n2-a8 | 277.9 / 221.0 (x0.80) | 2.62 / 3.68 (x1.41) | 11.77 / 11.72 | 28.1 / 26.6 | 587 / 1122 |
+
+The commitments' sizes do not change (level 0 is the same), and the verifier's times stay within x0.92 to x1.16. With
+Section 3.1 the last witness of each base-PCS proof is longer (at secure-l24-n2-a8 the share opening ends with 2^22
+digits against 2^21), and the choice of the base b changes the times by more than the transition: with the same
+parameters Section 3.1 costs 5 to 16% of Hachi-Co's Eval.
+
+Commands: each line records its preset and seeds' tag, and `python3 scripts/run_parties.py --preset <preset> --n 2
+--threads 5 --out <dir> [--single]` with the binary built from the variant's code reproduces it.
