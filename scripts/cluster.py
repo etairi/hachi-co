@@ -17,7 +17,8 @@ The hosts file (JSON) says how to reach each party and where it listens:
 "host" is an ssh destination, a container's name, or ignored for "local". Party p listens on its address and every
 party connects to the others' addresses, so each address must be reachable from every host (internal VPC addresses on
 Google Cloud). The instance seeds are SHA-256 of --tag and the preset, the same in every repetition, and the session id
-is fresh in each, so the repetitions measure the same instance.
+is fresh in each, so the repetitions measure the same instance. A preset name ending in -nonhiding runs Hachi, the base
+PCS, without its hiding choices, and takes the seeds of the name without the suffix: the same instance as the preset.
 
     python3 scripts/cluster.py --hosts runs/hosts.json --preset secure-l16-n4-a8 --out runs/x --reps 3 >> results.jsonl
     python3 scripts/bench_table.py --medians results.jsonl
@@ -43,6 +44,11 @@ LOCAL_BINARY = ROOT / "target" / "release" / "hachi-co-party"
 
 def seed(tag, *parts):
     return hashlib.sha256("/".join([tag, *map(str, parts)]).encode()).hexdigest()
+
+
+def instance_name(preset):
+    """The name the seeds are drawn from: the preset without -nonhiding, which changes only the base PCS."""
+    return preset.removesuffix("-nonhiding")
 
 
 # ------------------------------------------------------------------------------------------- hosts and transports
@@ -222,7 +228,9 @@ def report(stdout):
         f = line.split()
         if len(f) == 5 and f[1].isdigit():
             labels[f[0]] = {"calls": int(f[1]), "rounds": int(f[2]), "sent": int(f[3]), "received": int(f[4])}
+    hiding = get(r"^hiding\s+(yes|no)")
     return {
+        "hiding": hiding.group(1) == "yes" if hiding else None,
         "setup_s": seconds(get(r"^setup\s+(\S+)").group(1)),
         "connect_s": seconds(get(r"^connect\s+(\S+)").group(1)),
         "commit_s": seconds(get(r"^commit\s+(\S+)").group(1)),
@@ -245,6 +253,7 @@ def time_prefix(host):
 
 def run_once(args, hosts, rep, out):
     n = len(hosts)
+    name = instance_name(args.preset)
     addresses = [h.address for h in hosts]
     run_dir = f"{args.run_name}/rep-{rep}"
     procs = []
@@ -255,10 +264,10 @@ def run_once(args, hosts, rep, out):
         base = f"{host.workdir}/{run_dir}"
         config = {
             "preset": args.preset, "n": n, "party": p, "addresses": addresses,
-            "session": seed(args.tag, "session", args.preset, rep),
-            "setup_seed": seed(args.tag, "setup", args.preset),
-            "instance_seed": seed(args.tag, "instance", args.preset),
-            "party_seed": seed(args.tag, "party", args.preset, p),
+            "session": seed(args.tag, "session", name, rep),
+            "setup_seed": seed(args.tag, "setup", name),
+            "instance_seed": seed(args.tag, "instance", name),
+            "party_seed": seed(args.tag, "party", name, p),
             "output": f"{base}/party-{p}",
             "connect_timeout_ms": args.timeout_ms, "recv_timeout_ms": args.timeout_ms,
         }
@@ -302,6 +311,7 @@ def run_once(args, hosts, rep, out):
     match = re.search(r"verified in (\S+)", v_out)
     return {
         "accepted": accepted,
+        "hiding": parties[0]["hiding"],
         "wall_s": round(wall, 2),
         "setup_s": max(p["setup_s"] for p in parties),
         "connect_s": max(p["connect_s"] for p in parties),

@@ -108,6 +108,23 @@ recomputes their digits when they are needed. The commitment and the proof are t
 the cores, or `--threads` of them, and the output records this and the vector instructions of the build.
 `scripts/bench_grid.py` runs a grid of such instances; `benchmarks/README.md` has the results.
 
+To measure what hiding costs, two variants run on the same instance as a preset (the scripts draw their seeds from
+the name without the suffix):
+
+- the suffix `-nonhiding` (for example `secure-l24-n2-a8-nonhiding`) runs Hachi, the base PCS, without its hiding
+  choices, as the published scheme. Everything else is unchanged, including the collaborative layer's pads and
+  blinders, so this measures the hiding of the base PCS only, and the result is not hiding;
+- `--single` (`hachi-co-party --single <config.json>`) runs the single-prover baseline: one prover commits to the
+  whole polynomial over 𝔽_{q^k} with Hachi (its Section 3.1, as Hachi-Co commits each share polynomial) and the
+  preset's base-PCS choices, opens it at the instance's point and verifies the proof. It gets the threads of one
+  party. With a `-nonhiding` name it runs without hiding.
+
+```text
+python3 scripts/run_parties.py --preset secure-l16-n2-a8-nonhiding --n 2 --out /tmp/run
+python3 scripts/run_parties.py --preset secure-l16-n2-a8 --n 2 --out /tmp/run --single
+python3 scripts/bench_grid.py --out /tmp/grid.jsonl --scratch /tmp/grid --nonhiding --single
+```
+
 ## Documentation
 
 - `cargo docs` builds the documentation of every workspace crate, including private items, into

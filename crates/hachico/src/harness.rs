@@ -18,6 +18,12 @@
 //! - The suffix `-merged` on a preset name (for example `secure-l16-n2-a8-merged`) selects
 //!   Hachi's merged commitments ([`HachiBase::merged`]), an option to compare against the draft's
 //!   three commitments, which every other name uses.
+//! - The suffix `-nonhiding` (for example `secure-l24-n2-a8-nonhiding`) runs Hachi without its
+//!   hiding choices, as the published scheme: no masking rows, no randomness in the commitments
+//!   and no masked first iteration, with the preset's other choices. The collaborative layer is
+//!   unchanged (its pads and blinders too), so the scheme is then not hiding: the option measures
+//!   what hiding costs in the base PCS. The statement records the name, so `--verify` checks such
+//!   a proof with the same scheme. [`run_single`] takes the suffix too.
 //!
 //! # Configuration
 //!
@@ -153,6 +159,9 @@ pub enum HarnessError {
     /// The verifier rejected the proof.
     #[error("rejected: {0}")]
     Rejected(#[from] VerifyError),
+    /// Hachi's verifier rejected the proof of the single prover ([`run_single`]).
+    #[error("rejected by Hachi: {0}")]
+    SingleRejected(#[from] hachi::VerifyError),
 }
 
 /// 32 bytes as 64 lowercase hexadecimal digits.
@@ -332,18 +341,25 @@ pub struct Setup {
 impl Setup {
     /// $\mathsf{Setup}$ for the preset `preset` with `n` parties and the setup seed `seed`:
     /// [`crate::setup`] on the preset's derived parameters, and [`HachiBase`] with
-    /// [`HachiBase::preset_choices`] and the same seed. A name ending in `-merged` is the preset
-    /// without that suffix with [`HachiBase::merged`].
+    /// [`HachiBase::preset_choices`] and the same seed. The suffixes `-merged` and `-nonhiding`,
+    /// in either order, select [`HachiBase::merged`] and Hachi without its hiding choices
+    /// (`hiding: None`, the published scheme) on the preset without them.
     ///
     /// # Errors
     /// [`HarnessError::Config`] for an unknown preset or an $n$ other than the preset's;
     /// [`HarnessError::Protocol`] if the context or Hachi cannot be set up, for example merged
-    /// commitments without masks.
+    /// commitments without masks (so `-merged` with `-nonhiding`).
     pub fn new(preset: &str, n: usize, seed: &[u8; 32]) -> Result<Self, HarnessError> {
-        let (preset, merged) = match preset.strip_suffix("-merged") {
-            Some(name) => (name, true),
-            None => (preset, false),
-        };
+        let (mut preset, mut merged, mut nonhiding) = (preset, false, false);
+        loop {
+            if let Some(name) = preset.strip_suffix("-merged") {
+                (preset, merged) = (name, true);
+            } else if let Some(name) = preset.strip_suffix("-nonhiding") {
+                (preset, nonhiding) = (name, true);
+            } else {
+                break;
+            }
+        }
         let config = |e: hachi_co_params::Error| HarnessError::Config(format!("{preset}: {e}"));
         let preset_choices = hachi_co_params::preset(preset).map_err(config)?.choices;
         if preset_choices.n != n as u64 {
@@ -354,7 +370,10 @@ impl Setup {
         }
         let (params, _report) = hachi_co_params::derive(&preset_choices).map_err(config)?;
         let ctx = crate::setup::<K>(params, seed)?;
-        let choices = HachiBase::preset_choices(&ctx, preset, seed).map_err(config)?;
+        let mut choices = HachiBase::preset_choices(&ctx, preset, seed).map_err(config)?;
+        if nonhiding {
+            choices.hiding = None;
+        }
         let mut pcs = HachiBase::new(ctx.q(), choices)?;
         if merged {
             pcs = pcs.merged()?;
@@ -691,6 +710,8 @@ pub struct PartyReport {
     pub network_time: Duration,
     /// The party's accounting ([`Endpoint::stats`]), the set-up round included.
     pub stats: Stats,
+    /// Whether the base PCS ran with its hiding choices (not for a `-nonhiding` preset name).
+    pub hiding: bool,
 }
 
 /// What a party computes before it connects: the public parameters, the instance and its
@@ -812,6 +833,7 @@ fn run_prepared(
         connect_time,
         network_time,
         stats,
+        hiding: setup.pcs.choices().hiding.is_some(),
     })
 }
 
@@ -856,5 +878,83 @@ pub fn verify_output(dir: &Path) -> Result<VerifyReport, HarnessError> {
         proof_bytes: bytes.len(),
         verify_time,
         value,
+    })
+}
+
+/// What [`run_single`] measured.
+#[derive(Clone, Debug)]
+pub struct SingleReport {
+    /// Whether Hachi ran with its hiding choices.
+    pub hiding: bool,
+    /// The commitment to $\mathbf f$.
+    pub commit_time: Duration,
+    /// The opening at $\mathbf x$.
+    pub eval_time: Duration,
+    /// The verification.
+    pub verify_time: Duration,
+    /// The iterations of the opening.
+    pub iterations: usize,
+    /// The length of the commitment's encoding in bytes: 8 per word of
+    /// [`HachiPcs::commitment_to_words`](hachi::HachiPcs::commitment_to_words), as in Hachi-Co's
+    /// proof.
+    pub commitment_bytes: usize,
+    /// The length of the proof's encoding in bytes: 8 per word of
+    /// [`HachiPcs::proof_to_words`](hachi::HachiPcs::proof_to_words), as in Hachi-Co's proof.
+    pub proof_bytes: usize,
+}
+
+/// The single-prover baseline of the benchmarks (`7_Benchmarks.tex`, "Comparison with a
+/// Non-Private PCS"): one prover holds the whole polynomial $\mathbf f$ of `instance` and runs
+/// Hachi on it alone, with the choices of the setup's base PCS, so with hiding unless the preset
+/// name ends in `-nonhiding` ([`Setup::new`]). $\mathbf f$ is committed over the field
+/// ([`HachiPcs::commit_multilinear_ext`](hachi::HachiPcs::commit_multilinear_ext), Hachi's
+/// Section 3.1, as Hachi-Co commits $\langle \widetilde w \rangle\_p$), opened at $\mathbf x$,
+/// and the proof verified; the value must be the instance's $y$. The seeds of Hachi's randomness
+/// come from `seed` ([`PartyRandomness::base_pcs`](hachi_co_core::PartyRandomness::base_pcs), 0
+/// for the commitment and 1 for the opening). The choices are the estimates of the preset's base
+/// PCS, made for its $\ell''$ variables, not for this polynomial.
+///
+/// # Errors
+/// [`HarnessError::Protocol`] if Hachi refuses the polynomial or fails;
+/// [`HarnessError::SingleRejected`] if its verifier rejects; [`HarnessError::Rejected`] with
+/// [`VerifyError::ValueMismatch`] for a value other than $y$.
+pub fn run_single(
+    setup: &Setup,
+    instance: Instance,
+    seed: &[u8; 32],
+) -> Result<SingleReport, HarnessError> {
+    use hachi_co_core::PartyRandomness;
+    let pcs = setup.pcs.pcs();
+    let field = setup.ctx.field();
+    let mut rng = PrgRandomness::new(*seed);
+    let commit_seed = PartyRandomness::<K>::base_pcs(&mut rng, 0).map_err(Error::from)?;
+    let open_seed = PartyRandomness::<K>::base_pcs(&mut rng, 1).map_err(Error::from)?;
+    let context = [0u8; 32];
+    let Instance { f, x, y } = instance;
+    let vars = x.len();
+    let start = Instant::now();
+    let (commitment, state) = pcs
+        .commit_multilinear_ext_owned(f, &commit_seed)
+        .map_err(Error::from)?;
+    let commit_time = start.elapsed();
+    let start = Instant::now();
+    let (value, proof) = pcs
+        .prove_multilinear_ext_owned(state, &x, &context, &open_seed)
+        .map_err(Error::from)?;
+    let eval_time = start.elapsed();
+    let start = Instant::now();
+    pcs.verify_multilinear_ext(&commitment, vars, &x, &value, &proof, &context)?;
+    let verify_time = start.elapsed();
+    if field.reduce(&value) != field.reduce(&y) {
+        return Err(VerifyError::ValueMismatch.into());
+    }
+    Ok(SingleReport {
+        hiding: pcs.ctx().hiding().is_some(),
+        commit_time,
+        eval_time,
+        verify_time,
+        iterations: proof.iterations.len(),
+        commitment_bytes: 8 * pcs.commitment_to_words(&commitment).len(),
+        proof_bytes: 8 * pcs.proof_to_words(&proof).len(),
     })
 }

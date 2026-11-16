@@ -2,10 +2,13 @@
 """The benchmark grid: scripts/run_parties.py for each cell, one JSON line per cell, in increasing size.
 
 A cell whose estimated memory exceeds --budget-gib is recorded as skipped with its estimate, not run. The estimate is
-the fit noted at PEAK_A_GIB, for all the parties of the cell.
+the fit noted at PEAK_A_GIB, for all the parties of the cell. With --nonhiding each cell also runs without hiding in
+Hachi, the base PCS (the preset's -nonhiding variant, on the same instance), and with --single each cell also runs the
+single-prover baseline (with hiding, and without it too with --nonhiding).
 
     cargo build --release -p hachi-co --bin hachi-co-party
     python3 scripts/bench_grid.py --out benchmarks/local.jsonl --scratch /tmp/grid --budget-gib 12
+    python3 scripts/bench_grid.py --out benchmarks/local.jsonl --scratch /tmp/grid --nonhiding --single
 """
 import argparse
 import json
@@ -38,14 +41,20 @@ def main():
     parser.add_argument("--budget-gib", type=float, default=12.0)
     parser.add_argument("--ells", type=int, nargs="+", default=[16, 20, 24])
     parser.add_argument("--ns", type=int, nargs="+", default=[2, 4, 8])
+    parser.add_argument("--nonhiding", action="store_true", help="also run each cell without hiding in the base PCS")
+    parser.add_argument("--single", action="store_true", help="also run the single-prover baseline of each cell")
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     cells = sorted(((ell, n) for ell in args.ells for n in args.ns), key=lambda c: (ELL_DPRIME[c], c[1]))
-    for ell, n in cells:
-        preset = f"bench-l{ell}-n{n}"
+    variants = [""] + (["-nonhiding"] if args.nonhiding else [])
+    runs = [(ell, n, v, single) for ell, n in cells for single in [False] + ([True] if args.single else [])
+            for v in variants]
+    for ell, n, variant, single in runs:
+        preset = f"bench-l{ell}-n{n}{variant}"
         need = estimate(ell, n)
         if need > args.budget_gib:
-            line = json.dumps({"preset": preset, "n": n, "skipped": True, "estimated_gib": round(need, 1)})
+            line = json.dumps({"preset": preset, "n": n, "single": single, "skipped": True,
+                               "estimated_gib": round(need, 1)})
         else:
             run = subprocess.run(
                 [
@@ -55,12 +64,13 @@ def main():
                     "--n", str(n),
                     "--out", str(args.scratch / preset),
                     "--spill", str(args.scratch / "spill"),
+                    *(["--single"] if single else []),
                 ],
                 capture_output=True,
                 text=True,
             )
             line = run.stdout.strip().splitlines()[-1] if run.returncode == 0 else json.dumps(
-                {"preset": preset, "n": n, "failed": True, "stderr": run.stderr[-500:]}
+                {"preset": preset, "n": n, "single": single, "failed": True, "stderr": run.stderr[-500:]}
             )
         print(line, flush=True)
         with args.out.open("a") as out:

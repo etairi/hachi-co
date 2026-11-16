@@ -6,7 +6,14 @@
 //! hachi-co-party <config.json>          run the party of the configuration
 //! hachi-co-party --verify <directory>   verify the proof and the statement in an output directory
 //! hachi-co-party --sizes <preset> <n>   print the proof size that the parameter tool predicts
+//! hachi-co-party --single <config.json> the single-prover baseline on the configuration's instance
 //! ```
+//!
+//! `--single` reads a party's configuration for its preset, $n$ and seeds (the instance and setup
+//! seeds, and the party seed for Hachi's randomness) and runs `harness::run_single`: one prover
+//! commits to the instance's whole polynomial with Hachi, the base PCS of the preset (without
+//! hiding for a name ending in `-nonhiding`), opens it at the instance's point and verifies the
+//! proof. It ignores the addresses, the session and the output directory.
 //!
 //! A party prints its timings and its accounting: the payload bytes and the frames it sent and
 //! received, in total and per label (`Endpoint::stats`), and the bytes of its frames on the wire
@@ -20,6 +27,7 @@
 use hachi_co::harness::{self, HarnessError, PROOF_FILE, PartyConfig, PartyReport, STATEMENT_FILE};
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Instant;
 
 /// mimalloc in place of the system's allocator with the feature `alloc-mimalloc`, on by default:
 /// the same results, faster and with less memory kept from the system than glibc's allocator
@@ -30,7 +38,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const USAGE: &str = "usage: hachi-co-party <config.json>
        hachi-co-party --verify <output directory>
-       hachi-co-party --sizes <preset> <n>";
+       hachi-co-party --sizes <preset> <n>
+       hachi-co-party --single <config.json>";
 
 /// The bytes of a frame on the wire besides its label and its payload: the label length (2),
 /// the round (8) and the payload length (8) (`hachi_co_mpc::TcpTransport`, "Frames").
@@ -54,6 +63,7 @@ fn main() -> ExitCode {
         }
         [flag, dir] if flag == "--verify" => verify(Path::new(dir)),
         [flag, preset, n] if flag == "--sizes" => sizes(preset, n),
+        [flag, config] if flag == "--single" => single(Path::new(config)),
         [config] if !config.starts_with('-') => run(Path::new(config)),
         _ => {
             eprintln!("{USAGE}");
@@ -76,12 +86,33 @@ fn run(path: &Path) -> Result<(), HarnessError> {
     Ok(())
 }
 
+fn single(path: &Path) -> Result<(), HarnessError> {
+    let config = PartyConfig::load(path)?;
+    let start = Instant::now();
+    let setup = harness::Setup::new(&config.preset, config.n, &config.setup_seed)?;
+    let instance = harness::Instance::derive(&setup.ctx, &config.instance_seed)?;
+    let setup_time = start.elapsed();
+    let r = harness::run_single(&setup, instance, &config.party_seed)?;
+    println!("single prover, preset {}", config.preset);
+    println!("hiding     {}", if r.hiding { "yes" } else { "no" });
+    println!("setup      {setup_time:>10.2?}  context, base PCS and instance");
+    println!("commit     {:>10.2?}", r.commit_time);
+    println!("eval       {:>10.2?}", r.eval_time);
+    println!("iterations {}", r.iterations);
+    println!("verify     {:>10.2?}", r.verify_time);
+    println!("commitment {} bytes", r.commitment_bytes);
+    println!("proof      {} bytes", r.proof_bytes);
+    println!("vector     {}", hachi_co_math::fma::vector_instructions());
+    Ok(())
+}
+
 fn print_report(config: &PartyConfig, r: &PartyReport) {
     let o = &r.output;
     println!(
         "party {} of {}, preset {}",
         config.party, config.n, config.preset
     );
+    println!("hiding     {}", if r.hiding { "yes" } else { "no" });
     println!(
         "setup      {:>10.2?}  context, base PCS, instance and share",
         r.setup_time

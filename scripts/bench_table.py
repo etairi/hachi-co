@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Prints the JSON lines of scripts/bench_grid.py and scripts/run_parties.py as Markdown tables, one per section.
+"""Prints the JSON lines of scripts/bench_grid.py and scripts/run_parties.py as Markdown tables, one per section. Runs
+without hiding in the base PCS (presets ending in -nonhiding) and runs of the single-prover baseline (--single) get
+sections of their own.
 With --medians, prints the lines of scripts/cluster.py instead: one row per preset, number of parties, setting and
 threads, with the median of the repetitions (and the range of Eval).
 
@@ -29,6 +31,23 @@ def row(cell):
         f"| {cell['verify_s']:.2f} | {max(cell['peak_bytes_per_party']) / GIB:.2f} "
         f"| {max(cell['sent_bytes_per_party']) / 2 ** 20:.1f} | {cell['proof_bytes'] / 1024:.1f} "
         f"| {cell['predicted_bytes'] / 1024:.1f} | {cell['verifier_peak_bytes'] / GIB:.2f} |"
+    )
+
+
+SINGLE_HEADER = (
+    "| preset | hiding | Commit (s) | Eval (s) | Verify (s) | peak (GiB) | commitment (B) | proof (KiB) |\n"
+    "|---|---|---|---|---|---|---|---|"
+)
+
+
+def single_row(cell):
+    name = cell["preset"]
+    if cell.get("skipped"):
+        return f"| {name} | | not run: about {cell['estimated_gib']} GiB | | | | | |"
+    hiding = {True: "yes", False: "no"}.get(cell.get("hiding"), "?")
+    return (
+        f"| {name} | {hiding} | {cell['commit_s']:.2f} | {cell['eval_s']:.2f} | {cell['verify_s']:.3f} "
+        f"| {cell['peak_bytes'] / GIB:.2f} | {cell['commitment_bytes']} | {cell['proof_bytes'] / 1024:.1f} |"
     )
 
 
@@ -74,6 +93,9 @@ def main():
     for cell in cells:
         if not cell.get("skipped") and not cell["accepted"]:
             raise SystemExit(f"{cell['preset']} was not accepted")
+    single = [c for c in cells if c.get("single")]
+    plain = [c for c in cells if not c.get("single") and c["preset"].endswith("-nonhiding")]
+    cells = [c for c in cells if not c.get("single") and not c["preset"].endswith("-nonhiding")]
     sections = [
         ("Grid", lambda c: c["preset"].startswith("bench") and c["n"] >= 2 and "residues" not in c["preset"]
          and c.get("spill", True)),
@@ -86,6 +108,14 @@ def main():
         print(f"\n## {title}\n\n{HEADER}")
         for cell in filter(keep, cells):
             print(row(cell))
+    if plain:
+        print(f"\n## Without hiding in the base PCS\n\n{HEADER}")
+        for cell in plain:
+            print(row(cell))
+    if single:
+        print(f"\n## Single prover\n\n{SINGLE_HEADER}")
+        for cell in single:
+            print(single_row(cell))
 
 
 if __name__ == "__main__":

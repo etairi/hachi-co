@@ -6,9 +6,17 @@ each party, the payload bytes and the proof's size. The seeds are SHA-256 of a t
 command line. The peak memory is /usr/bin/time's: the peak footprint on macOS, the peak resident size on Linux. Each
 party gets its share of the cores, as RAYON_NUM_THREADS, and the verifier gets all of them.
 
+A preset name ending in -nonhiding runs Hachi, the base PCS, without its hiding choices (the published scheme), to
+measure what hiding costs. It takes the seeds of the name without the suffix, so both runs prove the same polynomial
+at the same point with the same public matrices. With --single the script runs the single-prover baseline instead
+(hachi-co-party --single): one prover commits to the whole polynomial with Hachi and opens it, with the threads of one
+party.
+
     cargo build --release -p hachi-co --bin hachi-co-party
     python3 scripts/run_parties.py --preset toy-n3 --n 3 --out /tmp/run
     python3 scripts/run_parties.py --preset bench-l20-n2 --n 2 --out /tmp/run --spill /tmp/spill
+    python3 scripts/run_parties.py --preset secure-l16-n2-a8-nonhiding --n 2 --out /tmp/run
+    python3 scripts/run_parties.py --preset secure-l16-n2-a8 --n 2 --out /tmp/run --single
 """
 import argparse
 import hashlib
@@ -26,6 +34,11 @@ BINARY = Path(__file__).resolve().parent.parent / "target" / "release" / "hachi-
 
 def seed(tag, *parts):
     return hashlib.sha256("/".join([tag, *map(str, parts)]).encode()).hexdigest()
+
+
+def instance_name(preset):
+    """The name the seeds are drawn from: the preset without -nonhiding, which changes only the base PCS."""
+    return preset.removesuffix("-nonhiding")
 
 
 def time_command():
@@ -47,9 +60,15 @@ def seconds(text):
     return float(match.group(1)) * scale[match.group(2) or "s"]
 
 
+def hiding(stdout):
+    match = re.search(r"^hiding\s+(yes|no)", stdout, re.M)
+    return match.group(1) == "yes" if match else None
+
+
 def report(stdout):
     get = lambda pattern: re.search(pattern, stdout, re.M)
     return {
+        "hiding": hiding(stdout),
         "setup_s": seconds(get(r"^setup\s+(\S+)").group(1)),
         "commit_s": seconds(get(r"^commit\s+(\S+)").group(1)),
         "eval_s": seconds(get(r"^eval\s+(\S+)").group(1)),
@@ -70,9 +89,13 @@ def main():
     parser.add_argument("--tag", default="hachi-co/bench", help="the seeds are SHA-256 of this tag and an index")
     parser.add_argument("--timeout-ms", type=int, default=3_600_000)
     parser.add_argument("--threads", type=int, help="threads of each party, by default its share of the cores")
+    parser.add_argument("--single", action="store_true", help="run the single-prover baseline instead of the parties")
     args = parser.parse_args()
     threads = args.threads or max(os.cpu_count() // args.n, 1)
     args.out.mkdir(parents=True, exist_ok=True)
+    name = instance_name(args.preset)
+    if args.single:
+        return single(args, name, threads)
     if args.spill:
         args.spill.mkdir(parents=True, exist_ok=True)
     addresses = [f"127.0.0.1:{args.port + p}" for p in range(args.n)]
@@ -84,10 +107,10 @@ def main():
             "n": args.n,
             "party": p,
             "addresses": addresses,
-            "session": seed(args.tag, "session", args.preset),
-            "setup_seed": seed(args.tag, "setup", args.preset),
-            "instance_seed": seed(args.tag, "instance", args.preset),
-            "party_seed": seed(args.tag, "party", args.preset, p),
+            "session": seed(args.tag, "session", name),
+            "setup_seed": seed(args.tag, "setup", name),
+            "instance_seed": seed(args.tag, "instance", name),
+            "party_seed": seed(args.tag, "party", name, p),
             "output": str(args.out / f"party-{p}"),
             "connect_timeout_ms": args.timeout_ms,
             "recv_timeout_ms": args.timeout_ms,
@@ -135,6 +158,7 @@ def main():
         "spill": bool(args.spill),
         "tag": args.tag,
         "accepted": accepted,
+        "hiding": parties[0]["hiding"],
         "wall_s": round(time.time() - started, 2),
         "setup_s": max(p["setup_s"] for p in parties),
         "commit_s": max(p["commit_s"] for p in parties),
@@ -153,6 +177,59 @@ def main():
     }
     print(json.dumps(result))
     return 0 if accepted else 1
+
+
+def single(args, name, threads):
+    """The single-prover baseline on the instance of the run: party 1's configuration, one process."""
+    config = {
+        "preset": args.preset,
+        "n": args.n,
+        "party": 1,
+        "addresses": [f"127.0.0.1:{args.port + p}" for p in range(args.n)],
+        "session": seed(args.tag, "session", name),
+        "setup_seed": seed(args.tag, "setup", name),
+        "instance_seed": seed(args.tag, "instance", name),
+        "party_seed": seed(args.tag, "party", name, 1),
+        "output": str(args.out / "single"),
+    }
+    path = args.out / "single.json"
+    path.write_text(json.dumps(config, indent=1))
+    started = time.time()
+    run = subprocess.run(
+        [*time_command(), str(BINARY), "--single", str(path)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "RAYON_NUM_THREADS": str(threads)},
+    )
+    (args.out / "single.stdout").write_text(run.stdout)
+    (args.out / "single.stderr").write_text(run.stderr)
+    if run.returncode != 0:
+        sys.stderr.write(f"the single prover failed:\n{run.stderr[-2000:]}\n")
+        return 1
+    get = lambda pattern: re.search(pattern, run.stdout, re.M).group(1)
+    result = {
+        "preset": args.preset,
+        "n": args.n,
+        "single": True,
+        "tag": args.tag,
+        "accepted": True,
+        "hiding": hiding(run.stdout),
+        "wall_s": round(time.time() - started, 2),
+        "setup_s": seconds(get(r"^setup\s+(\S+)")),
+        "commit_s": seconds(get(r"^commit\s+(\S+)")),
+        "eval_s": seconds(get(r"^eval\s+(\S+)")),
+        "verify_s": seconds(get(r"^verify\s+(\S+)")),
+        "iterations": int(get(r"^iterations\s+(\d+)")),
+        "commitment_bytes": int(get(r"^commitment\s+(\d+) bytes")),
+        "proof_bytes": int(get(r"^proof\s+(\d+) bytes")),
+        "peak_bytes": peak_bytes(run.stderr),
+        "cores": os.cpu_count(),
+        "threads": threads,
+        "vector": get(r"^vector\s+(\S+)"),
+        "platform": platform.platform(),
+    }
+    print(json.dumps(result))
+    return 0
 
 
 if __name__ == "__main__":

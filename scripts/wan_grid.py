@@ -11,6 +11,9 @@ interrupted grid resumes where it stopped.
         --settings lan wan50 wan100 --presets secure100-l16-n4-a8 secure100-l20-n4-a8 \\
         --ppp26-log-ms 16 20 --threads 1 --reps 3 --out runs/gcp-grid.jsonl
 
+A preset name ending in -nonhiding (for example secure100-l16-n4-a8-nonhiding next to secure100-l16-n4-a8) runs Hachi,
+the base PCS, without its hiding choices on the same instance, to measure what hiding costs.
+
 The named settings are those of PPP26 (ePrint 2026/729, Section 7): `lan` (RTT 2 ms, 10 Gbit/s), `wan50` (RTT 50 ms,
 200 Mbit/s) and `wan100` (RTT 100 ms, 200 Mbit/s). Others are `name:rtt_ms:rate_mbit` (`asis` with --switch none, for
 instances in different regions). With --switch gcp the netem commands run on the instances (scripts/gcp.py netem).
