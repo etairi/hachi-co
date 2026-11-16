@@ -271,6 +271,144 @@
     "w": 73442
    }
   },
+  "secure-l22-n2-a10": {
+   "b": 8,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 2,
+    "nu": 2,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 16,
+   "proof_words": {
+    "g0": 102334,
+    "g1": 28516,
+    "w": 112588
+   }
+  },
+  "secure-l22-n2-a8": {
+   "b": 8,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 8,
+    "nu": 8,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 22,
+   "proof_words": {
+    "g0": 52425,
+    "g1": 26246,
+    "w": 57555
+   }
+  },
+  "secure-l22-n4-a10": {
+   "b": 16,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 2,
+    "nu": 3,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 16,
+   "proof_words": {
+    "g0": 70373,
+    "g1": 37530,
+    "w": 87475
+   }
+  },
+  "secure-l22-n4-a8": {
+   "b": 4,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 7,
+    "nu": 10,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 22,
+   "proof_words": {
+    "g0": 68663,
+    "g1": 17968,
+    "w": 73442
+   }
+  },
+  "secure-l22-n8-a10": {
+   "b": 8,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 2,
+    "nu": 3,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 1,
+    "g1": 1,
+    "w": 4
+   },
+   "n_a": 1,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 16,
+   "proof_words": {
+    "g0": 102754,
+    "g1": 53552,
+    "w": 114075
+   }
+  },
+  "secure-l22-n8-a8": {
+   "b": 4,
+   "hiding": {
+    "lambda": 115,
+    "n_a": 7,
+    "nu": 10,
+    "phi": 13
+   },
+   "iterations": {
+    "g0": 2,
+    "g1": 1,
+    "w": 5
+   },
+   "n_a": 4,
+   "n_b": 1,
+   "n_d": 1,
+   "omega": 22,
+   "proof_words": {
+    "g0": 68663,
+    "g1": 17968,
+    "w": 73479
+   }
+  },
   "secure-l24-n2-a10": {
    "b": 8,
    "hiding": {

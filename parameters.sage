@@ -343,9 +343,9 @@ HCO_Q_LIMIT = 2^63                    # residues are u64 with 128-bit products: 
 HCO_MAX_RANK = 2^13                   # largest MSIS rank n_A d (and n_B d) tried
 HCO_Q_STEPS = 256                     # bisection on log2 q to 1/HCO_Q_STEPS bit
 # The configurations (l, n, alpha): the brief's grid, then larger l and n that may still fit q < 2^63.
-HCO_GRID = ([(l, n, a) for l in (16, 20, 24) for n in (2, 4) for a in (8, 10)]
+HCO_GRID = ([(l, n, a) for l in (16, 20, 22, 24) for n in (2, 4) for a in (8, 10)]
             + [(l, n, a) for l in (28, 30) for n in (2, 4) for a in (8, 10)]
-            + [(l, 8, a) for l in (16, 20, 24) for a in (8, 10)])
+            + [(l, 8, a) for l in (16, 20, 22, 24) for a in (8, 10)])
 
 _hco_root = os.path.dirname(_preparsed_path)
 _hco_out = os.path.join(_hco_root, "crates", "params")

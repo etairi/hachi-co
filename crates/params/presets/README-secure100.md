@@ -4,6 +4,7 @@ Written by `parameters.sage` (Hachi-Co section); do not edit by hand. The same d
 quantity, is in `secure100.json`, which `hachi-co-params` embeds and re-derives in its tests.
 
 - Command: `sage parameters.sage --hachi-co-only --hachi-co-lambda=100 --hachi-co-family=secure100` (run from the repository root; SageMath version 10.9, Release Date: 2026-05-04, started 2026-11-12 09:54).
+- The six presets with l = 22 were added on 2026-11-13 by the same script and estimator revision, `sage parameters.sage --hachi-co-only --hachi-co-lambda=100 --hachi-co-family=secure100 --hachi-co-grid=22:2:8,22:4:8,22:8:8,22:2:10,22:4:10,22:8:10` into a separate directory, and merged into this table and the JSON file in the order of the grid; the other rows are those of the run above. The grid of `parameters.sage` now includes l = 22.
 - Lattice estimator: https://github.com/malb/lattice-estimator, revision `53da5982597709ba0fdf94ea37a84d822310fd84` (an existing checkout given by LATTICE_ESTIMATOR_DIR).
 - Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10), the L = lambda masks per prover in mu and in the width of D and no bound 1 + 2^(l+3) n omega^2 b on q (the parameter table of the draft's commit `1096ea2`), and the rules of `docs/m0-spec.md`.
 - Fixed choices: lambda = 100, k = 4 (kappa = 2), b = 16, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, L = lambda, n_D = 1, t = n - 1.
@@ -21,6 +22,10 @@ quantity, is in `secure100.json`, which `hachi-co-params` embeds and re-derives 
 | secure100-l20-n2-a10 | 20 | 2 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 7 | 6 | 2 | 1 | 3 | 3 | 19502 | 26 | 786432 | 35.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
 | secure100-l20-n4-a8 | 20 | 4 | 256 | 18 | 329216418593581 | 48.226 | 13 | 10 | 8 | 8 | 7 | 1 | 5 | 5 | 101546 | 26 | 851968 | 37.87 | 100.5 / 105.8 | 547.4 | 133.6 (bdd) | 0.607 | 14: 6 |
 | secure100-l20-n4-a10 | 20 | 4 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 7 | 7 | 2 | 1 | 3 | 3 | 34394 | 27 | 1572864 | 37.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
+| secure100-l22-n2-a8 | 22 | 2 | 256 | 19 | 348114116291069 | 48.307 | 13 | 10 | 9 | 8 | 7 | 1 | 5 | 5 | 107350 | 26 | 851968 | 37.95 | 105.1 / 105.6 | 548.2 | 133.3 (bdd) | 0.607 | 14: 6 |
+| secure100-l22-n2-a10 | 22 | 2 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 8 | 7 | 2 | 1 | 3 | 3 | 31790 | 26 | 1572864 | 37.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
+| secure100-l22-n4-a8 | 22 | 4 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 9 | 9 | 7 | 1 | 5 | 5 | 181034 | 27 | 1835008 | 40.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
+| secure100-l22-n4-a10 | 22 | 4 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 8 | 8 | 2 | 1 | 3 | 3 | 62218 | 27 | 3407872 | 39.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
 | secure100-l24-n2-a8 | 24 | 2 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 10 | 9 | 7 | 1 | 5 | 5 | 215958 | 27 | 1835008 | 40.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
 | secure100-l24-n2-a10 | 24 | 2 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 9 | 8 | 2 | 1 | 3 | 3 | 64390 | 27 | 3407872 | 39.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
 | secure100-l24-n4-a8 | 24 | 4 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 10 | 10 | 7 | 1 | 5 | 5 | 317226 | 28 | 3670016 | 42.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
@@ -37,5 +42,7 @@ quantity, is in `secure100.json`, which `hachi-co-params` embeds and re-derives 
 | secure100-l16-n8-a10 | 16 | 8 | 1024 | 13 | 236623440629309 | 47.750 | 12 | 10 | 6 | 5 | 2 | 1 | 3 | 3 | 34994 | 27 | 393216 | 35.29 | 100.7 / 122.2 | inf | 182.5 (bdd) | 0.607 | none |
 | secure100-l20-n8-a8 | 20 | 8 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 9 | 8 | 7 | 1 | 5 | 5 | 186450 | 27 | 917504 | 40.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
 | secure100-l20-n8-a10 | 20 | 8 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 8 | 7 | 2 | 1 | 3 | 3 | 59538 | 27 | 1703936 | 39.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
+| secure100-l22-n8-a8 | 22 | 8 | 256 | 19 | 9888326265288461 | 53.135 | 14 | 11 | 10 | 9 | 7 | 1 | 5 | 5 | 283218 | 28 | 1835008 | 42.06 | 1589.0 / 100.1 | 605.0 | 118.7 (bdd) | 0.607 | 16: 6 |
+| secure100-l22-n8-a10 | 22 | 8 | 1024 | 13 | 3785975050058693 | 51.750 | 13 | 11 | 9 | 8 | 2 | 1 | 3 | 3 | 87826 | 28 | 3407872 | 41.40 | 100.7 / 113.7 | inf | 165.8 (bdd) | 0.607 | none |
 | secure100-l24-n8-a8 | 24 | 8 | 256 | 19 | 88665684641314861 | 56.299 | 15 | 12 | 11 | 10 | 8 | 1 | 5 | 5 | 568882 | 29 | 3932160 | 44.15 | 105.1 / 105.4 | 642.4 | 110.8 (bdd) | 0.607 | 16: 7 |
 | secure100-l24-n8-a10 | 24 | 8 | 1024 | 14 | 65326880641120541 | 55.859 | 14 | 12 | 10 | 9 | 2 | 1 | 3 | 3 | 162674 | 29 | 7340032 | 43.61 | 104.8 / 106.1 | inf | 151.5 (bdd) | 0.607 | none |
