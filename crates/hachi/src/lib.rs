@@ -68,6 +68,7 @@ pub mod partials;
 pub mod pcs;
 pub mod relation;
 pub mod sumcheck;
+pub mod table;
 
 pub use error::{Error, Result, VerifyError};
 pub use params::{HachiChoices, Hiding, Layout, Schedule};

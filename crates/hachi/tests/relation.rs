@@ -16,7 +16,9 @@ use hachi::commit::{Committed, Ctx, commit};
 use hachi::iteration::{commitment_randomness, evaluate_claim};
 use hachi::mle::{eq_table, powers};
 use hachi::params::{HachiChoices, Hiding, Layout, Schedule};
-use hachi::relation::{Columns, Masked, Public, mstar, next_table, quotients};
+use hachi::relation::{
+    Columns, Masked, Mat, Part, Public, mstar, next_table, next_table_parts, quotients,
+};
 use hachi_co_math::decompose::{g_apply, g_inv, j_inv};
 use hachi_co_math::{Ext, Poly};
 use hachi_co_sampling::ShakePrg;
@@ -100,9 +102,9 @@ fn check_weights(choices: &HachiChoices) {
                 a: &a,
                 target: &target,
                 c: &c,
-                d_mat: &d_mat,
-                b_mat: &b_mat,
-                a_mat: &a_mat,
+                d_mat: Mat::Held(&d_mat),
+                b_mat: Mat::Held(&b_mat),
+                a_mat: Mat::Held(&a_mat),
                 a_rand: &a_rand,
                 v: &v,
                 u: &u,
@@ -233,9 +235,9 @@ fn check_constrained(choices: &HachiChoices) {
         a: &a,
         target: &target,
         c: &c,
-        d_mat: &d_mat,
-        b_mat: &b_mat,
-        a_mat: &a_mat,
+        d_mat: Mat::Held(&d_mat),
+        b_mat: Mat::Held(&b_mat),
+        a_mat: Mat::Held(&a_mat),
         a_rand: &a_rand,
         v: &v,
         u: &witness.u,
@@ -260,6 +262,38 @@ fn check_constrained(choices: &HachiChoices) {
     };
     // Honest: every row vanishes. Changing a masked part by one makes a row fail.
     let quot = q(&w0, &t0, &z_r).unwrap();
+    // B expanded one block of columns at a time (Mat::Expanded, as the prover reads it) gives
+    // the same quotients as B held whole.
+    let b_by_blocks = Public {
+        b_mat: Mat::Expanded {
+            kind: b"B",
+            iteration: 0,
+            rows: n_b,
+            cols: chunks * n_a * delta,
+        },
+        ..public
+    };
+    let masked = Masked {
+        w0: &w0,
+        w0_hat: &w0_hat,
+        t0: &t0,
+        t0_hat: &t0_hat,
+        z_r: &z_r,
+    };
+    assert_eq!(
+        quotients(
+            &ctx,
+            &b_by_blocks,
+            &w,
+            &w_hat,
+            &witness.t,
+            &witness.t_hat,
+            &z,
+            Some(&masked)
+        )
+        .unwrap(),
+        quot
+    );
     let bump = |p: &Poly| {
         let mut p = p.clone();
         p.0[0] = zq.add(p.0[0], 1);
@@ -301,10 +335,23 @@ fn check_constrained(choices: &HachiChoices) {
     let mut z_prime = w_hat.clone();
     z_prime.extend_from_slice(&w0_hat);
     z_prime.extend_from_slice(&t0_hat);
-    z_prime.extend(witness.t_hat.iter().cloned());
+    z_prime.extend(witness.t_hat.polys(zq, 0..witness.t_hat.len()));
     z_prime.extend(j_inv(ring, b, p.tau, &z).unwrap());
     z_prime.extend(j_inv(ring, b, p.tau, &z_r).unwrap());
     let table = next_table(&ctx, p, &z_prime, &quot).unwrap();
+    // The same table from z' in parts, t-hat from its bytes.
+    let mut before = w_hat.clone();
+    before.extend_from_slice(&w0_hat);
+    before.extend_from_slice(&t0_hat);
+    let mut after = j_inv(ring, b, p.tau, &z).unwrap();
+    after.extend(j_inv(ring, b, p.tau, &z_r).unwrap());
+    let parts = [
+        Part::Polys(&before),
+        Part::Digits(&witness.t_hat),
+        Part::Polys(&after),
+    ];
+    assert_eq!(next_table_parts(&ctx, p, &parts, &quot).unwrap(), table);
+    assert!(next_table_parts(&ctx, p, &parts[..2], &quot).is_err());
     let lr = p.rows.next_power_of_two().trailing_zeros() as usize;
     let coins: Vec<Ext<K>> = uniform_mod_q(
         &mut ShakePrg::new(&[11u8; 32], b"coins", 1),
@@ -319,6 +366,74 @@ fn check_constrained(choices: &HachiChoices) {
     .collect();
     let alpha_pows = powers(field, &coins[0], d + 1);
     let (m, sum) = mstar(&ctx, &public, &eq_table(field, &coins[1..]), &alpha_pows).unwrap();
+    // The same weights and sum from the matrices expanded by blocks of columns as M* reads them.
+    let expanded = Public {
+        d_mat: Mat::Expanded {
+            kind: b"D",
+            iteration: 0,
+            rows: n_d,
+            cols: p.d_cols(),
+        },
+        b_mat: Mat::Expanded {
+            kind: b"B",
+            iteration: 0,
+            rows: n_b,
+            cols: chunks * n_a * delta,
+        },
+        a_mat: Mat::Expanded {
+            kind: b"A",
+            iteration: 0,
+            rows: n_a,
+            cols: width,
+        },
+        ..public
+    };
+    assert_eq!(
+        mstar(&ctx, &expanded, &eq_table(field, &coins[1..]), &alpha_pows).unwrap(),
+        (m.clone(), sum)
+    );
+    // The quotients read the matrices whole (with the masks that fit the level, so that the
+    // matrices are what fails), and a held matrix must have its columns.
+    let masks = Masked {
+        w0: &w0,
+        w0_hat: &w0_hat,
+        t0: &t0,
+        t0_hat: &t0_hat,
+        z_r: &z_r,
+    };
+    assert!(matches!(
+        quotients(
+            &ctx,
+            &expanded,
+            &w,
+            &w_hat,
+            &witness.t,
+            &witness.t_hat,
+            &z,
+            Some(&masks)
+        ),
+        Err(Error::Shape(_))
+    ));
+    assert_eq!(
+        quotients(
+            &ctx,
+            &public,
+            &w,
+            &w_hat,
+            &witness.t,
+            &witness.t_hat,
+            &z,
+            Some(&masks)
+        )
+        .unwrap(),
+        quot
+    );
+    let short_d: Vec<Vec<Poly>> = d_mat.iter().map(|row| row[1..].to_vec()).collect();
+    let bad = Public {
+        d_mat: Mat::Held(&short_d),
+        ..public
+    };
+    assert!(mstar(&ctx, &bad, &eq_table(field, &coins[1..]), &alpha_pows).is_err());
     let lhs = |table: &[u64]| {
         m.iter().enumerate().fold(field.zero(), |acc, (u, mu)| {
             let at_alpha = (0..d).fold(field.zero(), |acc, l| {

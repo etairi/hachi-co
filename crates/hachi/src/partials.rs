@@ -93,8 +93,10 @@
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::mle::{eq_table, interpolate};
+use crate::table::{DigitTable, ResidueTable};
 use crate::{Error, Result};
 use hachi_co_math::{Ext, Fqk};
+use rayon::prelude::*;
 
 /// The transcript labels of one run of the batching sumcheck. The same gadget binds the partial
 /// evaluations of a multilinear input ([`INPUT_LABELS`], `pcs`) and of every iteration's next
@@ -207,6 +209,7 @@ fn batching_coefficients<const K: usize>(
 /// The table of $W(\mathbf b) = \sum_u \eta_u A_u(\mathbf b)$ on $\lbrace 0, 1 \rbrace^n$ for
 /// `etas` $= (\eta_u)\_u$, with $A_u(\mathbf b)$ coordinate $u$ of
 /// $\widetilde{eq}(\mathbf x', \mathbf b)$ (module documentation).
+#[cfg(test)]
 fn weights<const K: usize>(field: &Fqk<K>, etas: &[Ext<K>], x: &[Ext<K>]) -> Vec<Ext<K>> {
     eq_table(field, x)
         .iter()
@@ -216,6 +219,171 @@ fn weights<const K: usize>(field: &Fqk<K>, etas: &[Ext<K>], x: &[Ext<K>]) -> Vec
             })
         })
         .collect()
+}
+
+/// $W$ of [`weights`] as a sum of $K$ products of a row and a column table, split after the first
+/// $n_U = \lceil n/2 \rceil$ variables: with $E_U = \widetilde{eq}(\mathbf x'\_U, \cdot)$ and
+/// $E_L = \widetilde{eq}(\mathbf x'\_L, \cdot)$, $\widetilde{eq}(\mathbf x', \mathbf b_U \Vert
+/// \mathbf b_L) = E_U(\mathbf b_U) E_L(\mathbf b_L)$ in $\mathbb F_{q^K}$, and $E_L = \sum_v C_v
+/// Z_v$ with $C_v$ in $\mathbb F_q$. As $\ell(y) = \sum_u \eta_u y_u$ (coordinates $y_u$) is
+/// $\mathbb F_q$-linear, $W(\mathbf b_U \Vert \mathbf b_L) = \sum_v R_v(\mathbf b_U)
+/// C_v(\mathbf b_L)$ with $R_v = \ell(E_U Z_v)$. The rows hold the $R_v$, the columns $E_L$ (whose
+/// coordinates are the $C_v$): $K 2^{n_U} + 2^{n_L}$ values in place of $2^n$.
+struct SplitWeights<const K: usize> {
+    /// $(R_v(\mathbf b_U))\_v$ for each $\mathbf b_U$, bound with the rounds.
+    rows: Vec<[Ext<K>; K]>,
+    /// $E_L(\mathbf b_L)$ for each $\mathbf b_L$.
+    cols: Vec<Ext<K>>,
+}
+
+impl<const K: usize> SplitWeights<K> {
+    fn new(field: &Fqk<K>, etas: &[Ext<K>], x: &[Ext<K>]) -> Self {
+        let (x_u, x_l) = x.split_at(x.len().div_ceil(2));
+        let level = |y: &Ext<K>| -> Ext<K> {
+            etas.iter().zip(y.0).fold(field.zero(), |acc, (eta, a)| {
+                field.add(&acc, &field.scale(eta, a))
+            })
+        };
+        let basis: [Ext<K>; K] = core::array::from_fn(|v| {
+            let mut z = field.zero();
+            z.0[v] = 1;
+            z
+        });
+        let rows = eq_table(field, x_u)
+            .iter()
+            .map(|e| basis.map(|z| level(&field.mul(e, &z))))
+            .collect();
+        Self {
+            rows,
+            cols: eq_table(field, x_l),
+        }
+    }
+
+    /// $W$ on the remaining columns, once every row variable is bound.
+    fn dense(&self, field: &Fqk<K>) -> Vec<Ext<K>> {
+        let row = &self.rows[0];
+        self.cols
+            .iter()
+            .map(|c| {
+                row.iter().zip(c.0).fold(field.zero(), |acc, (rv, cv)| {
+                    field.add(&acc, &field.scale(rv, cv))
+                })
+            })
+            .collect()
+    }
+}
+
+/// The values of $f'$ on $\lbrace 0, 1 \rbrace^n$ for [`prove_table`]: owned, or read from a table
+/// of residues, $K$ per value ($Z_i$ puts residue $i$ in coordinate $i$), until the first round
+/// folds them into owned values. The second form spares a copy of the table.
+pub enum Packed<'a, const K: usize> {
+    /// The $2^n$ values.
+    Values(Vec<Ext<K>>),
+    /// The $K 2^n$ residues, value $\mathbf b$ at `residues[bK .. bK + K]`.
+    Residues(&'a [u64]),
+    /// The same residues as digits, one byte each ([`DigitTable`]).
+    Digits(&'a DigitTable),
+}
+
+impl<const K: usize> Packed<'_, K> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Values(t) => t.len(),
+            Self::Residues(r) => r.len() / K,
+            Self::Digits(t) => ResidueTable::len(*t) / K,
+        }
+    }
+
+    #[inline]
+    fn at(&self, i: usize) -> Ext<K> {
+        match self {
+            Self::Values(t) => t[i],
+            Self::Residues(r) => Ext(core::array::from_fn(|c| r[i * K + c])),
+            Self::Digits(t) => Ext(core::array::from_fn(|c| t[i * K + c])),
+        }
+    }
+
+    /// Binds the first variable to `r`.
+    fn fold(self, field: &Fqk<K>, r: &Ext<K>) -> Self {
+        let half = self.len() / 2;
+        let folded = |lo: Ext<K>, hi: Ext<K>| field.add(&lo, &field.mul(r, &field.sub(&hi, &lo)));
+        match self {
+            Self::Values(mut t) => {
+                let (low, high) = t.split_at_mut(half);
+                low.par_iter_mut()
+                    .zip(high.par_iter())
+                    .with_min_len(1 << 12)
+                    .for_each(|(lo, hi)| *lo = folded(*lo, *hi));
+                t.truncate(half);
+                Self::Values(t)
+            }
+            residues => Self::Values(
+                (0..half)
+                    .into_par_iter()
+                    .map(|i| folded(residues.at(i), residues.at(i + half)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// One round's values at $t = 0, 1, 2$ with the weights split ([`SplitWeights`], at least two
+/// rows): for each row $\mathbf b_U$ of the lower half, the sums over its columns of $C_v
+/// T_t$, times $R_{v,t}$, the affine functions of $t$ through the row's $R_v$ and those of its
+/// partner. The same sums as the dense round, grouped by row.
+fn split_round<const K: usize>(
+    field: &Fqk<K>,
+    t: &Packed<'_, K>,
+    w: &SplitWeights<K>,
+) -> [Ext<K>; 3] {
+    let (cols, half_rows) = (w.cols.len(), w.rows.len() / 2);
+    let half = half_rows * cols;
+    let zeros = || [field.zero(); 3];
+    (0..half_rows)
+        .into_par_iter()
+        .fold(zeros, |mut h, u| {
+            let mut s = [[field.zero(); K]; 3];
+            for (j, c) in w.cols.iter().enumerate() {
+                let (t0, t1) = (t.at(u * cols + j), t.at(half + u * cols + j));
+                let t2 = field.sub(&field.add(&t1, &t1), &t0);
+                for (v, cv) in c.0.iter().enumerate() {
+                    s[0][v] = field.add(&s[0][v], &field.scale(&t0, *cv));
+                    s[1][v] = field.add(&s[1][v], &field.scale(&t1, *cv));
+                    s[2][v] = field.add(&s[2][v], &field.scale(&t2, *cv));
+                }
+            }
+            let (r0, r1) = (&w.rows[u], &w.rows[u + half_rows]);
+            for v in 0..K {
+                let r2 = field.sub(&field.add(&r1[v], &r1[v]), &r0[v]);
+                h[0] = field.add(&h[0], &field.mul(&r0[v], &s[0][v]));
+                h[1] = field.add(&h[1], &field.mul(&r1[v], &s[1][v]));
+                h[2] = field.add(&h[2], &field.mul(&r2, &s[2][v]));
+            }
+            h
+        })
+        .reduce(zeros, |a, b| {
+            core::array::from_fn(|k| field.add(&a[k], &b[k]))
+        })
+}
+
+/// One round's values at $t = 0, 1, 2$ with dense weights.
+fn dense_round<const K: usize>(field: &Fqk<K>, t: &Packed<'_, K>, w: &[Ext<K>]) -> [Ext<K>; 3] {
+    let half = w.len() / 2;
+    let zeros = || [field.zero(); 3];
+    (0..half)
+        .into_par_iter()
+        .fold(zeros, |mut h, i| {
+            let (t0, t1, w0, w1) = (t.at(i), t.at(i + half), w[i], w[i + half]);
+            let t2 = field.sub(&field.add(&t1, &t1), &t0);
+            let w2 = field.sub(&field.add(&w1, &w1), &w0);
+            h[0] = field.add(&h[0], &field.mul(&t0, &w0));
+            h[1] = field.add(&h[1], &field.mul(&t1, &w1));
+            h[2] = field.add(&h[2], &field.mul(&t2, &w2));
+            h
+        })
+        .reduce(zeros, |a, b| {
+            core::array::from_fn(|k| field.add(&a[k], &b[k]))
+        })
 }
 
 /// The $(e_u)\_u$ of $\prod_j ((1 - x_j) \otimes (1 - r_j) + x_j \otimes r_j) = \sum_u Z_u \otimes
@@ -291,7 +459,7 @@ pub fn prove<const K: usize>(
 ) -> Result<(Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>)> {
     prove_table(
         field,
-        hypercube_values(field, coeffs)?,
+        Packed::Values(hypercube_values(field, coeffs)?),
         x,
         partials,
         &INPUT_LABELS,
@@ -310,36 +478,51 @@ pub fn prove<const K: usize>(
 /// [`Error::Shape`] unless `t` has $2^{|\mathbf x'|}$ values and there are $K$ partial
 /// evaluations; [`Error::Protocol`] if the partial evaluations are not those of $f'$ at
 /// $\mathbf x'$; sampling errors.
+///
+/// **Prover's memory.** $W$ stays split (`SplitWeights`) while a row variable is left, and the
+/// table of $f'$ can be read from residues ([`Packed::Residues`]) in the first round, so that the
+/// prover holds no table of $2^n$ values beyond the one after the first fold ($2^{n-1}$). The
+/// round values are the dense ones, grouped by row, so the messages do not change.
 pub fn prove_table<const K: usize>(
     field: &Fqk<K>,
-    mut t: Vec<Ext<K>>,
+    t: Packed<'_, K>,
     x: &[Ext<K>],
     partials: &[Ext<K>],
     labels: &Labels,
     fs: &mut Fs,
 ) -> Result<(Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>)> {
-    if x.len() >= usize::BITS as usize || t.len() != 1 << x.len() || partials.len() != K {
+    let shape_ok = match &t {
+        Packed::Values(v) => x.len() < usize::BITS as usize && v.len() == 1 << x.len(),
+        Packed::Residues(r) => {
+            x.len() < usize::BITS as usize && r.len() == K.checked_shl(x.len() as u32).unwrap_or(0)
+        }
+        Packed::Digits(t) => {
+            x.len() < usize::BITS as usize
+                && ResidueTable::len(*t) == K.checked_shl(x.len() as u32).unwrap_or(0)
+        }
+    };
+    if !shape_ok || partials.len() != K {
         return Err(Error::Shape(format!(
             "2^{} table values and {K} partial evaluations are expected",
             x.len()
         )));
     }
     let etas = batching_coefficients(field, labels, fs)?;
-    let mut w = weights(field, &etas, x);
+    let mut split = Some(SplitWeights::new(field, &etas, x));
+    let mut dense: Vec<Ext<K>> = Vec::new();
     let sum = batched(field, &etas, &transpose(partials));
+    let mut t = t;
     let mut rounds = Vec::with_capacity(x.len());
     let mut point = Vec::with_capacity(x.len());
     for round in 0..x.len() {
-        let half = t.len() / 2;
-        let mut h = [field.zero(); 3];
-        for i in 0..half {
-            let (t0, t1, w0, w1) = (t[i], t[i + half], w[i], w[i + half]);
-            let t2 = field.sub(&field.add(&t1, &t1), &t0);
-            let w2 = field.sub(&field.add(&w1, &w1), &w0);
-            h[0] = field.add(&h[0], &field.mul(&t0, &w0));
-            h[1] = field.add(&h[1], &field.mul(&t1, &w1));
-            h[2] = field.add(&h[2], &field.mul(&t2, &w2));
+        if let Some(w) = split.as_ref().filter(|w| w.rows.len() == 1) {
+            dense = w.dense(field);
+            split = None;
         }
+        let h = match &split {
+            Some(w) => split_round(field, &t, w),
+            None => dense_round(field, &t, &dense),
+        };
         if round == 0 && field.add(&h[0], &h[1]) != sum {
             return Err(Error::Protocol(
                 "the partial evaluations are not those of the committed polynomial".into(),
@@ -348,17 +531,31 @@ pub fn prove_table<const K: usize>(
         let sent = [h[0], h[2]];
         fs.exts(labels.round_poly, &sent);
         let r = fs.field_coins::<K>(labels.challenge, field.modulus(), 1)?[0];
-        for table in [&mut t, &mut w] {
-            for i in 0..half {
-                let (lo, hi) = (table[i], table[i + half]);
-                table[i] = field.add(&lo, &field.mul(&r, &field.sub(&hi, &lo)));
+        t = t.fold(field, &r);
+        match &mut split {
+            Some(w) => {
+                let half = w.rows.len() / 2;
+                for u in 0..half {
+                    let (lo, hi) = (w.rows[u], w.rows[u + half]);
+                    w.rows[u] = core::array::from_fn(|v| {
+                        field.add(&lo[v], &field.mul(&r, &field.sub(&hi[v], &lo[v])))
+                    });
+                }
+                w.rows.truncate(half);
             }
-            table.truncate(half);
+            None => {
+                let half = dense.len() / 2;
+                for i in 0..half {
+                    let (lo, hi) = (dense[i], dense[i + half]);
+                    dense[i] = field.add(&lo, &field.mul(&r, &field.sub(&hi, &lo)));
+                }
+                dense.truncate(half);
+            }
         }
         rounds.push(sent);
         point.push(r);
     }
-    let value = t[0];
+    let value = t.at(0);
     fs.exts(labels.eval, &[value]);
     Ok((rounds, point, value))
 }
@@ -829,5 +1026,103 @@ mod tests {
         .unwrap();
         assert_eq!(got, point);
         assert_ne!(value, evaluate(&sub, &packed, &point));
+    }
+
+    /// The prover on dense tables, as it was before [`SplitWeights`] and [`Packed`]: the
+    /// reference of `the_split_prover_is_the_dense_prover`.
+    fn prove_table_dense(
+        field: &Fqk<K>,
+        mut t: Vec<Ext<K>>,
+        x: &[Ext<K>],
+        labels: &Labels,
+        fs: &mut Fs,
+    ) -> (Vec<RoundValues<K>>, Vec<Ext<K>>, Ext<K>) {
+        let etas = batching_coefficients(field, labels, fs).unwrap();
+        let mut w = weights(field, &etas, x);
+        let (mut rounds, mut point) = (Vec::new(), Vec::new());
+        for _ in 0..x.len() {
+            let half = t.len() / 2;
+            let mut h = [field.zero(); 3];
+            for i in 0..half {
+                let (t0, t1, w0, w1) = (t[i], t[i + half], w[i], w[i + half]);
+                let t2 = field.sub(&field.add(&t1, &t1), &t0);
+                let w2 = field.sub(&field.add(&w1, &w1), &w0);
+                h[0] = field.add(&h[0], &field.mul(&t0, &w0));
+                h[1] = field.add(&h[1], &field.mul(&t1, &w1));
+                h[2] = field.add(&h[2], &field.mul(&t2, &w2));
+            }
+            let sent = [h[0], h[2]];
+            fs.exts(labels.round_poly, &sent);
+            let r = fs
+                .field_coins::<K>(labels.challenge, field.modulus(), 1)
+                .unwrap()[0];
+            for table in [&mut t, &mut w] {
+                for i in 0..half {
+                    let (lo, hi) = (table[i], table[i + half]);
+                    table[i] = field.add(&lo, &field.mul(&r, &field.sub(&hi, &lo)));
+                }
+                table.truncate(half);
+            }
+            rounds.push(sent);
+            point.push(r);
+        }
+        let value = t[0];
+        fs.exts(labels.eval, &[value]);
+        (rounds, point, value)
+    }
+
+    #[test]
+    fn split_weights_are_the_weight_table() {
+        // W from its rows and columns against the dense table, at every corner, for n from 0 to 7
+        // (an even and an odd split).
+        let field = subfield().field().clone();
+        for n in 0..8 {
+            let (etas, x) = (exts(10 + n as u64, K), exts(20 + n as u64, n));
+            let dense = weights(&field, &etas, &x);
+            let split = SplitWeights::new(&field, &etas, &x);
+            let cols = split.cols.len();
+            assert_eq!(split.rows.len() * cols, dense.len(), "n {n}");
+            for (b, want) in dense.iter().enumerate() {
+                let (row, col) = (&split.rows[b / cols], &split.cols[b % cols]);
+                let got = row.iter().zip(col.0).fold(field.zero(), |acc, (r, c)| {
+                    field.add(&acc, &field.scale(r, c))
+                });
+                assert_eq!(got, *want, "n {n} corner {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_split_prover_is_the_dense_prover() {
+        // Rounds, point, value and transcript of prove_table with split weights, from owned values
+        // and from residues, against the prover on the dense tables, for n from 0 to 8.
+        let sub = subfield();
+        let field = sub.field();
+        for n in [0usize, 1, 2, 3, 5, 8] {
+            let (packed, parts) = polynomial(30 + n as u64, n);
+            let x = exts(40 + n as u64, n);
+            let partials: Vec<Ext<K>> = parts.iter().map(|p| evaluate(&sub, p, &x)).collect();
+            let t = hypercube_values(field, &packed).unwrap();
+            let residues: Vec<u64> = t.iter().flat_map(|e| e.0).collect();
+            let mut fs_dense = Fs::new(&[7u8; 32]);
+            let want = prove_table_dense(field, t.clone(), &x, &INPUT_LABELS, &mut fs_dense);
+            for form in [Packed::Values(t.clone()), Packed::Residues(&residues)] {
+                let mut fs = Fs::new(&[7u8; 32]);
+                let got = prove_table(field, form, &x, &partials, &INPUT_LABELS, &mut fs).unwrap();
+                assert_eq!(got, want, "n {n}");
+                assert_eq!(fs.digest(), fs_dense.digest(), "n {n}");
+            }
+            assert!(matches!(
+                prove_table(
+                    field,
+                    Packed::Residues(&residues[1..]),
+                    &x,
+                    &partials,
+                    &INPUT_LABELS,
+                    &mut Fs::new(&[7u8; 32])
+                ),
+                Err(Error::Shape(_))
+            ));
+        }
     }
 }

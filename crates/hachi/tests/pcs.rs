@@ -7,6 +7,7 @@
 //! words, and malformed encodings are rejected. Pinned outputs guard against unintended changes.
 
 use hachi::params::{MAX_ITERATIONS, max_digit};
+use hachi::pcs::ExtSource;
 use hachi::{HachiChoices, HachiPcs, Layout, Proof, Schedule};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
@@ -216,6 +217,207 @@ fn field_multilinear_openings_verify_with_and_without_iterations() {
             pcs.multilinear_ext_proof_words(vars).unwrap(),
             "vars {vars}"
         );
+    }
+}
+
+/// The commitment with the coefficients handed over ([`HachiPcs::commit_multilinear_ext_owned`])
+/// is the commitment from a borrow, and a state whose message was shed
+/// ([`HachiPcs::shed_message`]) opens with the coefficients given again
+/// ([`HachiPcs::prove_multilinear_ext_rebuilt`]) to the opening of the whole state, word for word;
+/// other coefficients, another number of them, and the openings without them are refused.
+#[test]
+fn a_commitment_from_a_source_opens_to_the_proof_of_its_coefficients() {
+    // The coefficients read from a source give the commitment and the proof of the vector, masked
+    // and not, at one and two iterations; a source of other coefficients (another fingerprint)
+    // and another kind of opening are refused, and a refusal does not open the commitment.
+    for ((vars, iterations), hiding) in [
+        ((6usize, 1usize), true),
+        ((8, 2), false),
+        ((8, 2), true),
+        ((10, 1), true),
+    ] {
+        let choices = HachiChoices {
+            fixed_iterations: Some(iterations),
+            ..if hiding {
+                HachiChoices::toy_hiding(16)
+            } else {
+                HachiChoices::toy(16)
+            }
+        };
+        let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+        let coeffs = exts("f source", vars as u64, 1 << vars);
+        let point = exts("x source", vars as u64, vars);
+        let context = [vars as u8 + 90; 32];
+        let (com, state) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        let read = |start: usize, out: &mut [Ext<K>]| {
+            out.copy_from_slice(&coeffs[start..start + out.len()]);
+        };
+        let source = ExtSource {
+            vars,
+            read: std::sync::Arc::new(read),
+            fingerprint: 7,
+        };
+        let (source_com, from_source) = pcs.commit_multilinear_ext_source(&source, &SEED).unwrap();
+        assert_eq!(source_com, com, "vars {vars} hiding {hiding}");
+        assert!(from_source.is_shed());
+        // Another fingerprint, and the opening of a shed message, are refused.
+        let other = ExtSource {
+            fingerprint: 8,
+            ..source.clone()
+        };
+        assert!(
+            pcs.prove_multilinear_ext_source(
+                from_source.clone(),
+                other,
+                &point,
+                &context,
+                &OPEN_SEED
+            )
+            .is_err()
+        );
+        assert!(
+            pcs.prove_multilinear_ext_rebuilt(
+                from_source.clone(),
+                coeffs.clone(),
+                &point,
+                &context,
+                &OPEN_SEED
+            )
+            .is_err()
+        );
+        let (source_value, source_proof) = pcs
+            .prove_multilinear_ext_source(from_source, source, &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!(
+            (source_value, source_proof),
+            (value, proof),
+            "vars {vars} hiding {hiding}"
+        );
+    }
+}
+
+#[test]
+fn a_shed_state_opens_with_its_coefficients_to_the_same_proof() {
+    for ((vars, iterations), hiding) in [
+        ((6usize, 1usize), true),
+        ((8, 2), false),
+        ((8, 2), true),
+        ((10, 1), false),
+        ((10, 1), true),
+    ] {
+        let choices = HachiChoices {
+            fixed_iterations: Some(iterations),
+            ..if hiding {
+                HachiChoices::toy_hiding(16)
+            } else {
+                HachiChoices::toy(16)
+            }
+        };
+        let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+        let coeffs = exts("f shed", vars as u64, 1 << vars);
+        let point = exts("x shed", vars as u64, vars);
+        let context = [vars as u8 + 80; 32];
+        let (com, state) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let (owned_com, mut shed) = pcs
+            .commit_multilinear_ext_owned(coeffs.clone(), &SEED)
+            .unwrap();
+        assert_eq!(owned_com, com, "vars {vars}");
+        assert_eq!(shed, state, "the owned commitment's state");
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert!(pcs.shed_message(&mut shed));
+        assert!(shed.is_shed() && !pcs.shed_message(&mut shed), "shed once");
+        // Without the coefficients, the state does not open.
+        assert!(
+            pcs.prove_multilinear_ext(&shed, &point, &context, &OPEN_SEED)
+                .is_err()
+        );
+        // Other coefficients, and another number of them.
+        let mut other = coeffs.clone();
+        other[3] = exts("other", 1, 1)[0];
+        assert!(
+            pcs.prove_multilinear_ext_rebuilt(shed.clone(), other, &point, &context, &OPEN_SEED)
+                .is_err()
+        );
+        assert!(
+            pcs.prove_multilinear_ext_rebuilt(
+                shed.clone(),
+                coeffs[..1 << (vars - 1)].to_vec(),
+                &point,
+                &context,
+                &OPEN_SEED
+            )
+            .is_err()
+        );
+        // A masked commitment opens once, and the refusals above did not open it.
+        let (_, again) = pcs
+            .commit_multilinear_ext_owned(coeffs.clone(), &SEED)
+            .unwrap();
+        let mut again = again;
+        assert!(pcs.shed_message(&mut again));
+        let (rebuilt_value, rebuilt_proof) = pcs
+            .prove_multilinear_ext_rebuilt(again, coeffs.clone(), &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!(rebuilt_value, value, "vars {vars}, {iterations} iterations");
+        assert_eq!(rebuilt_proof, proof, "vars {vars}, {iterations} iterations");
+        assert_eq!(
+            pcs.proof_to_words(&rebuilt_proof),
+            pcs.proof_to_words(&proof)
+        );
+        pcs.verify_multilinear_ext(&com, vars, &point, &rebuilt_value, &rebuilt_proof, &context)
+            .unwrap();
+        // A state that was not shed ignores the coefficients.
+        let (_, whole) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let (plain_value, plain_proof) = pcs
+            .prove_multilinear_ext_rebuilt(whole, Vec::new(), &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!((plain_value, plain_proof), (value, proof));
+    }
+}
+
+/// An opening from a state handed over ([`HachiPcs::prove_multilinear_ext_owned`], which frees
+/// the committed message after the first iteration) is the opening from a borrowed state, word for
+/// word.
+#[test]
+fn an_owned_state_gives_the_opening_of_a_borrowed_one() {
+    for ((vars, iterations), hiding) in [
+        ((6usize, 0usize), false),
+        ((6, 1), true),
+        ((8, 2), false),
+        ((8, 2), true),
+        ((10, 1), false),
+    ] {
+        let choices = HachiChoices {
+            fixed_iterations: Some(iterations),
+            ..if hiding {
+                HachiChoices::toy_hiding(16)
+            } else {
+                HachiChoices::toy(16)
+            }
+        };
+        let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+        let coeffs = exts("f owned", vars as u64, 1 << vars);
+        let point = exts("x owned", vars as u64, vars);
+        // A masked commitment opens once: each opening gets its own (identical) commitment.
+        let (com, state) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        let (again, owned) = pcs.commit_multilinear_ext(&coeffs, &SEED).unwrap();
+        assert_eq!(again, com);
+        let context = [vars as u8 + 50; 32];
+        let (value, proof) = pcs
+            .prove_multilinear_ext(&state, &point, &context, &OPEN_SEED)
+            .unwrap();
+        let (owned_value, owned_proof) = pcs
+            .prove_multilinear_ext_owned(owned, &point, &context, &OPEN_SEED)
+            .unwrap();
+        assert_eq!(owned_value, value, "vars {vars}, {iterations} iterations");
+        assert_eq!(owned_proof, proof, "vars {vars}, {iterations} iterations");
+        assert_eq!(pcs.proof_to_words(&owned_proof), pcs.proof_to_words(&proof));
+        pcs.verify_multilinear_ext(&com, vars, &point, &owned_value, &owned_proof, &context)
+            .unwrap();
     }
 }
 

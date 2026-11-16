@@ -36,12 +36,106 @@
 //! In $\mathbf A' = [\mathbf A_1' \mid \mathbf I_{n_A}]$, entry $x < \nu$ of the randomness meets
 //! column $x$ of $\mathbf A_1'$, and entry $\nu + i$ meets row $i$ alone.
 
-use crate::commit::Ctx;
+use crate::commit::{Ctx, Digits, block_columns};
 use crate::mle::eval_poly;
 use crate::params::IterParams;
+use crate::table::DigitTable;
 use crate::{Error, Result};
 use hachi_co_math::decompose::g_inv;
 use hachi_co_math::{Ext, Fqk, Poly, Ring};
+use rayon::prelude::*;
+use std::ops::Range;
+
+/// The size of the blocks of columns in which [`mstar`] expands a [`Mat::Expanded`] matrix: the
+/// blocks are expanded one after the other whatever their size, so small ones cost no time.
+const MSTAR_BLOCK_BYTES: usize = 16 << 20;
+
+/// A public matrix of the relation: held whole, or expanded from the public seed by blocks of
+/// columns when read ([`Ctx::matrix_columns`]), so that it is not held. Both give the same
+/// entries, so the same relation.
+#[derive(Clone, Copy, Debug)]
+pub enum Mat<'a> {
+    /// The matrix.
+    Held(&'a [Vec<Poly>]),
+    /// [`Ctx::matrix`]`(kind, iteration, rows, cols)`.
+    Expanded {
+        /// The matrix's kind (`b"A"`, `b"B"` or `b"D"`).
+        kind: &'static [u8],
+        /// The iteration whose matrix it is.
+        iteration: usize,
+        /// The rows.
+        rows: usize,
+        /// The columns.
+        cols: usize,
+    },
+}
+
+impl<'a> Mat<'a> {
+    /// The number of rows.
+    pub fn rows(&self) -> usize {
+        match self {
+            Self::Held(m) => m.len(),
+            Self::Expanded { rows, .. } => *rows,
+        }
+    }
+
+    /// The matrix held whole.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for an expanded matrix.
+    fn held(&self) -> Result<&'a [Vec<Poly>]> {
+        match *self {
+            Self::Held(m) => Ok(m),
+            Self::Expanded { .. } => Err(Error::Shape(
+                "the quotients read the public matrices whole".into(),
+            )),
+        }
+    }
+
+    /// Calls `f` on blocks of columns in order, each with its range of columns among the `cols`
+    /// columns of the matrix and its rows cut to that range: the whole matrix at once if held,
+    /// blocks of at most `bytes` expanded one at a time otherwise.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless the matrix has `cols` columns; those of the expansion and of `f`.
+    fn for_each_block<const K: usize>(
+        &self,
+        ctx: &Ctx<K>,
+        cols: usize,
+        bytes: usize,
+        mut f: impl FnMut(Range<usize>, &[Vec<Poly>]) -> Result<()>,
+    ) -> Result<()> {
+        match *self {
+            Self::Held(m) => {
+                if m.iter().any(|row| row.len() != cols) {
+                    return Err(Error::Shape(format!(
+                        "a public matrix of {cols} columns is expected"
+                    )));
+                }
+                f(0..cols, m)
+            }
+            Self::Expanded {
+                kind,
+                iteration,
+                rows,
+                cols: expanded,
+            } => {
+                if expanded != cols {
+                    return Err(Error::Shape(format!(
+                        "a public matrix of {cols} columns is expected"
+                    )));
+                }
+                let step = block_columns(bytes, rows, ctx.d());
+                for c0 in (0..cols).step_by(step) {
+                    let c1 = (c0 + step).min(cols);
+                    let block = ctx.matrix_columns(kind, iteration, rows, cols, c0..c1)?;
+                    f(c0..c1, &block)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
 
 /// The public data of one iteration's relation.
 #[derive(Clone, Copy, Debug)]
@@ -57,11 +151,11 @@ pub struct Public<'a> {
     /// The challenges $c_i$ as ring elements.
     pub c: &'a [Poly],
     /// $\mathbf D$ ($n_D \times$ [`IterParams::d_cols`]).
-    pub d_mat: &'a [Vec<Poly>],
+    pub d_mat: Mat<'a>,
     /// $\mathbf B$ ($n_B \times 2^r n_A \delta$).
-    pub b_mat: &'a [Vec<Poly>],
+    pub b_mat: Mat<'a>,
     /// $\mathbf A$ ($n_A \times W$).
-    pub a_mat: &'a [Vec<Poly>],
+    pub a_mat: Mat<'a>,
     /// $\mathbf A_1'$ ($n_A \times \nu$) at a masked level, else empty.
     pub a_rand: &'a [Vec<Poly>],
     /// $\mathbf v$ ($n_D$).
@@ -187,7 +281,7 @@ pub fn quotients<const K: usize>(
     w: &[Poly],
     w_hat: &[Poly],
     t: &[Vec<Poly>],
-    t_hat: &[Poly],
+    t_hat: &Digits,
     z: &[Poly],
     masked: Option<&Masked<'_>>,
 ) -> Result<Vec<Poly>> {
@@ -235,12 +329,37 @@ pub fn quotients<const K: usize>(
         let prod = exact_inner(ring2, &m1[i], &r[..nu])?;
         Ok(ring2.add(&prod, &lift(ring2, &r[nu + i]))?)
     };
+    let (d_mat, a_mat) = (public.d_mat.held()?, public.a_mat.held()?);
     let mut sums: Vec<(Poly, Poly)> = Vec::new();
-    for (i, row) in public.d_mat.iter().enumerate() {
+    for (i, row) in d_mat.iter().enumerate() {
         sums.push((exact_inner(ring2, row, &d_columns)?, public.v[i].clone()));
     }
-    for (i, row) in public.b_mat.iter().enumerate() {
-        sums.push((exact_inner(ring2, row, t_hat)?, public.u[i].clone()));
+    // B t-hat by blocks of columns, each against its columns of t-hat as ring elements, B held or
+    // expanded one block at a time (`Mat::for_each_block`): the sums are exact modulo q, so the
+    // blocks add up to the whole product.
+    let step = block_columns(MSTAR_BLOCK_BYTES, 1, d);
+    let mut b_sums = vec![ring2.zero(); public.b_mat.rows()];
+    public
+        .b_mat
+        .for_each_block(ctx, t_hat.len(), MSTAR_BLOCK_BYTES, |cols, rows| {
+            for (sum, row) in b_sums.iter_mut().zip(rows) {
+                for c0 in (0..row.len()).step_by(step) {
+                    let c1 = (c0 + step).min(row.len());
+                    let part = exact_inner(
+                        ring2,
+                        &row[c0..c1],
+                        &t_hat.polys(zq, cols.start + c0..cols.start + c1),
+                    )?;
+                    *sum = ring2.add(sum, &part)?;
+                }
+            }
+            Ok(())
+        })?;
+    if b_sums.len() != public.u.len() {
+        return Err(Error::Shape("B does not fit u".into()));
+    }
+    for (sum, u) in b_sums.into_iter().zip(public.u) {
+        sums.push((sum, u.clone()));
     }
     sums.push((exact_inner(ring2, public.b, w)?, public.target.clone()));
     let mut fold = exact_inner(ring2, public.c, w)?;
@@ -249,7 +368,7 @@ pub fn quotients<const K: usize>(
     }
     let fold = ring2.sub(&fold, &exact_inner(ring2, public.a, &z_msg)?)?;
     sums.push((fold, ring.zero()));
-    for (i, row) in public.a_mat.iter().enumerate() {
+    for (i, row) in a_mat.iter().enumerate() {
         let ti: Vec<Poly> = t.iter().map(|tj| tj[i].clone()).collect();
         let mut s = exact_inner(ring2, public.c, &ti)?;
         if let Some(m) = masked {
@@ -298,9 +417,98 @@ pub fn next_table<const K: usize>(
         ));
     }
     let mut table = vec![0u64; 1 << params.table_vars];
-    for (u, p) in z_prime.iter().chain(&q_hat).enumerate() {
-        table[u * d..(u + 1) * d].copy_from_slice(&p.0);
+    let mut rows = table.chunks_exact_mut(d);
+    for p in z_prime.iter().chain(&q_hat) {
+        rows.next()
+            .ok_or_else(|| Error::Shape("the next witness does not fit its table".into()))?
+            .copy_from_slice(&p.0);
     }
+    Ok(table)
+}
+
+/// A part of $\mathbf z'$ for [`next_table_parts`].
+#[derive(Clone, Copy, Debug)]
+pub enum Part<'a> {
+    /// Ring elements.
+    Polys(&'a [Poly]),
+    /// Ring elements of digits held as bytes.
+    Digits(&'a Digits),
+}
+
+impl Part<'_> {
+    /// The number of ring elements.
+    fn len(&self) -> usize {
+        match self {
+            Self::Polys(p) => p.len(),
+            Self::Digits(p) => p.len(),
+        }
+    }
+}
+
+/// [`next_table`] with $\mathbf z'$ given as the concatenation of `parts`, written into the
+/// table without the whole of $\mathbf z'$ in one vector, one byte per entry ([`DigitTable`]):
+/// every entry is a digit of $\mathbf z'$ or $\hat{\mathbf q}$ or a zero, as the iteration's range
+/// check requires, so it reads as the same residues.
+///
+/// # Errors
+/// As [`next_table`], and [`Error::Shape`] for an entry that is not the residue of a byte.
+pub fn next_table_parts<const K: usize>(
+    ctx: &Ctx<K>,
+    params: &IterParams,
+    parts: &[Part<'_>],
+    q: &[Poly],
+) -> Result<DigitTable> {
+    let q_hat = g_inv(&ctx.ring, ctx.choices.b, ctx.delta, q)?;
+    let (d, zq) = (ctx.d(), ctx.ring.zq());
+    let mu: usize = parts.iter().map(Part::len).sum();
+    if mu != params.mu || q_hat.len() != params.rows * ctx.delta {
+        return Err(Error::Shape(
+            "the next witness does not fit its parameters".into(),
+        ));
+    }
+    // Row by row, the rows in parallel: each ring element of z' (part by part) and of q-hat
+    // writes its own row of d entries, and the rows after them stay zero.
+    enum Row<'a> {
+        Residues(&'a [u64]),
+        Bytes(&'a [i8]),
+    }
+    let mut rows: Vec<Row<'_>> = Vec::with_capacity(mu + q_hat.len());
+    for part in parts {
+        match part {
+            Part::Polys(polys) => rows.extend(polys.iter().map(|p| Row::Residues(&p.0))),
+            Part::Digits(digits) => {
+                rows.extend((0..digits.len()).map(|i| Row::Bytes(digits.centered(i))));
+            }
+        }
+    }
+    rows.extend(q_hat.iter().map(|p| Row::Residues(&p.0)));
+    let size = 1usize << params.table_vars;
+    if rows.len() * d > size {
+        return Err(Error::Shape(
+            "the next witness does not fit its table".into(),
+        ));
+    }
+    let mut table = DigitTable::zeros(zq, size);
+    table
+        .rows_mut(d)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .zip(rows.par_iter())
+        .try_for_each(|(out, row)| match row {
+            Row::Residues(r) if r.len() == d => {
+                for (v, x) in out.iter_mut().zip(*r) {
+                    *v = crate::table::byte_of(zq, *x)?;
+                }
+                Ok(())
+            }
+            Row::Bytes(b) if b.len() == d => {
+                out.copy_from_slice(b);
+                Ok(())
+            }
+            _ => Err(Error::Shape(format!(
+                "ring elements of {d} coefficients are expected"
+            ))),
+        })?;
     Ok(table)
 }
 
@@ -333,9 +541,9 @@ pub fn mstar<const K: usize>(
         || public.b.len() != chunks
         || public.c.len() != chunks
         || public.a.len() != p.layout.chunk_len()
-        || public.d_mat.len() != n_d
-        || public.b_mat.len() != n_b
-        || public.a_mat.len() != n_a
+        || public.d_mat.rows() != n_d
+        || public.b_mat.rows() != n_b
+        || public.a_mat.rows() != n_a
         || public.v.len() != n_d
         || public.u.len() != n_b
         || public.a_rand.len() != rand_rows
@@ -353,11 +561,19 @@ pub fn mstar<const K: usize>(
         public.b.iter().map(ev).collect(),
         public.c.iter().map(ev).collect(),
     );
-    for (r, row) in public.d_mat.iter().enumerate() {
-        for (col, x) in row.iter().enumerate() {
-            m[col] = field.add(&m[col], &field.mul(&eq1[r], &ev(x)));
-        }
-    }
+    // The matrices by blocks of columns (`Mat::for_each_block`): every entry adds to its own
+    // column of m, so the order of the blocks does not change the sums; within a block the
+    // columns run in parallel, each over the rows in order.
+    public
+        .d_mat
+        .for_each_block(ctx, p.d_cols(), MSTAR_BLOCK_BYTES, |range, block| {
+            m[range].par_iter_mut().enumerate().for_each(|(j, mc)| {
+                for (r, row) in block.iter().enumerate() {
+                    *mc = field.add(mc, &field.mul(&eq1[r], &ev(&row[j])));
+                }
+            });
+            Ok(())
+        })?;
     for (i, (bi, ci)) in b_alpha.iter().zip(&c_alpha).enumerate() {
         let claim = field.mul(&eq1[rows.claim], bi);
         let fold = field.mul(&eq1[rows.fold], ci);
@@ -379,12 +595,22 @@ pub fn mstar<const K: usize>(
         }
     }
     // t-hat.
-    for (r, row) in public.b_mat.iter().enumerate() {
-        for (col, x) in row.iter().enumerate() {
-            let c = cols.t + col;
-            m[c] = field.add(&m[c], &field.mul(&eq1[n_d + r], &ev(x)));
-        }
-    }
+    public.b_mat.for_each_block(
+        ctx,
+        chunks * n_a * delta,
+        MSTAR_BLOCK_BYTES,
+        |range, block| {
+            m[cols.t + range.start..cols.t + range.end]
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(j, mc)| {
+                    for (r, row) in block.iter().enumerate() {
+                        *mc = field.add(mc, &field.mul(&eq1[n_d + r], &ev(&row[j])));
+                    }
+                });
+            Ok(())
+        },
+    )?;
     for (j, cj) in c_alpha.iter().enumerate() {
         for i in 0..n_a {
             let weight = field.mul(&eq1[rows.a_rows + i], cj);
@@ -394,28 +620,35 @@ pub fn mstar<const K: usize>(
             }
         }
     }
-    // z-hat.
+    // z-hat, column x of A with the block that holds it.
     let a_alpha: Vec<Ext<K>> = public.a.iter().map(ev).collect();
-    let a_mat_alpha: Vec<Vec<Ext<K>>> = public
+    public
         .a_mat
-        .iter()
-        .map(|row| row.iter().map(ev).collect())
-        .collect();
-    for x in 0..width {
-        let (j, g) = if p.layout.decomposed {
-            (x / delta, pow[x % delta])
-        } else {
-            (x, 1)
-        };
-        let mut base = field.scale(&field.mul(&eq1[rows.fold], &a_alpha[j]), g);
-        for i in 0..n_a {
-            base = field.add(&base, &field.mul(&eq1[rows.a_rows + i], &a_mat_alpha[i][x]));
-        }
-        let neg = field.neg(&base);
-        for (t, pt) in pow[..tau].iter().enumerate() {
-            m[cols.z + x * tau + t] = field.scale(&neg, *pt);
-        }
-    }
+        .for_each_block(ctx, width, MSTAR_BLOCK_BYTES, |range, block| {
+            // Column x's tau entries of m, the columns in parallel.
+            let start = range.start;
+            m[cols.z + range.start * tau..cols.z + range.end * tau]
+                .par_chunks_mut(tau)
+                .enumerate()
+                .for_each(|(offset, out)| {
+                    let x = start + offset;
+                    let (j, g) = if p.layout.decomposed {
+                        (x / delta, pow[x % delta])
+                    } else {
+                        (x, 1)
+                    };
+                    let mut base = field.scale(&field.mul(&eq1[rows.fold], &a_alpha[j]), g);
+                    for (i, row) in block.iter().enumerate() {
+                        base =
+                            field.add(&base, &field.mul(&eq1[rows.a_rows + i], &ev(&row[offset])));
+                    }
+                    let neg = field.neg(&base);
+                    for (o, pt) in out.iter_mut().zip(&pow[..tau]) {
+                        *o = field.scale(&neg, *pt);
+                    }
+                });
+            Ok(())
+        })?;
     // z_varrho-hat (rows 5, -A'), digit t weighted by b^t.
     for (i, row) in public.a_rand.iter().enumerate() {
         let mut entries: Vec<(usize, Ext<K>)> =

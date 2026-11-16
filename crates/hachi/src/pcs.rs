@@ -123,11 +123,12 @@
 //! parameters imply. The verifier checks the counts of a header: $B$ against $\ell - \kappa$, the
 //! others against the schedule.
 
-use crate::commit::{Committed, Ctx, commit};
+use crate::commit::{Committed, Ctx, commit, commit_source};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::iteration::{
-    self, Claim, IterationProof, check_exts, check_polys, commitment_randomness, evaluate_claim,
+    self, Claim, IterationProof, MessageView, OwnedSource, Witness, check_exts, check_polys,
+    commitment_randomness, evaluate_claim,
 };
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
 use crate::partials::{self, RoundValues};
@@ -191,15 +192,79 @@ pub struct State<const K: usize> {
     committed: Committed,
     /// Set by the opening of a masked commitment, and shared by the clones of the state.
     opened: Arc<AtomicBool>,
+    /// What is left of the message after [`HachiPcs::shed_message`]; the message itself is then
+    /// empty until [`HachiPcs::prove_multilinear_ext_rebuilt`] packs it again.
+    shed: Option<Shed>,
+}
+
+/// The part of a message that [`HachiPcs::shed_message`] keeps: each chunk's rows after its
+/// packed coefficients (the masking row of a masked layout), and a fingerprint of the packed
+/// coefficients (`message_fingerprint`), against which the coefficients given at the opening are
+/// checked. The fingerprint guards against handing over other coefficients by mistake; it is not
+/// a cryptographic binding (the commitment is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Shed {
+    tails: Vec<Vec<Poly>>,
+    fingerprint: u64,
+    /// Whether the state was committed from an [`ExtSource`], whose fingerprint `fingerprint` is
+    /// then (the message was never formed), so that it opens by
+    /// [`HachiPcs::prove_multilinear_ext_source`].
+    from_source: bool,
+}
+
+/// Writes coefficients `start .. start + out.len()` of a polynomial over the field into `out`
+/// ([`ExtSource`]).
+pub type CoeffReader<'a, const K: usize> = dyn Fn(usize, &mut [Ext<K>]) + Send + Sync + 'a;
+
+/// The monomial coefficients of a multilinear polynomial over the field, read in runs as they are
+/// needed, for [`HachiPcs::commit_multilinear_ext_source`] and
+/// [`HachiPcs::prove_multilinear_ext_source`]: the commitment and the opening of the coefficients
+/// read, without them or their packed message held whole.
+#[derive(Clone)]
+pub struct ExtSource<'a, const K: usize> {
+    /// The number of variables, $2^\ell$ coefficients.
+    pub vars: usize,
+    /// Writes coefficients `start .. start + out.len()` into `out`. Shared, so that an opening
+    /// can own it with what it reads, and drop both once its first iteration has read them.
+    pub read: Arc<CoeffReader<'a, K>>,
+    /// A fingerprint of the coefficients, against which the opening checks that it was given
+    /// those of the commitment (not a binding: the commitment is).
+    pub fingerprint: u64,
+}
+
+/// FNV-1a over the residues of the first `len` ring elements of each chunk, chunk by chunk (in
+/// parallel), then over the chunks' values in order.
+fn message_fingerprint(message: &[Vec<Poly>], len: usize) -> u64 {
+    use rayon::prelude::*;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let fnv = |h: u64, w: u64| (h ^ w).wrapping_mul(PRIME);
+    message
+        .par_iter()
+        .map(|chunk| {
+            chunk[..len.min(chunk.len())]
+                .iter()
+                .flat_map(|p| p.0.iter())
+                .fold(0xcbf2_9ce4_8422_2325, |h, w| fnv(h, *w))
+        })
+        .collect::<Vec<u64>>()
+        .into_iter()
+        .fold(0xcbf2_9ce4_8422_2325, fnv)
 }
 
 impl<const K: usize> PartialEq for State<K> {
     fn eq(&self, other: &Self) -> bool {
-        self.input == other.input && self.committed == other.committed
+        self.input == other.input && self.committed == other.committed && self.shed == other.shed
     }
 }
 
 impl<const K: usize> Eq for State<K> {}
+
+/// A state borrowed from the caller, or owned by an opening that may free parts of it
+/// ([`HachiPcs::prove_multilinear_ext_owned`]).
+enum Held<'a, T> {
+    Borrowed(&'a T),
+    Owned(T),
+}
 
 impl<const K: usize> State<K> {
     /// The state of a new commitment, not opened.
@@ -208,7 +273,14 @@ impl<const K: usize> State<K> {
             input,
             committed,
             opened: Arc::new(AtomicBool::new(false)),
+            shed: None,
         }
+    }
+
+    /// Whether [`HachiPcs::shed_message`] dropped the message: the state then opens only by
+    /// [`HachiPcs::prove_multilinear_ext_rebuilt`] with the committed coefficients.
+    pub fn is_shed(&self) -> bool {
+        self.shed.is_some()
     }
 
     /// Takes the one opening of a masked commitment, after the inputs of the opening are checked
@@ -658,6 +730,59 @@ impl<const K: usize> HachiPcs<K> {
         Ok(residues.chunks_exact(d).map(|c| Poly(c.to_vec())).collect())
     }
 
+    /// One chunk of the message of a polynomial over the field: $\psi$ of each block of $d/K$
+    /// coefficients of `chunk`, reduced, $2^m$ ring elements for a chunk of $2^m d/K$ coefficients.
+    fn pack_ext_chunk(&self, chunk: &[Ext<K>]) -> Result<Vec<Poly>> {
+        let ctx = &self.ctx;
+        let g = ctx.d_over_k();
+        let mut block = Vec::with_capacity(g);
+        Ok(chunk
+            .chunks_exact(g)
+            .map(|c| {
+                block.clear();
+                block.extend(c.iter().map(|x| ctx.field().reduce(x)));
+                ctx.sub.psi(&block)
+            })
+            .collect::<hachi_co_math::Result<Vec<Poly>>>()?)
+    }
+
+    /// The message chunks of the coefficients `coeffs` in `layout`, without masking rows, packed
+    /// from the last chunks to the first in batches of about 64 MiB of coefficients, the packed
+    /// ones freed after each batch, so that the coefficients and the message are not held whole at
+    /// once. The chunks are those of [`HachiPcs::pack_ext_chunk`], in order.
+    fn pack_ext_owned(&self, coeffs: Vec<Ext<K>>, layout: &Layout) -> Result<Vec<Vec<Poly>>> {
+        self.pack_ext_owned_in(coeffs, layout, 64 << 20)
+    }
+
+    /// [`HachiPcs::pack_ext_owned`] with batches of at most `batch_bytes` of coefficients (at
+    /// least one chunk), a parameter for the tests.
+    fn pack_ext_owned_in(
+        &self,
+        mut coeffs: Vec<Ext<K>>,
+        layout: &Layout,
+        batch_bytes: usize,
+    ) -> Result<Vec<Vec<Poly>>> {
+        use rayon::prelude::*;
+        let per_chunk = self.ctx.d_over_k() * layout.message_len();
+        let chunks = coeffs.len() / per_chunk;
+        let batch = (batch_bytes / (per_chunk * core::mem::size_of::<Ext<K>>())).max(1);
+        let mut message: Vec<Vec<Poly>> = Vec::with_capacity(chunks);
+        let mut end = chunks;
+        while end > 0 {
+            let start = end.saturating_sub(batch);
+            let packed = coeffs[start * per_chunk..end * per_chunk]
+                .par_chunks_exact(per_chunk)
+                .map(|chunk| self.pack_ext_chunk(chunk))
+                .collect::<Result<Vec<_>>>()?;
+            message.extend(packed.into_iter().rev());
+            coeffs.truncate(start * per_chunk);
+            coeffs.shrink_to_fit();
+            end = start;
+        }
+        message.reverse();
+        Ok(message)
+    }
+
     /// Commits to the multilinear polynomial over $\mathbb F_{q^K}$ with monomial coefficients
     /// `coeffs` ($2^\ell$ field elements, $\ell \ge \alpha - \kappa$; module documentation for
     /// the order), with randomness from the secret `seed` if the choices hide.
@@ -678,21 +803,51 @@ impl<const K: usize> HachiPcs<K> {
         }
         let vars = coeffs.len().trailing_zeros() as usize;
         let layout = self.multilinear_ext_layout(vars)?;
-        let g = ctx.d_over_k();
-        let mut block = Vec::with_capacity(g);
-        let mut message = coeffs
-            .chunks_exact(g * layout.message_len())
-            .map(|chunk| {
-                chunk
-                    .chunks_exact(g)
-                    .map(|c| {
-                        block.clear();
-                        block.extend(c.iter().map(|x| ctx.field().reduce(x)));
-                        ctx.sub.psi(&block)
-                    })
-                    .collect::<hachi_co_math::Result<Vec<Poly>>>()
-            })
-            .collect::<hachi_co_math::Result<Vec<_>>>()?;
+        let message = {
+            use rayon::prelude::*;
+            coeffs
+                .par_chunks_exact(ctx.d_over_k() * layout.message_len())
+                .map(|chunk| self.pack_ext_chunk(chunk))
+                .collect::<Result<Vec<_>>>()?
+        };
+        self.commit_ext_message(vars, layout, message, seed)
+    }
+
+    /// [`HachiPcs::commit_multilinear_ext`] with the coefficients handed over: they are freed as
+    /// they are packed, from the last chunks to the first in batches of about 64 MiB, before the
+    /// products of the commitment. The
+    /// commitment and the state are those of [`HachiPcs::commit_multilinear_ext`].
+    ///
+    /// # Errors
+    /// As [`HachiPcs::commit_multilinear_ext`].
+    pub fn commit_multilinear_ext_owned(
+        &self,
+        coeffs: Vec<Ext<K>>,
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
+        let ctx = &self.ctx;
+        if !coeffs.len().is_power_of_two() || coeffs.len() < ctx.d_over_k() {
+            return Err(Error::Shape(format!(
+                "2^l coefficients with l >= alpha - kappa = {} are expected",
+                ctx.alpha() - ctx.kappa()
+            )));
+        }
+        let vars = coeffs.len().trailing_zeros() as usize;
+        let layout = self.multilinear_ext_layout(vars)?;
+        let message = self.pack_ext_owned(coeffs, &layout)?;
+        self.commit_ext_message(vars, layout, message, seed)
+    }
+
+    /// The commitment of a polynomial over the field to its packed `message`: the masking rows
+    /// and the randomness from `seed`, then [`commit`].
+    fn commit_ext_message(
+        &self,
+        vars: usize,
+        layout: Layout,
+        mut message: Vec<Vec<Poly>>,
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
+        let ctx = &self.ctx;
         for (chunk, row) in message.iter_mut().zip(self.masking_rows(&layout, seed)?) {
             chunk.push(row);
         }
@@ -704,6 +859,217 @@ impl<const K: usize> HachiPcs<K> {
             },
             State::new(Input::MultilinearExt { vars }, committed),
         ))
+    }
+
+    /// Drops the packed coefficients of the message of a state of
+    /// [`HachiPcs::commit_multilinear_ext`], until [`HachiPcs::prove_multilinear_ext_rebuilt`]
+    /// packs them again from the coefficients (the opening reads them, nothing before it does):
+    /// the state keeps the rest of each chunk (the masking row) and a fingerprint of what it
+    /// dropped. Returns whether it dropped them (not for other kinds of states, or twice).
+    pub fn shed_message(&self, state: &mut State<K>) -> bool {
+        if !matches!(state.input, Input::MultilinearExt { .. }) || state.shed.is_some() {
+            return false;
+        }
+        let len = state.committed.layout.message_len();
+        let fingerprint = message_fingerprint(&state.committed.message, len);
+        let tails = state
+            .committed
+            .message
+            .iter_mut()
+            .map(|chunk| chunk.split_off(len.min(chunk.len())))
+            .collect();
+        state.committed.message = Vec::new();
+        state.shed = Some(Shed {
+            tails,
+            fingerprint,
+            from_source: false,
+        });
+        true
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext_owned`] on a state that [`HachiPcs::shed_message`] may
+    /// have reduced: `coeffs`, the committed coefficients, are packed again (and freed as they are
+    /// packed) if the state was shed, and ignored otherwise. The value and the proof are those of
+    /// [`HachiPcs::prove_multilinear_ext`] on the state before it was shed.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::prove_multilinear_ext`]; [`Error::Shape`] for coefficients of another number,
+    /// and [`Error::Protocol`] for coefficients that do not pack to the shed message.
+    pub fn prove_multilinear_ext_rebuilt(
+        &self,
+        mut state: State<K>,
+        coeffs: Vec<Ext<K>>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Proof<K>)> {
+        if let Some(shed) = state.shed.take() {
+            let Input::MultilinearExt { vars } = state.input else {
+                return Err(Error::Shape(
+                    "a shed state is a polynomial over the field".into(),
+                ));
+            };
+            if shed.from_source {
+                return Err(Error::Protocol(
+                    "this state was committed from a source: open it with \
+                     prove_multilinear_ext_source"
+                        .into(),
+                ));
+            }
+            if coeffs.len() != 1usize << vars {
+                return Err(Error::Shape(format!(
+                    "2^{vars} coefficients are expected to open this state"
+                )));
+            }
+            let layout = state.committed.layout;
+            let mut message = self.pack_ext_owned(coeffs, &layout)?;
+            if message_fingerprint(&message, layout.message_len()) != shed.fingerprint {
+                return Err(Error::Protocol(
+                    "the coefficients are not those of the commitment".into(),
+                ));
+            }
+            for (chunk, tail) in message.iter_mut().zip(shed.tails) {
+                chunk.extend(tail);
+            }
+            state.committed.message = message;
+        }
+        self.prove_multilinear_ext_owned(state, point, context, seed)
+    }
+
+    /// Commits as [`HachiPcs::commit_multilinear_ext`] to the coefficients that `coeffs` reads,
+    /// without holding them or their packed message: the commitment packs the elements of each
+    /// block of its products as it reads them ([`commit_source`]). The state keeps the masking
+    /// rows and the source's fingerprint, and opens by [`HachiPcs::prove_multilinear_ext_source`]
+    /// with the same coefficients. The commitment is that of [`HachiPcs::commit_multilinear_ext`]
+    /// on those coefficients.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless $\ell \ge \alpha - \kappa$; arithmetic errors.
+    pub fn commit_multilinear_ext_source(
+        &self,
+        coeffs: &ExtSource<'_, K>,
+        seed: &[u8; 32],
+    ) -> Result<(Commitment, State<K>)> {
+        let ctx = &self.ctx;
+        let vars = coeffs.vars;
+        if vars >= usize::BITS as usize || (1usize << vars) < ctx.d_over_k() {
+            return Err(Error::Shape(format!(
+                "2^l coefficients with l >= alpha - kappa = {} are expected",
+                ctx.alpha() - ctx.kappa()
+            )));
+        }
+        let layout = self.multilinear_ext_layout(vars)?;
+        let rows = self.masking_rows(&layout, seed)?;
+        let elements = |c: usize, range: core::ops::Range<usize>| {
+            self.source_elements(coeffs, &layout, &rows, c, range)
+        };
+        let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R)?;
+        let committed = commit_source(ctx, 0, layout, &elements, r)?;
+        let tails = if layout.masked {
+            rows.into_iter().map(|row| Vec::from([row])).collect()
+        } else {
+            vec![Vec::new(); layout.chunks()]
+        };
+        let mut state = State::new(Input::MultilinearExt { vars }, committed);
+        state.shed = Some(Shed {
+            tails,
+            fingerprint: coeffs.fingerprint,
+            from_source: true,
+        });
+        Ok((
+            Commitment {
+                u: state.committed.u.clone(),
+            },
+            state,
+        ))
+    }
+
+    /// Elements `range` of chunk `c` of the message of `coeffs` in `layout`, those of
+    /// [`HachiPcs::pack_ext_chunk`]: $\psi$ of each block of $d/K$ coefficients, and at index
+    /// [`Layout::message_len`] the chunk's masking row from `rows`.
+    fn source_elements(
+        &self,
+        coeffs: &ExtSource<'_, K>,
+        layout: &Layout,
+        rows: &[Poly],
+        c: usize,
+        range: core::ops::Range<usize>,
+    ) -> Result<Vec<Poly>> {
+        let ctx = &self.ctx;
+        let field = ctx.field();
+        let (g, len) = (ctx.d_over_k(), layout.message_len());
+        let mut block = vec![field.zero(); g];
+        range
+            .map(|e| {
+                if e < len {
+                    (coeffs.read.as_ref())((c * len + e) * g, &mut block);
+                    for x in &mut block {
+                        *x = field.reduce(x);
+                    }
+                    Ok(ctx.sub.psi(&block)?)
+                } else {
+                    rows.get(c).cloned().ok_or_else(|| {
+                        Error::Shape("an element past the message of a chunk".into())
+                    })
+                }
+            })
+            .collect()
+    }
+
+    /// Opens a state of [`HachiPcs::commit_multilinear_ext_source`] with the same coefficients
+    /// `coeffs` (checked by their fingerprint): the value and the proof of
+    /// [`HachiPcs::prove_multilinear_ext`] on the state of [`HachiPcs::commit_multilinear_ext`].
+    ///
+    /// # Errors
+    /// As [`HachiPcs::prove_multilinear_ext`]; [`Error::Protocol`] for another kind of state or
+    /// other coefficients.
+    pub fn prove_multilinear_ext_source(
+        &self,
+        mut state: State<K>,
+        coeffs: ExtSource<'_, K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Proof<K>)> {
+        let shed = state
+            .shed
+            .take()
+            .ok_or_else(|| Error::Protocol("this state was not committed from a source".into()))?;
+        let vars_match =
+            matches!(state.input, Input::MultilinearExt { vars } if vars == coeffs.vars);
+        if !shed.from_source || !vars_match || shed.fingerprint != coeffs.fingerprint {
+            return Err(Error::Protocol(
+                "the coefficients are not those of the commitment".into(),
+            ));
+        }
+        // The message is read from the source when the opening reads it: the coefficients'
+        // elements, then the chunk's masking row from the kept tails. The source owns them, and
+        // the first iteration drops it after its step 2 (`Witness::Sourced`).
+        let layout = state.committed.layout;
+        let len = layout.message_len();
+        let tails = shed.tails;
+        let elements = move |c: usize, range: core::ops::Range<usize>| -> Result<Vec<Poly>> {
+            let head = range.start.min(len)..range.end.min(len);
+            let mut out = self.source_elements(&coeffs, &layout, &[], c, head)?;
+            for e in range.start.max(len)..range.end.max(len) {
+                out.push(
+                    tails
+                        .get(c)
+                        .and_then(|t| t.get(e - len))
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::Shape("an element past the chunk of the message".into())
+                        })?,
+                );
+            }
+            Ok(out)
+        };
+        let source = OwnedSource {
+            chunks: layout.chunks(),
+            chunk_len: layout.chunk_len(),
+            elements: Box::new(elements),
+        };
+        self.prove_multilinear_ext_from(Held::Owned(state), Some(source), point, context, seed)
     }
 
     /// Commits to the vector `values` ($N \ge 1$ field elements), with its masking row and
@@ -877,24 +1243,83 @@ impl<const K: usize> HachiPcs<K> {
     ///
     /// # Errors
     /// [`Error::Protocol`] if the honest check fails. Arithmetic errors.
+    #[allow(clippy::too_many_arguments)] // the state, its message and the claim's parts
     fn masked_claim(
         &self,
         state: &State<K>,
+        message: MessageView<'_>,
         b: Vec<Poly>,
         a: Vec<Poly>,
         v: &Poly,
         value: &Ext<K>,
         fs: &mut Fs,
     ) -> Result<(Ext<K>, Claim)> {
+        let len = state.committed.layout.message_len();
+        let products = self.chunk_products(&a, message, len)?;
+        let (mask_eval, claim, _) =
+            self.masked_claim_from(message, &products, b, a, v, value, fs)?;
+        Ok((mask_eval, claim))
+    }
+
+    /// $\langle \mathbf a, \mathbf f_i \rangle$ over the first `len` elements of every chunk of
+    /// `message` (in parallel, $\mathbf a$ transformed once): the products that the claim's value,
+    /// the masked claim and step 1 of the first iteration read.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for a chunk shorter than `len`; arithmetic errors.
+    fn chunk_products(
+        &self,
+        a: &[Poly],
+        message: MessageView<'_>,
+        len: usize,
+    ) -> Result<Vec<Poly>> {
+        use rayon::prelude::*;
+        let ring = &self.ctx.ring;
+        let a_row = ring.prepare(core::slice::from_ref(&a.to_vec()))?;
+        (0..message.chunks())
+            .into_par_iter()
+            .map(|c| {
+                let chunk = message.chunk(c)?;
+                let part = chunk
+                    .get(..len)
+                    .ok_or_else(|| Error::Shape("a chunk is shorter than its weights".into()))?;
+                ring.mat_vec_prepared(&a_row, part)?
+                    .pop()
+                    .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
+            })
+            .collect()
+    }
+
+    /// The masked claim of step 1 from the chunks' `products` with $\mathbf a$
+    /// ([`HachiPcs::chunk_products`]) and their masking rows: absorbs $y_{\mathfrak m}$, draws
+    /// $x^*$, forms and absorbs $Y^* = y + x^* y_{\mathfrak m}$, and returns the mask's value, the
+    /// claim ($\mathbf a$ extended by $x^*$) and the first iteration's
+    /// $w_i = \langle \mathbf a, \mathbf f_i \rangle + x^* m_i$ for the masking rows $m_i$.
+    #[allow(clippy::too_many_arguments)] // the message, its products and the claim's parts
+    fn masked_claim_from(
+        &self,
+        message: MessageView<'_>,
+        products: &[Poly],
+        b: Vec<Poly>,
+        a: Vec<Poly>,
+        v: &Poly,
+        value: &Ext<K>,
+        fs: &mut Fs,
+    ) -> Result<(Ext<K>, Claim, Vec<Poly>)> {
         let (ctx, ring) = (&self.ctx, &self.ctx.ring);
         let field = ctx.field();
-        let len = state.committed.layout.message_len();
+        let len = a.len();
         let mut y = ring.zero();
         let mut y_mask = ring.zero();
-        for (bi, chunk) in b.iter().zip(&state.committed.message) {
-            let (message, rows) = chunk.split_at(len);
-            y = ring.add(&y, &ring.mul(bi, &ring.inner(&a, message)?)?)?;
-            y_mask = ring.add(&y_mask, &ring.mul(bi, &rows[0])?)?;
+        let mut rows = Vec::with_capacity(message.chunks());
+        for (c, bi) in b.iter().enumerate().take(message.chunks()) {
+            let product = products
+                .get(c)
+                .ok_or_else(|| Error::Shape("one product per chunk is expected".into()))?;
+            y = ring.add(&y, &ring.mul(bi, product)?)?;
+            let row = message.element(c, len)?;
+            y_mask = ring.add(&y_mask, &ring.mul(bi, &row)?)?;
+            rows.push(row.into_owned());
         }
         let mask_eval = self.traced(&y_mask, v)?;
         fs.exts(LABEL_MASK_EVAL, core::slice::from_ref(&mask_eval));
@@ -907,9 +1332,14 @@ impl<const K: usize> HachiPcs<K> {
                 "the trace check of the masked claim fails".into(),
             ));
         }
+        let w = products
+            .iter()
+            .zip(&rows)
+            .map(|(p, row)| Ok(ring.add(p, &ring.mul(&embedded, row)?)?))
+            .collect::<Result<Vec<_>>>()?;
         let mut a = a;
         a.push(embedded);
-        Ok((mask_eval, Claim { b, a, target }))
+        Ok((mask_eval, Claim { b, a, target }, w))
     }
 
     /// The verifier's step 1 with masks: absorbs $y_{\mathfrak m}$, draws $x^*$, checks
@@ -960,29 +1390,60 @@ impl<const K: usize> HachiPcs<K> {
     /// Runs the iterations and the final step for the prover; `reduction` is what the proof
     /// carries ahead of them (it enters the choice of the schedule). Returns the iterations and
     /// the final message.
-    fn prove_rest(
+    ///
+    /// The witness of each later level is owned here and handed to its iteration, which frees its
+    /// message after step 2; so is the first one when `committed` is owned ([`Witness`]).
+    fn prove_rest<'w>(
         &self,
         layout: Layout,
         reduction: Reduction,
-        committed: &Committed,
+        committed: impl Into<Witness<'w>>,
         claim: Claim,
         fs: &mut Fs,
         seed: &[u8; 32],
     ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
+        self.prove_rest_with(layout, reduction, committed, claim, None, fs, seed)
+    }
+
+    /// [`HachiPcs::prove_rest`] with the first iteration's $w_i$ given if `first_w` is
+    /// ([`iteration::prove_with_w`]).
+    #[allow(clippy::too_many_arguments)] // the inputs of prove_rest and the given w
+    fn prove_rest_with<'w>(
+        &self,
+        layout: Layout,
+        reduction: Reduction,
+        committed: impl Into<Witness<'w>>,
+        claim: Claim,
+        mut first_w: Option<Vec<Poly>>,
+        fs: &mut Fs,
+        seed: &[u8; 32],
+    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
         let schedule = self.schedule(layout, reduction)?;
-        let mut later: Option<Committed> = None;
+        let first: Witness<'w> = committed.into();
+        // The witness of each later iteration is sourced from the previous one's table
+        // (`iteration::Next`), which it reads in its steps 1 and 2 and then drops, instead of its
+        // message packed whole; the last iteration packs its next message, which is sent.
+        let mut current: Witness<'_> = first;
         let mut claim = claim;
+        let last = schedule.iterations.len().saturating_sub(1);
         let mut proofs = Vec::with_capacity(schedule.iterations.len());
         for (index, params) in schedule.iterations.iter().enumerate() {
-            let witness = later.as_ref().unwrap_or(committed);
-            let (proof, next, next_claim) =
-                iteration::prove(&self.ctx, index, params, witness, &claim, fs, seed)?;
+            let (proof, next, next_claim) = iteration::prove_next(
+                &self.ctx,
+                index,
+                params,
+                current,
+                &claim,
+                first_w.take(),
+                fs,
+                seed,
+                index == last,
+            )?;
             proofs.push(proof);
-            later = Some(next);
+            current = next.into_witness(&self.ctx)?;
             claim = next_claim;
         }
-        let last = later.as_ref().unwrap_or(committed);
-        Ok((proofs, last.message.concat()))
+        Ok((proofs, current.committed().message.concat()))
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
@@ -1079,6 +1540,39 @@ impl<const K: usize> HachiPcs<K> {
         context: &[u8; 32],
         seed: &[u8; 32],
     ) -> Result<(Ext<K>, Proof<K>)> {
+        self.prove_multilinear_ext_from(Held::Borrowed(state), None, point, context, seed)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext`] on a state that the caller does not need afterwards: the
+    /// opening frees the committed message once the first iteration has read it (steps 1 and 2,
+    /// [`Witness`]), instead of holding it until the proof is done. The value and the proof are the
+    /// same.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::prove_multilinear_ext`].
+    pub fn prove_multilinear_ext_owned(
+        &self,
+        state: State<K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Proof<K>)> {
+        self.prove_multilinear_ext_from(Held::Owned(state), None, point, context, seed)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext`] on a borrowed or an owned state.
+    fn prove_multilinear_ext_from(
+        &self,
+        held: Held<'_, State<K>>,
+        source: Option<OwnedSource<'_>>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Proof<K>)> {
+        let state: &State<K> = match &held {
+            Held::Borrowed(s) => s,
+            Held::Owned(s) => s,
+        };
         let ctx = &self.ctx;
         let field = ctx.field();
         let Input::MultilinearExt { vars } = &state.input else {
@@ -1086,6 +1580,16 @@ impl<const K: usize> HachiPcs<K> {
                 "this state is not a polynomial over the field".into(),
             ));
         };
+        if state.shed.is_some() {
+            return Err(Error::Protocol(
+                "this state's message was shed: open it with prove_multilinear_ext_rebuilt".into(),
+            ));
+        }
+        // The message as the opening reads it: the state's, or formed from a source.
+        let message = source.as_ref().map_or(
+            MessageView::Held(&state.committed.message),
+            OwnedSource::view,
+        );
         if point.len() != *vars {
             return Err(Error::Shape(format!(
                 "a point of {vars} coordinates is expected"
@@ -1095,32 +1599,58 @@ impl<const K: usize> HachiPcs<K> {
         let point: Vec<Ext<K>> = point.iter().map(|x| field.reduce(x)).collect();
         let layout = state.committed.layout;
         let (b, a, v) = self.ring_weights(&layout, &point)?;
-        let (value, mask_eval, claim, mut fs) = if layout.masked {
+        // <a, f_i> over the message of every chunk, once: the claim's value, the masked claim and
+        // step 1 of the first iteration (w_i) are formed from them.
+        if !layout.masked && a.len() != layout.chunk_len() {
+            return Err(Error::Shape(
+                "the claim's weights do not cover a chunk".into(),
+            ));
+        }
+        let products = self.chunk_products(&a, message, a.len())?;
+        let weighted = |b: &[Poly]| -> Result<Poly> {
+            let ring = &ctx.ring;
+            let mut acc = ring.zero();
+            for (bi, p) in b.iter().zip(&products) {
+                acc = ring.add(&acc, &ring.mul(bi, p)?)?;
+            }
+            Ok(acc)
+        };
+        let (value, mask_eval, claim, first_w, mut fs) = if layout.masked {
             // The value from the message alone: the masking rows are not part of it.
-            let message: Vec<Vec<Poly>> = state
-                .committed
-                .message
-                .iter()
-                .map(|chunk| chunk[..layout.message_len()].to_vec())
-                .collect();
-            let y = evaluate_claim(ctx, &b, &a, &message)?;
+            let y = weighted(&b)?;
             let value = self.traced(&y, &v)?;
             let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
-            let (mask_eval, claim) = self.masked_claim(state, b, a, &v, &value, &mut fs)?;
-            (value, Some(mask_eval), claim, fs)
+            let (mask_eval, claim, w) =
+                self.masked_claim_from(message, &products, b, a, &v, &value, &mut fs)?;
+            (value, Some(mask_eval), claim, w, fs)
         } else {
-            let target = evaluate_claim(ctx, &b, &a, &state.committed.message)?;
+            let target = weighted(&b)?;
             let value = self.traced(&target, &v)?;
             let mut fs = self.statement(context, 3, *vars, &state.committed.u, &point, &value);
             fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&target));
-            (value, None, Claim { b, a, target }, fs)
+            (value, None, Claim { b, a, target }, products.clone(), fs)
         };
+        drop(products);
         let ring_value = claim.target.clone();
-        let (iterations, final_message) = self.prove_rest(
+        let committed = match (held, source) {
+            (Held::Borrowed(s), None) => Witness::Borrowed(&s.committed),
+            (Held::Owned(s), None) => Witness::Owned(s.committed),
+            (Held::Owned(s), Some(source)) => Witness::Sourced {
+                committed: s.committed,
+                source: Some(source),
+            },
+            (Held::Borrowed(_), Some(_)) => {
+                return Err(Error::Protocol(
+                    "a message from a source opens an owned state".into(),
+                ));
+            }
+        };
+        let (iterations, final_message) = self.prove_rest_with(
             layout,
             self.masks_or_direct(),
-            &state.committed,
+            committed,
             claim,
+            Some(first_w),
             &mut fs,
             seed,
         )?;
@@ -1195,7 +1725,9 @@ impl<const K: usize> HachiPcs<K> {
             &value,
         );
         let (mask_eval, claim) = if layout.masked {
-            let (mask_eval, claim) = self.masked_claim(state, b, a, &one, &value, &mut fs)?;
+            let message = MessageView::Held(&state.committed.message);
+            let (mask_eval, claim) =
+                self.masked_claim(state, message, b, a, &one, &value, &mut fs)?;
             (Some(mask_eval), claim)
         } else {
             fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&y));
@@ -2618,6 +3150,38 @@ mod tests {
 
     /// The verifier's message when the batching sumcheck ends on a false claim.
     const BATCH_CHECK: &str = "the batching sumcheck's final value";
+
+    #[test]
+    fn packing_by_batches_from_the_end_is_the_packing_in_order() {
+        // Batches of one chunk, a few chunks and everything, at plain and masked layouts.
+        for hiding in [false, true] {
+            let choices = if hiding {
+                HachiChoices::toy_hiding(16)
+            } else {
+                HachiChoices::toy(16)
+            };
+            let pcs = HachiPcs::<K>::new(Q, choices).unwrap();
+            let field = pcs.ctx().field();
+            let vars = 11;
+            let coeffs: Vec<Ext<K>> = (0..1u64 << vars)
+                .map(|i| field.reduce(&Ext([i * 7 + 3, i * 11 + 5, i + Q - 9, i * i])))
+                .collect();
+            let layout = pcs.multilinear_ext_layout(vars).unwrap();
+            let per_chunk = pcs.ctx().d_over_k() * layout.message_len();
+            let want: Vec<Vec<Poly>> = coeffs
+                .chunks_exact(per_chunk)
+                .map(|chunk| pcs.pack_ext_chunk(chunk).unwrap())
+                .collect();
+            assert!(want.len() > 2, "several chunks");
+            let bytes = per_chunk * core::mem::size_of::<Ext<K>>();
+            for batch in [1, bytes, 2 * bytes + 1, usize::MAX / 2] {
+                let got = pcs
+                    .pack_ext_owned_in(coeffs.clone(), &layout, batch)
+                    .unwrap();
+                assert_eq!(got, want, "hiding {hiding}, batches of {batch} bytes");
+            }
+        }
+    }
 
     #[test]
     fn partials_moved_along_the_trace_kernel_are_rejected() {

@@ -29,7 +29,8 @@
 //! accordingly. The packed next witness is $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i \in
 //! \mathbb F_{q^K}$, with $Z_i$ the basis of Hachi's Eq. (7) (coordinates of `Ext`); $d/K$
 //! consecutive $\hat w_J$ go into one ring element by $\psi$, and these form the next message
-//! chunks (`pack`). In hypercube form $\hat w$ is `packed_hypercube`.
+//! chunks (`pack`). In hypercube form $\hat w$ is the table of residues read $K$ at a time
+//! ([`partials::Packed::Residues`]).
 //! 1. The prover sends $K - 1$ of the partial evaluations $y_i = \sum_J \tilde w_{J \Vert i}
 //!    \widetilde{eq}(J, \mathbf a_0)$, and the verifier derives the other from $y' = \sum_i
 //!    \widetilde{eq}(i, \mathbf a_1) y_i$ (Eq. (24) and footnote 10; [`partials::complete`]).
@@ -47,20 +48,24 @@
 //!    $(K/d)\,\mathrm{Tr}\_H(p') = \hat w(\mathbf r) =$ `packed_eval`, which the verifier checks
 //!    with `Subfield::e_map`. The next claim is $(\mathbf b', \mathbf a', p')$ at $\mathbf r$.
 
-use crate::commit::{Committed, Ctx, commit};
+use crate::commit::{
+    Committed, Ctx, Digits, ElementSource, block_columns, commit_table, packed_element_at,
+};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::mle::{eq_eval, eq_table, mle_eval, powers};
-use crate::params::IterParams;
+use crate::params::{IterParams, Layout};
 use crate::partials::{self, RoundValues};
-use crate::relation::{Masked, Public, mstar, next_table, quotients};
-use crate::sumcheck::{self, RoundMessage, range_poly};
+use crate::relation::{Masked, Mat, Part, Public, mstar, next_table_parts, quotients};
+use crate::sumcheck::{self, RoundMessage, Tensor, range_poly};
+use crate::table::{DigitTable, ResidueTable, TableRef};
 use crate::{Error, Result};
-use hachi_co_math::decompose::{digit_bound, digit_range, g_apply, g_inv, j_inv};
+use hachi_co_math::decompose::{digit_bound, digit_range, g_apply, g_inv, g_inv_rows, j_inv};
 use hachi_co_math::{Ext, Poly, Ring, Sparse};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::gauss::{WideGaussian, bernoulli_exp};
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 const LABEL_V: &[u8] = b"hachi/iter/v";
 const LABEL_C: &[u8] = b"hachi/iter/c";
@@ -192,6 +197,42 @@ fn next_weights<const K: usize>(
     Ok((b, a))
 }
 
+/// [`evaluate_claim`] on the next message, packed from `table` one chunk at a time
+/// ([`packed_chunk`]), the chunks in parallel with $\mathbf a$ prepared once: the same sum
+/// (exact in $R_q$), without the packed message in memory.
+fn evaluate_packed_claim<const K: usize, T: ResidueTable + ?Sized>(
+    ctx: &Ctx<K>,
+    params: &IterParams,
+    b: &[Poly],
+    a: &[Poly],
+    table: &T,
+) -> Result<Poly> {
+    let ring = &ctx.ring;
+    let a_row = ring.prepare(core::slice::from_ref(&a.to_vec()))?;
+    let terms = b
+        .par_iter()
+        .enumerate()
+        .map(|(c, bi)| {
+            let fi = packed_chunk(ctx, params, table, c)?;
+            if fi.len() != a.len() {
+                return Err(Error::Shape(
+                    "a chunk does not fit the claim's weights".into(),
+                ));
+            }
+            let product = ring
+                .mat_vec_prepared(&a_row, &fi)?
+                .pop()
+                .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))?;
+            Ok(ring.mul(bi, &product)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut acc = ring.zero();
+    for term in &terms {
+        acc = ring.add(&acc, term)?;
+    }
+    Ok(acc)
+}
+
 /// $\sum_i b_i \cdot \mathbf a^\top \mathbf f_i$.
 pub fn evaluate_claim<const K: usize>(
     ctx: &Ctx<K>,
@@ -209,36 +250,70 @@ pub fn evaluate_claim<const K: usize>(
 
 /// The next message chunks: the table packed into $\mathbb F_{q^K}$ by $Z_i$, then into ring
 /// elements by $\psi$, then cut into $2^{r'}$ chunks of $2^{m'}$ elements.
-fn pack<const K: usize>(
+fn pack<const K: usize, T: ResidueTable + ?Sized>(
     ctx: &Ctx<K>,
     params: &IterParams,
-    table: &[u64],
+    table: &T,
 ) -> Result<Vec<Vec<Poly>>> {
-    let exts: Vec<Ext<K>> = table.as_chunks::<K>().0.iter().map(|c| Ext(*c)).collect();
-    let elements = exts
-        .chunks_exact(ctx.d_over_k())
-        .map(|block| ctx.sub.psi(block))
-        .collect::<hachi_co_math::Result<Vec<_>>>()?;
-    let len = params.next.chunk_len();
-    if elements.len() != params.next.chunks() * len {
+    (0..params.next.chunks())
+        .into_par_iter()
+        .map(|c| packed_chunk(ctx, params, table, c))
+        .collect()
+}
+
+/// Chunk `c` of [`pack`]: element $e$ is $\psi$ of the $d/K$ values of $\mathbb F_{q^K}$ in the
+/// $d$ residues `table[ed .. (e + 1)d]`, so that a chunk can be packed without the others.
+fn packed_chunk<const K: usize, T: ResidueTable + ?Sized>(
+    ctx: &Ctx<K>,
+    params: &IterParams,
+    table: &T,
+    c: usize,
+) -> Result<Vec<Poly>> {
+    let (d, len) = (ctx.d(), params.next.chunk_len());
+    if table.len() != params.next.chunks() * len * d || c >= params.next.chunks() {
         return Err(Error::Shape(
             "the packed witness does not fit the next layout".into(),
         ));
     }
-    Ok(elements.chunks_exact(len).map(<[Poly]>::to_vec).collect())
+    (0..len)
+        .map(|e| packed_element_at(ctx, table, (c * len + e) * d))
+        .collect()
 }
 
-/// The partial evaluations $y_i = \sum_J \tilde w_{J \Vert i} \widetilde{eq}(J, \mathbf a_0)$.
-fn partials<const K: usize>(ctx: &Ctx<K>, table: &[u64], a0: &[Ext<K>]) -> Vec<Ext<K>> {
+/// The partial evaluations $y_i = \sum_J \tilde w_{J \Vert i} \widetilde{eq}(J, \mathbf a_0)$,
+/// with $\widetilde{eq}(J_U \Vert J_L, \mathbf a_0) = \widetilde{eq}(J_U, \mathbf a_{0,U})
+/// \widetilde{eq}(J_L, \mathbf a_{0,L})$ split as in [`crate::sumcheck::Tensor`]: each row
+/// $J_U$ (in parallel) is summed over its columns first, then multiplied by its factor. The same
+/// sums as with the full table, regrouped.
+fn partials<const K: usize, T: ResidueTable + ?Sized>(
+    ctx: &Ctx<K>,
+    table: &T,
+    a0: &[Ext<K>],
+) -> Vec<Ext<K>> {
     let field = ctx.field();
-    let eq = eq_table(field, a0);
-    (0..K)
-        .map(|i| {
-            eq.iter().enumerate().fold(field.zero(), |acc, (j, e)| {
-                field.add(&acc, &field.scale(e, table[j * K + i]))
-            })
+    let (a_u, a_l) = a0.split_at(a0.len().div_ceil(2));
+    let (rows, cols) = (eq_table(field, a_u), eq_table(field, a_l));
+    let zeros = || [field.zero(); K];
+    let sums = rows
+        .par_iter()
+        .enumerate()
+        .fold(zeros, |mut acc, (u, eu)| {
+            let mut row = [field.zero(); K];
+            for (j, el) in cols.iter().enumerate() {
+                let base = (u * cols.len() + j) * K;
+                for (i, y) in row.iter_mut().enumerate() {
+                    *y = field.add(y, &field.scale(el, table[base + i]));
+                }
+            }
+            for (a, y) in acc.iter_mut().zip(&row) {
+                *a = field.add(a, &field.mul(eu, y));
+            }
+            acc
         })
-        .collect()
+        .reduce(zeros, |a, b| {
+            core::array::from_fn(|i| field.add(&a[i], &b[i]))
+        });
+    sums.to_vec()
 }
 
 /// $\sum_i \widetilde{eq}(i, \mathbf a_1) y_i = \tilde w(\mathbf a_0, \mathbf a_1)$ (paper, Eq.
@@ -253,17 +328,46 @@ fn combined_value<const K: usize>(ctx: &Ctx<K>, ys: &[Ext<K>], a1: &[Ext<K>]) ->
         })
 }
 
-/// The packed next witness $\hat w_J = \sum_i \tilde w_{J \Vert i} Z_i$ on the hypercube, from
-/// the table of residues: $Z_i$ puts $\tilde w_{J \Vert i}$ in coordinate $i$, so $\hat w_J$ is
-/// the $K$-tuple `table[JK .. JK + K]`.
-fn packed_hypercube<const K: usize>(table: &[u64]) -> Vec<Ext<K>> {
-    table.as_chunks::<K>().0.iter().map(|c| Ext(*c)).collect()
-}
-
 /// $(K/d)\,\mathrm{Tr}\_H(p)$ as a field element.
 fn scaled_trace<const K: usize>(ctx: &Ctx<K>, p: &Poly) -> Result<Ext<K>> {
     let one = ctx.ring.monomial(0);
     Ok(ctx.sub.extract(&ctx.sub.e_map(p, &one)?)?)
+}
+
+/// The size of a block of A in the masked fold's products A s0 ([`block_columns`], as for the
+/// commitments): every block is prepared once per attempt whatever its size, so smaller blocks
+/// cost no time here and hold less memory.
+const FOLD_BLOCK_BYTES: usize = 16 << 20;
+
+/// The entries of $\mathbf z$ per task when $\hat{\mathbf z} = \mathbf J^{-1}(\mathbf z)$ is
+/// formed as bytes ([`Digits`]): each task holds the $\tau$ ring elements of its entries' digits
+/// until it has stored them as bytes (at $d = 256$, $\tau \cdot 512$ KiB).
+const Z_HAT_BLOCK: usize = 256;
+
+/// $\mathbf m \mathbf v$ by blocks of `step` columns (at least one), each block of `m` prepared
+/// with every prime and freed after its products: the sums over the columns are exact, so this is
+/// [`Ring::mat_vec_prepared`] on the whole of `m` prepared.
+///
+/// # Errors
+/// [`Error::Shape`] unless every row of `m` has one entry per entry of `v`; those of the ring.
+fn mat_vec_by_blocks(ring: &Ring, m: &Matrix, v: &[Poly], step: usize) -> Result<Vec<Poly>> {
+    if m.iter().any(|row| row.len() != v.len()) {
+        return Err(Error::Shape(
+            "a row of the matrix against a vector of another length".into(),
+        ));
+    }
+    let mut out = vec![ring.zero(); m.len()];
+    for c0 in (0..v.len()).step_by(step.max(1)) {
+        let c1 = (c0 + step.max(1)).min(v.len());
+        let block = ring.prepare_columns(m, c0..c1)?;
+        for (x, y) in out
+            .iter_mut()
+            .zip(ring.mat_vec_prepared(&block, &v[c0..c1])?)
+        {
+            *x = ring.add(x, &y)?;
+        }
+    }
+    Ok(out)
 }
 
 /// $\sum_i c_i \mathbf x_i$ over the chunks' vectors `chunk(i)` of `width` ring elements, in
@@ -295,6 +399,158 @@ where
             }
             Ok(acc)
         })
+}
+
+/// $\sum_i c_i \mathbf s_i$ over the committed vectors $\mathbf s_i$ of the chunks of `message`
+/// ([`Committed::digits`]): for a decomposed layout by [`fold_message_digits`], which forms the
+/// digits as it folds, otherwise (or if its integer sums could leave `i64`) by [`fold_chunks`].
+fn fold_message<const K: usize>(
+    ctx: &Ctx<K>,
+    layout: &Layout,
+    delta: usize,
+    sparse: &[Sparse],
+    message: MessageView<'_>,
+) -> Result<Vec<Poly>> {
+    if layout.decomposed
+        && let Some(z) = fold_message_digits(ctx, delta, sparse, message)?
+    {
+        return Ok(z);
+    }
+    fold_chunks(ctx, sparse, layout.width(delta), |i| match message {
+        MessageView::Held(m) => Committed::digits(ctx, layout, delta, &m[i]),
+        MessageView::Source { .. } => Ok(Cow::Owned(
+            Committed::digits(ctx, layout, delta, &message.chunk(i)?)?.into_owned(),
+        )),
+    })
+}
+
+/// [`fold_chunks`] over the digits of a decomposed message, $\sum_i c_i \mathbf
+/// G^{-1}(\mathbf m_i)$, element by element: for each ring element $e$ of a chunk (in parallel),
+/// the $\delta$ digit rows of $m_{i,e}$ of every chunk $i$ are formed in a scratch buffer
+/// ([`g_inv_rows`]) and $c_i$ times each is added to one of $\delta$ accumulators of signed
+/// integers ([`Ring::add_sparse_product_signed`]), which are reduced modulo $q$ at the end.
+/// Output entry $e\delta + k$ is digit $k$ of element $e$, as in [`g_inv`]. The integer sums are
+/// those of [`fold_chunks`] before reduction, so the result is the same, without the decomposed
+/// chunks in memory and without a reduction per term. `None` if the sums could leave `i64`: each
+/// is at most $\lfloor b/2 \rfloor \sum_i \Vert c_i \Vert_1$ in absolute value.
+///
+/// # Errors
+/// [`Error::Shape`] unless there is one challenge per chunk and the chunks have one length;
+/// arithmetic errors.
+fn fold_message_digits<const K: usize>(
+    ctx: &Ctx<K>,
+    delta: usize,
+    sparse: &[Sparse],
+    message: MessageView<'_>,
+) -> Result<Option<Vec<Poly>>> {
+    let b = ctx.choices.b;
+    let (len, uniform) = match message {
+        MessageView::Held(m) => {
+            let len = m.first().map_or(0, Vec::len);
+            (len, m.iter().all(|chunk| chunk.len() == len))
+        }
+        MessageView::Source { chunk_len, .. } => (chunk_len, true),
+    };
+    if message.chunks() != sparse.len() || !uniform {
+        return Err(Error::Shape(
+            "one challenge per chunk, and chunks of one length, are expected".into(),
+        ));
+    }
+    let bound = sparse
+        .iter()
+        .try_fold(0u64, |s, c| s.checked_add(c.l1_norm()))
+        .and_then(|s| s.checked_mul(digit_bound(b).max(1)));
+    if !bound.is_some_and(|s| s < 1 << 62) {
+        return Ok(None);
+    }
+    // Every partial sum is within the bound, so below 2^31 the sums of i32 accumulators are those
+    // of i64 ones, with twice the lanes.
+    if bound.is_some_and(|s| s <= i32::MAX as u64) {
+        return fold_message_digits_i32(ctx, delta, sparse, message, len).map(Some);
+    }
+    fold_message_digits_i64(ctx, delta, sparse, message, len).map(Some)
+}
+
+/// The loop of [`fold_message_digits`] with `i64` accumulators.
+fn fold_message_digits_i64<const K: usize>(
+    ctx: &Ctx<K>,
+    delta: usize,
+    sparse: &[Sparse],
+    message: MessageView<'_>,
+    len: usize,
+) -> Result<Vec<Poly>> {
+    let (ring, b, d) = (&ctx.ring, ctx.choices.b, ctx.d());
+    let elements = (0..len)
+        .into_par_iter()
+        .map_init(
+            || (vec![0i64; delta * d], vec![0i64; d], vec![0i64; delta * d]),
+            |(digits, scratch, acc), e| -> Result<Vec<Poly>> {
+                acc.fill(0);
+                for (i, c) in sparse.iter().enumerate() {
+                    let element = message.element(i, e)?;
+                    g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
+                    for (sum, row) in acc.chunks_exact_mut(d).zip(digits.chunks_exact(d)) {
+                        ring.add_sparse_product_signed(sum, c, row)?;
+                    }
+                }
+                acc.chunks_exact(d)
+                    .map(|sum| Ok(ring.from_i64(sum)?))
+                    .collect()
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    Ok(elements.into_iter().flatten().collect())
+}
+
+/// [`fold_message_digits`] with `i32` accumulators, for sums that the caller has bounded below
+/// $2^{31}$: the digits of each element are formed in `i64` ([`g_inv_rows`]), narrowed (they are
+/// at most $b/2$ in absolute value) and added by [`Ring::add_sparse_product_signed_i32`]. The same
+/// integers, so the same ring elements.
+fn fold_message_digits_i32<const K: usize>(
+    ctx: &Ctx<K>,
+    delta: usize,
+    sparse: &[Sparse],
+    message: MessageView<'_>,
+    len: usize,
+) -> Result<Vec<Poly>> {
+    let (ring, b, d) = (&ctx.ring, ctx.choices.b, ctx.d());
+    let elements = (0..len)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    vec![0i64; delta * d],
+                    vec![0i64; d],
+                    vec![0i32; delta * d],
+                    vec![0i32; delta * d],
+                    vec![0i64; d],
+                )
+            },
+            |(digits, scratch, narrow, acc, wide), e| -> Result<Vec<Poly>> {
+                acc.fill(0);
+                for (i, c) in sparse.iter().enumerate() {
+                    let element = message.element(i, e)?;
+                    g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
+                    for (n, x) in narrow.iter_mut().zip(digits.iter()) {
+                        *n = i32::try_from(*x)
+                            .map_err(|_| Error::Protocol("a digit does not fit 32 bits".into()))?;
+                    }
+                    for (sum, row) in acc.chunks_exact_mut(d).zip(narrow.chunks_exact(d)) {
+                        ring.add_sparse_product_signed_i32(sum, c, row)?;
+                    }
+                }
+                acc.chunks_exact(d)
+                    .map(|sum| {
+                        for (w, x) in wide.iter_mut().zip(sum) {
+                            *w = i64::from(*x);
+                        }
+                        Ok(ring.from_i64(wide)?)
+                    })
+                    .collect()
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    Ok(elements.into_iter().flatten().collect())
 }
 
 /// The challenges as ring elements and as sparse vectors.
@@ -427,6 +683,7 @@ fn masked_fold<const K: usize>(
     index: usize,
     params: &IterParams,
     witness: &Committed,
+    message: MessageView<'_>,
     claim: &Claim,
     w_hat: &[Poly],
     d_mat: &Matrix,
@@ -443,14 +700,16 @@ fn masked_fold<const K: usize>(
     let width = layout.width(delta);
     let rand_len = ctx.rand_len()?;
     let gauss = WideGaussian::new(params.sigma)?;
-    let a_prepared = ring.prepare(a_mat)?;
+    // A s0 by blocks of columns, each prepared in its attempt, rather than all of A prepared once
+    // for the attempts: the transforms of A are not held next to the witness (`block_columns`).
+    let step = block_columns(FOLD_BLOCK_BYTES, a_mat.len(), ctx.d());
     let n_d = ctx.choices.n_d;
     for attempt in 0..hiding.attempts() {
         // Step 2(a).
         let s0 = draw_masks(ctx, &gauss, seed, attempt, 0, width)?;
         let r0 = draw_masks(ctx, &gauss, seed, attempt, width, rand_len)?;
         let w0 = ring.inner(&claim.a, &g_apply(ring, b, delta, &s0)?)?;
-        let mut t0 = ring.mat_vec_prepared(&a_prepared, &s0)?;
+        let mut t0 = mat_vec_by_blocks(ring, a_mat, &s0, step)?;
         let term = ctx.rand_term(a_rand, &r0)?;
         for (x, y) in t0.iter_mut().zip(&term) {
             *x = ring.add(x, y)?;
@@ -467,9 +726,7 @@ fn masked_fold<const K: usize>(
         // Step 2(b).
         let (c, sparse) = folding_challenges(ctx, layout.chunks(), &mut attempt_fs)?;
         // Step 2(c).
-        let mut v_all = fold_chunks(ctx, &sparse, width, |i| {
-            Committed::digits(ctx, layout, delta, &witness.message[i])
-        })?;
+        let mut v_all = fold_message(ctx, layout, delta, &sparse, message)?;
         let v_r = fold_chunks(ctx, &sparse, rand_len, |i| {
             Ok(std::borrow::Cow::Borrowed(&witness.r[i][..]))
         })?;
@@ -514,7 +771,7 @@ fn masked_fold<const K: usize>(
 fn plain_fold<const K: usize>(
     ctx: &Ctx<K>,
     params: &IterParams,
-    witness: &Committed,
+    message: MessageView<'_>,
     w_hat: &[Poly],
     d_mat: &Matrix,
     fs: &mut Fs,
@@ -524,9 +781,7 @@ fn plain_fold<const K: usize>(
     let v = ring.mat_vec_short(d_mat, w_hat, digit_bound(ctx.choices.b))?;
     fs.polys(LABEL_V, &v);
     let (c, sparse) = folding_challenges(ctx, layout.chunks(), fs)?;
-    let z = fold_chunks(ctx, &sparse, layout.width(delta), |i| {
-        Committed::digits(ctx, layout, delta, &witness.message[i])
-    })?;
+    let z = fold_message(ctx, layout, delta, &sparse, message)?;
     for zx in &z {
         if ring.inf_norm(zx)? > params.beta {
             return Err(Error::Protocol(format!(
@@ -543,41 +798,294 @@ fn plain_fold<const K: usize>(
     })
 }
 
+/// The witness of an iteration ([`prove`]), borrowed or owned. An owned witness lets the iteration
+/// free its message once steps 1 and 2 have read it, as the rest of the iteration reads only
+/// $\mathbf t$, $\hat{\mathbf t}$ and $\mathbf u$; the messages are the same either way.
+pub enum Witness<'a> {
+    /// The caller keeps the witness.
+    Borrowed(&'a Committed),
+    /// The iteration may free the message.
+    Owned(Committed),
+    /// A witness without its message (`committed.message` is empty), whose chunks `source` forms
+    /// when steps 1 and 2 read them; the source, and what it reads from, is dropped after step 2.
+    Sourced {
+        /// The rest of the witness.
+        committed: Committed,
+        /// Its message, until step 2 is done.
+        source: Option<OwnedSource<'a>>,
+    },
+}
+
+/// A message formed when it is read, owning what it is formed from: the source of
+/// [`Witness::Sourced`].
+pub struct OwnedSource<'a> {
+    /// The number of chunks.
+    pub chunks: usize,
+    /// The ring elements of a chunk.
+    pub chunk_len: usize,
+    /// Elements `range` of chunk `c`.
+    pub elements: Box<ElementSource<'a>>,
+}
+
+impl OwnedSource<'_> {
+    /// The message as steps 1 and 2 read it.
+    pub fn view(&self) -> MessageView<'_> {
+        MessageView::Source {
+            chunks: self.chunks,
+            chunk_len: self.chunk_len,
+            elements: &*self.elements,
+        }
+    }
+}
+
+/// The message of a witness as steps 1 and 2 of its iteration read it: the chunks, or a function
+/// that forms the elements of a chunk when they are read (the same elements).
+#[derive(Clone, Copy)]
+pub enum MessageView<'a> {
+    /// The chunks.
+    Held(&'a [Vec<Poly>]),
+    /// `chunks` chunks of `chunk_len` ring elements, elements `range` of chunk `c` formed by
+    /// `elements(c, range)`.
+    Source {
+        /// The number of chunks.
+        chunks: usize,
+        /// The ring elements of a chunk.
+        chunk_len: usize,
+        /// The elements.
+        elements: &'a ElementSource<'a>,
+    },
+}
+
+impl<'a> MessageView<'a> {
+    /// The number of chunks.
+    pub fn chunks(&self) -> usize {
+        match self {
+            Self::Held(m) => m.len(),
+            Self::Source { chunks, .. } => *chunks,
+        }
+    }
+
+    /// Chunk `c`.
+    ///
+    /// # Errors
+    /// Those of the source; [`Error::Shape`] for a source that forms another number of elements.
+    pub fn chunk(&self, c: usize) -> Result<Cow<'a, [Poly]>> {
+        match *self {
+            Self::Held(m) => Ok(Cow::Borrowed(&m[c])),
+            Self::Source {
+                chunk_len,
+                elements,
+                ..
+            } => {
+                let chunk = elements(c, 0..chunk_len)?;
+                if chunk.len() != chunk_len {
+                    return Err(Error::Shape(format!(
+                        "a chunk of {chunk_len} ring elements is expected from the source"
+                    )));
+                }
+                Ok(Cow::Owned(chunk))
+            }
+        }
+    }
+
+    /// Element `e` of chunk `c`.
+    ///
+    /// # Errors
+    /// As [`MessageView::chunk`].
+    pub fn element(&self, c: usize, e: usize) -> Result<Cow<'a, Poly>> {
+        match *self {
+            Self::Held(m) => Ok(Cow::Borrowed(&m[c][e])),
+            Self::Source { elements, .. } => {
+                let mut one = elements(c, e..e + 1)?;
+                match (one.pop(), one.is_empty()) {
+                    (Some(p), true) => Ok(Cow::Owned(p)),
+                    _ => Err(Error::Shape(
+                        "one ring element is expected from the source".into(),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl<'a> From<&'a Committed> for Witness<'a> {
+    fn from(committed: &'a Committed) -> Self {
+        Self::Borrowed(committed)
+    }
+}
+
+/// The next committed witness of an iteration ([`prove_next`]): with its message packed, or with
+/// the next witness table, whose elements under $\psi$ are the message ([`pack`]).
+pub(crate) struct Next {
+    /// The committed witness, its message empty while `table` is kept.
+    pub(crate) committed: Committed,
+    table: Option<DigitTable>,
+}
+
+impl Next {
+    /// The witness of the next iteration: owned, or sourced from the table, its elements packed
+    /// when steps 1 and 2 read them, as [`packed_chunk`] packs them (the same elements); the
+    /// table is dropped with the source after step 2 ([`Witness::Sourced`]).
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless the table fills the chunks of the witness's layout.
+    pub(crate) fn into_witness<const K: usize>(self, ctx: &Ctx<K>) -> Result<Witness<'_>> {
+        let Some(table) = self.table else {
+            return Ok(Witness::Owned(self.committed));
+        };
+        let layout = self.committed.layout;
+        let (chunks, len, d) = (layout.chunks(), layout.chunk_len(), ctx.d());
+        if table.len() != chunks * len * d {
+            return Err(Error::Shape(
+                "the packed witness does not fit the next layout".into(),
+            ));
+        }
+        let elements = move |c: usize, range: core::ops::Range<usize>| -> Result<Vec<Poly>> {
+            if c >= chunks || range.start > range.end || range.end > len {
+                return Err(Error::Shape("elements past the next message".into()));
+            }
+            range
+                .map(|e| packed_element_at(ctx, &table, (c * len + e) * d))
+                .collect()
+        };
+        Ok(Witness::Sourced {
+            committed: self.committed,
+            source: Some(OwnedSource {
+                chunks,
+                chunk_len: len,
+                elements: Box::new(elements),
+            }),
+        })
+    }
+}
+
+impl From<Committed> for Witness<'_> {
+    fn from(committed: Committed) -> Self {
+        Self::Owned(committed)
+    }
+}
+
+impl Witness<'_> {
+    /// The committed witness.
+    pub fn committed(&self) -> &Committed {
+        match self {
+            Self::Borrowed(c) => c,
+            Self::Owned(c) => c,
+            Self::Sourced { committed, .. } => committed,
+        }
+    }
+
+    /// The message, as steps 1 and 2 read it.
+    pub fn message(&self) -> MessageView<'_> {
+        match self {
+            Self::Borrowed(c) => MessageView::Held(&c.message),
+            Self::Owned(c) => MessageView::Held(&c.message),
+            Self::Sourced {
+                source: Some(source),
+                ..
+            } => source.view(),
+            Self::Sourced {
+                committed,
+                source: None,
+            } => MessageView::Held(&committed.message),
+        }
+    }
+
+    /// Frees the message of an owned witness and the source of a sourced one (with what it reads
+    /// from), and does nothing to a borrowed one.
+    fn free_message(&mut self) {
+        match self {
+            Self::Owned(c) => c.message = Vec::new(),
+            Self::Sourced { source, .. } => *source = None,
+            Self::Borrowed(_) => {}
+        }
+    }
+}
+
 /// The prover of one iteration (`index` numbers the iterations from 0 and selects the matrices).
 /// `seed` is the opening's secret seed, which only a masked level uses. Returns the messages, the
-/// next committed witness and the next claim.
+/// next committed witness and the next claim. An owned `witness` ([`Witness`]) has its message
+/// freed after step 2.
 ///
 /// # Errors
 /// [`Error::Protocol`] if an honest-prover invariant fails (a bug or a witness outside the
 /// layout's bound); arithmetic and sampling errors.
-pub fn prove<const K: usize>(
+pub fn prove<'w, const K: usize>(
     ctx: &Ctx<K>,
     index: usize,
     params: &IterParams,
-    witness: &Committed,
+    witness: impl Into<Witness<'w>>,
     claim: &Claim,
     fs: &mut Fs,
     seed: &[u8; 32],
 ) -> Result<(IterationProof<K>, Committed, Claim)> {
+    prove_with_w(ctx, index, params, witness, claim, None, fs, seed)
+}
+
+/// [`prove`] with step 1's $w_i = \mathbf a^\top \mathbf f_i$ given if `w` is (one per chunk), as
+/// an opening forms them with its claim: the same values, so the same messages.
+///
+/// # Errors
+/// As [`prove`], and [`Error::Shape`] for another number of $w_i$.
+#[allow(clippy::too_many_arguments)] // the inputs of prove and the given w
+pub fn prove_with_w<'w, const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    witness: impl Into<Witness<'w>>,
+    claim: &Claim,
+    w: Option<Vec<Poly>>,
+    fs: &mut Fs,
+    seed: &[u8; 32],
+) -> Result<(IterationProof<K>, Committed, Claim)> {
+    let (proof, next, claim) = prove_next(ctx, index, params, witness, claim, w, fs, seed, true)?;
+    Ok((proof, next.committed, claim))
+}
+
+/// [`prove_with_w`], with the next witness's message packed if `pack_next`, and otherwise its
+/// table kept instead ([`Next`]), from which the next iteration reads its message: a later
+/// iteration does, and the last one packs it, as its message is sent.
+#[allow(clippy::too_many_arguments)] // the inputs of prove_with_w and pack_next
+pub(crate) fn prove_next<'w, const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    witness: impl Into<Witness<'w>>,
+    claim: &Claim,
+    w: Option<Vec<Poly>>,
+    fs: &mut Fs,
+    seed: &[u8; 32],
+    pack_next: bool,
+) -> Result<(IterationProof<K>, Next, Claim)> {
     let (ring, field, d) = (&ctx.ring, ctx.field(), ctx.d());
     let (b, delta, tau, n_a) = (ctx.choices.b, params.delta, params.tau, params.n_a);
     let layout = &params.layout;
+    let mut held = witness.into();
+    let witness = held.committed();
     if witness.layout != *layout {
         return Err(Error::Shape(
             "the witness does not have the iteration's layout".into(),
         ));
     }
     // Step 1.
-    let a_row = ring.prepare(core::slice::from_ref(&claim.a))?;
-    let w: Vec<Poly> = witness
-        .message
-        .par_iter()
-        .map(|fi| {
-            ring.mat_vec_prepared(&a_row, fi)?
-                .pop()
-                .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
-        })
-        .collect::<Result<_>>()?;
+    let message = held.message();
+    let w: Vec<Poly> = match w {
+        Some(w) if w.len() == message.chunks() => w,
+        Some(_) => {
+            return Err(Error::Shape("one w_i per chunk is expected".into()));
+        }
+        None => {
+            let a_row = ring.prepare(core::slice::from_ref(&claim.a))?;
+            (0..message.chunks())
+                .into_par_iter()
+                .map(|c| {
+                    ring.mat_vec_prepared(&a_row, &message.chunk(c)?)?
+                        .pop()
+                        .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
+                })
+                .collect::<Result<_>>()?
+        }
+    };
     let w_hat = g_inv(ring, b, delta, &w)?;
     let d_mat = ctx.matrix(b"D", index, ctx.choices.n_d, params.d_cols())?;
     let width = layout.width(delta);
@@ -586,32 +1094,40 @@ pub fn prove<const K: usize>(
     // Step 2.
     let fold = if layout.masked {
         masked_fold(
-            ctx, index, params, witness, claim, &w_hat, &d_mat, &a_mat, &a_rand, fs, seed,
+            ctx, index, params, witness, message, claim, &w_hat, &d_mat, &a_mat, &a_rand, fs, seed,
         )?
     } else {
-        plain_fold(ctx, params, witness, &w_hat, &d_mat, fs)?
+        plain_fold(ctx, params, message, &w_hat, &d_mat, fs)?
     };
+    // Steps 1 and 2 were the last readers of the message: an owned witness frees it here.
+    held.free_message();
+    let witness = held.committed();
     let Fold { v, c, z, masks } = fold;
-    let z_hat = j_inv(ring, b, tau, &z)?;
-    // Step 3.
-    let b_mat = ctx.matrix(b"B", index, ctx.choices.n_b, layout.chunks() * n_a * delta)?;
-    let public = Public {
-        params,
-        b: &claim.b,
-        a: &claim.a,
-        target: &claim.target,
-        c: &c,
-        d_mat: &d_mat,
-        b_mat: &b_mat,
-        a_mat: &a_mat,
-        a_rand: &a_rand,
-        v: &v,
-        u: &witness.u,
-    };
+    // Step 3. B, the largest of the three matrices at the secure presets, is read by blocks of
+    // columns, here and by M*, so that it is never held whole; D and A, which the fold's attempts
+    // read, are held until the quotients.
+    let b_cols = layout.chunks() * n_a * delta;
     let parts = masks.as_ref().map(Masks::parts);
     let q = quotients(
         ctx,
-        &public,
+        &Public {
+            params,
+            b: &claim.b,
+            a: &claim.a,
+            target: &claim.target,
+            c: &c,
+            d_mat: Mat::Held(&d_mat),
+            b_mat: Mat::Expanded {
+                kind: b"B",
+                iteration: index,
+                rows: ctx.choices.n_b,
+                cols: b_cols,
+            },
+            a_mat: Mat::Held(&a_mat),
+            a_rand: &a_rand,
+            v: &v,
+            u: &witness.u,
+        },
         &w,
         &w_hat,
         &witness.t,
@@ -619,24 +1135,87 @@ pub fn prove<const K: usize>(
         &z,
         parts.as_ref(),
     )?;
-    let mut z_prime = w_hat;
+    // The quotients were the last readers of the matrices held whole: M* reads them again below,
+    // expanded by blocks of columns, so that they are not held through the next table and the
+    // next commitment.
+    drop((d_mat, a_mat));
+    let public = Public {
+        params,
+        b: &claim.b,
+        a: &claim.a,
+        target: &claim.target,
+        c: &c,
+        d_mat: Mat::Expanded {
+            kind: b"D",
+            iteration: index,
+            rows: ctx.choices.n_d,
+            cols: params.d_cols(),
+        },
+        b_mat: Mat::Expanded {
+            kind: b"B",
+            iteration: index,
+            rows: ctx.choices.n_b,
+            cols: b_cols,
+        },
+        a_mat: Mat::Expanded {
+            kind: b"A",
+            iteration: index,
+            rows: n_a,
+            cols: width,
+        },
+        a_rand: &a_rand,
+        v: &v,
+        u: &witness.u,
+    };
+    // z' = (w-hat, [w0-hat, t0-hat,] t-hat, z-hat[, z_varrho-hat]), written into the table part
+    // by part, t-hat and z-hat from their bytes. z-hat = J^{-1}(z) is formed here, after the
+    // quotients (which read z), by blocks of z in parallel, each block's digits kept as bytes, so
+    // that its ring elements are never all held (the same digits in the same order: J^{-1} is
+    // entry by entry).
+    let mut before = w_hat;
     if let Some(m) = &masks {
-        z_prime.extend_from_slice(&m.w0_hat);
-        z_prime.extend_from_slice(&m.t0_hat);
+        before.extend_from_slice(&m.w0_hat);
+        before.extend_from_slice(&m.t0_hat);
     }
-    z_prime.extend(witness.t_hat.iter().cloned());
-    z_prime.extend(z_hat);
-    if let Some(m) = &masks {
-        z_prime.extend(j_inv(ring, b, tau, &m.z_r)?);
+    let zq = ring.zq();
+    let blocks = z
+        .par_chunks(Z_HAT_BLOCK)
+        .map(|block| -> Result<Digits> {
+            let mut part = Digits::new(d);
+            part.extend(zq, &j_inv(ring, b, tau, block)?)?;
+            Ok(part)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut z_hat = Digits::new(d);
+    for part in &blocks {
+        z_hat.append(part);
     }
-    let table = next_table(ctx, params, &z_prime, &q)?;
-    let next = commit(
+    drop(blocks);
+    let z_r_hat = match &masks {
+        Some(m) => j_inv(ring, b, tau, &m.z_r)?,
+        None => Vec::new(),
+    };
+    let table = next_table_parts(
         ctx,
-        index + 1,
-        params.next,
-        pack(ctx, params, &table)?,
-        Vec::new(),
+        params,
+        &[
+            Part::Polys(&before),
+            Part::Digits(&witness.t_hat),
+            Part::Digits(&z_hat),
+            Part::Polys(&z_r_hat),
+        ],
+        &q,
     )?;
+    // The table holds z' and the quotients' digits now: their parts, the masks, the fold and w
+    // are not read again, so they are freed before the sumcheck rather than at the end.
+    drop((before, z_hat, z_r_hat));
+    drop(q);
+    drop(masks);
+    drop((w, z));
+    // The next message is the table under psi, element by element: the commitment packs the
+    // elements of each block as it reads them, and the message is packed whole only after the
+    // reduction, the last reader of the table, so that the two are never held at once.
+    let mut next = commit_table(ctx, index + 1, params.next, &table)?;
     fs.polys(LABEL_U_NEXT, &next.u);
     // Step 4.
     let lr = log_rows(params.rows);
@@ -648,16 +1227,36 @@ pub fn prove<const K: usize>(
     );
     let alpha_pows = powers(field, &alpha, d + 1);
     let (m, _sum) = mstar(ctx, &public, &eq_table(field, tau1), &alpha_pows)?;
-    let g: Vec<Ext<K>> = m
-        .iter()
-        .flat_map(|mu| alpha_pows[..d].iter().map(move |ap| field.mul(mu, ap)))
-        .collect();
+    // M* was the last reader of the public data and the challenges.
+    drop((a_rand, c));
+    // Both weight tables as row and column factors (`sumcheck::Tensor`), split after the
+    // variables that index m*, as the verifier splits g below: g = m* ⊗ (1, α, ..., α^{d-1}),
+    // and eq(τ0, ·) = eq(τ0_U, ·) ⊗ eq(τ0_L, ·) at the same place.
+    let (tau_u, tau_l) = tau0.split_at(params.table_vars - ctx.alpha());
+    let eq0 = Tensor {
+        rows: eq_table(field, tau_u),
+        cols: eq_table(field, tau_l),
+    };
+    let g = Tensor {
+        rows: m,
+        cols: alpha_pows[..d].to_vec(),
+    };
     let digits = digit_residues(ctx);
-    let (rounds, point, final_eval) =
-        sumcheck::prove(field, &digits, &table, eq_table(field, tau0), g, fs)?;
+    // eq0 is the table of tau0, so each round takes the eq factor of its variable out of the
+    // range part and computes it at one node fewer (`sumcheck::prove_at`): the same messages.
+    let (rounds, point, final_eval) = sumcheck::prove_at(field, &digits, &table, tau0, eq0, g, fs)?;
     fs.exts(LABEL_FINAL, &[final_eval]);
     let (ys, batch_rounds, packed_eval, claim) =
-        reduce_prove(ctx, params, &table, &point, final_eval, &next, fs)?;
+        reduce_prove(ctx, params, &table, &point, final_eval, fs)?;
+    // The next message packed whole, or the table kept instead, a fraction of it (bytes against
+    // ring elements of d residues), for the next iteration to read the message from.
+    let table = if pack_next {
+        next.message = pack(ctx, params, &table)?;
+        drop(table);
+        None
+    } else {
+        Some(table)
+    };
     let proof = IterationProof {
         v,
         next_commitment: next.u.clone(),
@@ -668,7 +1267,14 @@ pub fn prove<const K: usize>(
         packed_eval,
         next_target: claim.target.clone(),
     };
-    Ok((proof, next, claim))
+    Ok((
+        proof,
+        Next {
+            committed: next,
+            table,
+        },
+        claim,
+    ))
 }
 
 /// The transcript labels of the batching sumcheck that binds an iteration's partial evaluations
@@ -696,13 +1302,12 @@ const BATCH_LABELS: crate::partials::Labels = crate::partials::Labels {
 /// # Errors
 /// [`Error::Protocol`] if an honest-prover invariant fails (`final_eval`, the batching's first
 /// round, or the trace); arithmetic errors.
-fn reduce_prove<const K: usize>(
+fn reduce_prove<const K: usize, T: ResidueTable + ?Sized>(
     ctx: &Ctx<K>,
     params: &IterParams,
-    table: &[u64],
+    table: &T,
     point: &[Ext<K>],
     final_eval: Ext<K>,
-    next: &Committed,
     fs: &mut Fs,
 ) -> Result<(Vec<Ext<K>>, Vec<RoundValues<K>>, Ext<K>, Claim)> {
     let field = ctx.field();
@@ -716,11 +1321,14 @@ fn reduce_prove<const K: usize>(
     }
     let sent = partials::omit(field, &eq_table(field, a1), &ys)?;
     fs.exts(LABEL_PARTIALS, &sent);
-    let packed_table = packed_hypercube(table);
+    let packed = match table.table_ref() {
+        TableRef::Residues(r) => partials::Packed::Residues(r),
+        TableRef::Digits(t) => partials::Packed::Digits(t),
+    };
     let (batch_rounds, r, packed_eval) =
-        partials::prove_table(field, packed_table, a0, &ys, &BATCH_LABELS, fs)?;
+        partials::prove_table(field, packed, a0, &ys, &BATCH_LABELS, fs)?;
     let (b_next, a_next) = next_weights(ctx, params, &r)?;
-    let target = evaluate_claim(ctx, &b_next, &a_next, &next.message)?;
+    let target = evaluate_packed_claim(ctx, params, &b_next, &a_next, table)?;
     fs.polys(LABEL_TARGET, core::slice::from_ref(&target));
     if scaled_trace(ctx, &target)? != packed_eval {
         return Err(Error::Protocol(
@@ -871,9 +1479,9 @@ fn verify_sumcheck<const K: usize>(
         a: &claim.a,
         target: &claim.target,
         c: &c,
-        d_mat: &d_mat,
-        b_mat: &b_mat,
-        a_mat: &a_mat,
+        d_mat: Mat::Held(&d_mat),
+        b_mat: Mat::Held(&b_mat),
+        a_mat: Mat::Held(&a_mat),
         a_rand: &a_rand,
         v: &proof.v,
         u: commitment,
@@ -1009,7 +1617,18 @@ pub(crate) fn masked_level<const K: usize>(
     let a_mat = ctx.matrix(b"A", index, n_a, layout.width(delta))?;
     let a_rand = rand_matrix(ctx, params)?;
     let fold = masked_fold(
-        ctx, index, params, witness, claim, &w_hat, &d_mat, &a_mat, &a_rand, fs, seed,
+        ctx,
+        index,
+        params,
+        witness,
+        MessageView::Held(&witness.message),
+        claim,
+        &w_hat,
+        &d_mat,
+        &a_mat,
+        &a_rand,
+        fs,
+        seed,
     )?;
     let b_mat = ctx.matrix(b"B", index, ctx.choices.n_b, layout.chunks() * n_a * delta)?;
     let masks = fold
@@ -1274,5 +1893,184 @@ mod tests {
             matches!(&verdict, Err(VerifyError::Check(m)) if m == BATCH_CHECK),
             "a single shifted partial evaluation was not rejected: {verdict:?}"
         );
+    }
+
+    #[test]
+    fn the_split_partials_and_the_packed_claim_are_the_direct_ones() {
+        // partials (eq split by rows) against the sums with the full eq table, and the claim on
+        // the next message packed chunk by chunk against evaluate_claim on the packed message, for
+        // an iteration's next layout and a random table.
+        let (ctx, params, _, _) = honest_instance();
+        let (field, d) = (ctx.field(), ctx.d());
+        let len = params.next.chunks() * params.next.chunk_len() * d;
+        assert_eq!(len, 1 << params.table_vars);
+        let table: Vec<u64> = polys("table", len / d, d)
+            .into_iter()
+            .flat_map(|p| p.0)
+            .collect();
+        let n = params.table_vars - ctx.kappa();
+        let a0: Vec<Ext<K>> = uniform_mod_q(&mut ShakePrg::new(&[9u8; 32], b"a0", 0), Q, n * K)
+            .unwrap()
+            .as_chunks::<K>()
+            .0
+            .iter()
+            .map(|c| Ext(*c))
+            .collect();
+        let eq = eq_table(field, &a0);
+        let want: Vec<Ext<K>> = (0..K)
+            .map(|i| {
+                eq.iter().enumerate().fold(field.zero(), |acc, (j, e)| {
+                    field.add(&acc, &field.scale(e, table[j * K + i]))
+                })
+            })
+            .collect();
+        assert_eq!(partials(&ctx, &table, &a0), want);
+        let message = pack(&ctx, &params, &table).unwrap();
+        let b = polys("b", params.next.chunks(), d);
+        let a = polys("a", params.next.chunk_len(), d);
+        assert_eq!(
+            evaluate_packed_claim(&ctx, &params, &b, &a, &table).unwrap(),
+            evaluate_claim(&ctx, &b, &a, &message).unwrap()
+        );
+        assert!(packed_chunk(&ctx, &params, &table[1..], 0).is_err());
+        assert!(packed_chunk(&ctx, &params, &table, params.next.chunks()).is_err());
+    }
+
+    #[test]
+    fn the_next_message_from_the_table_is_the_packed_message() {
+        // The next witness sourced from its table (Next::into_witness) reads as the message packed
+        // whole (pack), chunk by chunk and element by element; elements past the message and a
+        // table that does not fill the layout are refused; without a table the witness is owned.
+        let (ctx, params, _, _) = honest_instance();
+        let (zq, d) = (ctx.ring.zq(), ctx.d());
+        let len = params.next.chunks() * params.next.chunk_len() * d;
+        // Digits of base b, as the next table holds them.
+        let (low, high) = digit_range(ctx.choices.b);
+        let span = u64::try_from(high - low + 1).unwrap();
+        let bytes: Vec<i8> = uniform_mod_q(&mut ShakePrg::new(&[7u8; 32], b"digits", 0), span, len)
+            .unwrap()
+            .into_iter()
+            .map(|x| i8::try_from(i128::from(x) + low).unwrap())
+            .collect();
+        let mut table = DigitTable::zeros(zq, len);
+        table.set_values(0, &bytes).unwrap();
+        let packed = pack(&ctx, &params, &table).unwrap();
+        let committed = commit_table(&ctx, 1, params.next, &table).unwrap();
+        let next = Next {
+            committed: committed.clone(),
+            table: Some(table),
+        };
+        let witness = next.into_witness(&ctx).unwrap();
+        let message = witness.message();
+        assert!(matches!(message, MessageView::Source { .. }));
+        assert_eq!(message.chunks(), packed.len());
+        for (c, chunk) in packed.iter().enumerate() {
+            assert_eq!(&*message.chunk(c).unwrap(), &chunk[..], "chunk {c}");
+            let last = chunk.len() - 1;
+            assert_eq!(*message.element(c, last).unwrap(), chunk[last], "chunk {c}");
+        }
+        assert!(message.chunk(packed.len()).is_err());
+        let short = Next {
+            committed: committed.clone(),
+            table: Some(DigitTable::zeros(zq, len - d)),
+        };
+        assert!(short.into_witness(&ctx).is_err());
+        let owned = Next {
+            committed,
+            table: None,
+        };
+        assert!(matches!(owned.into_witness(&ctx), Ok(Witness::Owned(_))));
+    }
+
+    #[test]
+    fn products_by_column_blocks_are_the_whole_products() {
+        // Wide vectors (the masks of a masked fold are not short), blocks of 1, 3, 7 and every
+        // column, against the matrix prepared whole.
+        let ctx = Ctx::<K>::new(Q, HachiChoices::toy(16)).unwrap();
+        let ring = &ctx.ring;
+        let m = ctx.matrix(b"A", 1, 3, 23).unwrap();
+        let v: Vec<Poly> = ctx.matrix(b"v", 1, 1, 23).unwrap().pop().unwrap();
+        let want = ring
+            .mat_vec_prepared(&ring.prepare(&m).unwrap(), &v)
+            .unwrap();
+        for step in [1, 3, 7, 23, 100] {
+            assert_eq!(
+                mat_vec_by_blocks(ring, &m, &v, step).unwrap(),
+                want,
+                "step {step}"
+            );
+        }
+        assert!(mat_vec_by_blocks(ring, &m, &v[1..], 3).is_err());
+    }
+
+    #[test]
+    fn the_fold_by_elements_is_the_fold_by_chunks() {
+        // fold_message_digits against fold_chunks over Committed::digits: bases that are powers
+        // of two and one that is not, the least number of digits and one more, challenges with
+        // coefficients of both signs up to 3 in absolute value (one at X^(d-1)), and residues at
+        // both ends of Z_q.
+        for b in [2u64, 3, 4, 8, 16] {
+            let choices = HachiChoices {
+                b,
+                ..HachiChoices::toy(16)
+            };
+            let ctx = Ctx::<K>::new(Q, choices).unwrap();
+            let (ring, d) = (&ctx.ring, ctx.d());
+            let least = hachi_co_math::decompose::num_digits(Q, b).unwrap();
+            let layout = Layout {
+                r: 2,
+                m: 1,
+                decomposed: true,
+                beta_s: 2,
+                masked: false,
+                extra: 0,
+            };
+            let (chunks, len) = (4, 3);
+            for delta in [least, least + 1] {
+                let mut message: Vec<Vec<Poly>> = (0..chunks)
+                    .map(|i| polys(&format!("fold/{b}/{delta}/{i}"), len, d))
+                    .collect();
+                message[0][0].0[0] = Q - 1;
+                message[1][2].0[d - 1] = 0;
+                message[2][1].0[3] = (Q - 1) / 2;
+                message[3][0].0[1] = Q.div_ceil(2);
+                let sparse: Vec<Sparse> = (0..chunks)
+                    .map(|i| {
+                        let mut c = vec![0i64; d];
+                        for (t, x) in [1, -1, 2, -3, 1].into_iter().enumerate() {
+                            c[(3 * i + 5 * t) % d] = x;
+                        }
+                        c[d - 1] = -1;
+                        ring.sparse(&c).unwrap()
+                    })
+                    .collect();
+                let want = fold_chunks(&ctx, &sparse, len * delta, |i| {
+                    Committed::digits(&ctx, &layout, delta, &message[i])
+                })
+                .unwrap();
+                let got = fold_message_digits(&ctx, delta, &sparse, MessageView::Held(&message))
+                    .unwrap()
+                    .expect("the sums fit i64");
+                assert_eq!(got, want, "b {b} delta {delta}");
+                // Both widths of accumulators, whichever the bound chose above.
+                for got in [
+                    fold_message_digits_i32(&ctx, delta, &sparse, MessageView::Held(&message), len)
+                        .unwrap(),
+                    fold_message_digits_i64(&ctx, delta, &sparse, MessageView::Held(&message), len)
+                        .unwrap(),
+                ] {
+                    assert_eq!(got, want, "b {b} delta {delta}, both widths");
+                }
+                assert_eq!(
+                    fold_message(&ctx, &layout, delta, &sparse, MessageView::Held(&message))
+                        .unwrap(),
+                    want
+                );
+            }
+            assert!(
+                fold_message_digits(&ctx, least, &[], MessageView::Held(&[vec![ring.zero()]]))
+                    .is_err()
+            );
+        }
     }
 }

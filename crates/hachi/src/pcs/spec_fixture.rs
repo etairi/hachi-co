@@ -12,7 +12,7 @@
 //! must be redone.
 
 use super::*;
-use crate::iteration::{self, MaskedLevel};
+use crate::iteration::{self, MaskedLevel, MessageView};
 use crate::params::IterParams;
 
 const K: usize = 4;
@@ -172,7 +172,8 @@ fn common(
     o.put("s", list(&digits, |s| polys(s)));
     o.put("rho", list(&state.committed.r, |r| polys(r)));
     o.put("t", list(&state.committed.t, |t| polys(t)));
-    o.put("t_hat", polys(&state.committed.t_hat));
+    let t_hat = &state.committed.t_hat;
+    o.put("t_hat", polys(&t_hat.polys(ctx.ring.zq(), 0..t_hat.len())));
     o.put("u", polys(&state.committed.u));
     o.put("A", matrix(&level.a_mat));
     o.put("A1p", matrix(&level.a_rand));
@@ -208,7 +209,10 @@ fn multilinear() -> String {
     // Step 1, as the prover runs it.
     let (b, a, v) = pcs.ring_weights(&state.committed.layout, &point).unwrap();
     let mut fs = pcs.statement(&CONTEXT, 3, vars, &state.committed.u, &point, &value);
-    let (mask_eval, claim) = pcs.masked_claim(&state, b, a, &v, &value, &mut fs).unwrap();
+    let held = MessageView::Held(&state.committed.message);
+    let (mask_eval, claim) = pcs
+        .masked_claim(&state, held, b, a, &v, &value, &mut fs)
+        .unwrap();
     assert_eq!(Some(mask_eval), proof.mask_eval);
     assert_eq!(claim.target, proof.ring_value);
     let x_star = pcs.ctx().sub.extract(claim.a.last().unwrap()).unwrap();
@@ -244,7 +248,15 @@ fn vector() -> String {
     let one = ring.monomial(0);
     let mut fs = pcs.statement(&CONTEXT, 2, len, &state.committed.u, &weights, &value);
     let (mask_eval, claim) = pcs
-        .masked_claim(&state, vec![one.clone()], a, &one, &value, &mut fs)
+        .masked_claim(
+            &state,
+            MessageView::Held(&state.committed.message),
+            vec![one.clone()],
+            a,
+            &one,
+            &value,
+            &mut fs,
+        )
         .unwrap();
     assert_eq!(Some(mask_eval), proof.mask_eval);
     assert_eq!(claim.target, proof.ring_value);
