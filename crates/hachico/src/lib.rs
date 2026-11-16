@@ -64,8 +64,8 @@
 //!   evaluations for a base PCS with evaluation hiding (`t-hiding.tex`:19, 297). `ClearPcs`
 //!   reveals the polynomials themselves. [`HachiBase`] with masks commits and opens all three
 //!   polynomials of each prover as Appendix A.2 of the draft specifies. That appendix proves
-//!   hiding and evaluation hiding for this scheme, and its Corollary 17 supplies the hypothesis
-//!   of the theorem. The code is tested, not proven, to follow it, and the parameters are
+//!   hiding and evaluation hiding for this scheme, and its Corollary 19 (`cor:hachi-base`)
+//!   supplies the hypothesis of the theorem. The code is tested, not proven, to follow it, and the parameters are
 //!   estimates.
 //!
 //! # Fiat-Shamir

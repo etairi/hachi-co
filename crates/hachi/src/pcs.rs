@@ -97,22 +97,21 @@
 //! **Encodings** ([`HachiPcs::commitment_to_words`], [`HachiPcs::proof_to_words`]). A header of
 //! plain 64-bit words, then fields packed least significant bit first into 64-bit words, the
 //! last word padded with zero bits. A residue takes $\lceil \log_2 q \rceil$ bits. After at
-//! least one iteration the final witness is a table of digits of base $b$ (its range was proved
-//! by the last iteration's sumcheck), sent as $\psi^{-1}$ of its ring elements, each digit as its
-//! index in the balanced digit set of [`crate::sumcheck`] (a deviation from the appendix's set,
-//! noted there): $\lceil \log_2 b \rceil$ bits. Without iterations the final witness
-//! is the input, sent as residues. The decoders know the parameters, so a header holds only
+//! least one iteration the final witness is the next witness $\tilde w$ of the last iteration,
+//! its $2^L$ digits of base $b$ in the order of the table (their range was proved by that
+//! iteration's sumcheck), each sent as its index in the balanced digit set of
+//! [`crate::sumcheck`] (a deviation from the appendix's set, noted there): $\lceil \log_2 b
+//! \rceil$ bits. Without iterations the final witness is the input's message, sent as residues. The decoders know the parameters, so a header holds only
 //! what they do not fix:
 //! - commitment: `[VERSION]`, then the $n_B d$ coefficients of $\mathbf u$;
 //! - proof: `[VERSION, P, B, k, L_1, …, L_k, N]` for $P$ partial evaluations and $B$ rounds of
 //!   the input batching sumcheck ($K - 1$ and $\ell - \kappa$ for a multilinear opening, 0 and 0
-//!   for an inner product), $k$ iterations of $L_i$ sumcheck rounds and a final message of $N$
-//!   ring elements. Then the input reduction's partial evaluations, its batching rounds (2 field
-//!   elements each) and $f'(\mathbf r)$ (if $B > 0$); $Y$; per iteration $\mathbf v$,
-//!   $\mathbf u'$, the rounds ($b + 2$ and 3 field elements each), $y'$, the $K - 1$ partial
-//!   evaluations, the $L_i - \kappa$ batching rounds (2 field elements each), the packed value
-//!   $\hat w(\mathbf r)$ and $p'$; and the final message. The per-iteration batching-round count
-//!   is not in the header: it is $L_i - \kappa$. With hiding the header ends with a word $M$: bit 0
+//!   for an inner product), $k$ iterations of $L_i$ sumcheck rounds and a final witness of $N$
+//!   entries: ring elements without iterations, digits after them. Then the input reduction's
+//!   partial evaluations, its batching rounds (2 field elements each) and $f'(\mathbf r)$ (if $B >
+//!   0$); $Y$; per iteration $\mathbf v$, $\mathbf u'$, the rounds ($b + 2$ and 3 field elements
+//!   each), $y'$ and, except after the last iteration, $p'$; and the final witness. With hiding
+//!   the header ends with a word $M$: bit 0
 //!   is set if the proof carries $y_{\mathfrak m}$, which then comes just before $Y$, and bit 1 if
 //!   it is a merged opening, whose vectors' two masks' values follow $y_{\mathfrak m}$ and whose two
 //!   more ring values follow $Y$. So $M$ is 0, 1 or 3. Without hiding the encodings are those of
@@ -123,16 +122,17 @@
 //! parameters imply. The verifier checks the counts of a header: $B$ against $\ell - \kappa$, the
 //! others against the schedule.
 
-use crate::commit::{Committed, Ctx, commit, commit_source};
+use crate::commit::{Committed, Ctx, commit, commit_source, commit_table};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::iteration::{
-    self, Claim, IterationProof, MessageView, OwnedSource, Witness, check_exts, check_polys,
-    commitment_randomness, evaluate_claim,
+    self, Claim, IterationProof, MessageView, OwnedSource, Reduced, Witness, check_exts,
+    check_polys, commitment_randomness, evaluate_claim, table_eval,
 };
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
 use crate::partials::{self, RoundValues};
 use crate::sumcheck::RoundMessage;
+use crate::table::{DigitTable, ResidueTable};
 use crate::{Error, Result};
 use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
@@ -142,8 +142,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The version of the encodings ([`HachiPcs::commitment_to_words`],
-/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 7 since the masks' width uses
-/// the digit bound $\lceil b/2 \rceil$ (Setup item 2(e), [`crate::params`]), which changes
+/// [`HachiPcs::proof_to_words`]), also absorbed with the statement: 8 since every iteration
+/// commits its next witness as Section 3.1 commits a polynomial over the field (`hachi-pcs.tex`,
+/// Appendix A): $d/K$ digits per ring element, no partial evaluations and no batching sumcheck per
+/// iteration, and no reduction after the last one, whose table is the final witness, sent as its
+/// digits. Version 7 packed $K$ digits into each element of the field (Section 4.5), bound the
+/// partial evaluations by ring-switching after every iteration, and since then the masks' width
+/// uses the digit bound $\lceil b/2 \rceil$ (Setup item 2(e), [`crate::params`]), which changes
 /// $\mathfrak s$, $\beta^{(0)}$ and with them $\tau^{(0)}$ and the shape of a masked proof for the same
 /// choices. Version 6 masked the openings of vectors as well, with the width from $b$. Version 5
 /// masked the first iteration of polynomials over the field only, with a masks' value in place of a
@@ -154,7 +159,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// evaluations. Version 2 had no such sumcheck. It packed the values and
 /// chose the schedule that minimises the proof's size (version 1 had a 64-bit word per value and
 /// stopped at the first iteration that did not shrink the witness).
-pub const VERSION: u64 = 7;
+pub const VERSION: u64 = 8;
 
 /// A commitment $\mathbf u \in \mathcal R_q^{n_B}$.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,13 +323,23 @@ pub struct Proof<const K: usize> {
     pub ring_value: Poly,
     /// The iterations.
     pub iterations: Vec<IterationProof<K>>,
-    /// The final witness's message, chunk after chunk.
-    pub final_message: Vec<Poly>,
+    /// The final witness ([`FinalWitness`]).
+    pub final_witness: FinalWitness,
     /// With a merged opening ([`HachiPcs::prove_merged`]), $y_{\mathfrak m}$ of the two vectors, in
     /// order, and empty otherwise.
     pub blinder_mask_evals: Vec<Ext<K>>,
     /// With a merged opening, $Y^*$ of the two vectors, in order, and empty otherwise.
     pub blinder_ring_values: Vec<Poly>,
+}
+
+/// What the final step of an opening sends (module documentation, "Encodings").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FinalWitness {
+    /// Without iterations: the committed witness's message, chunk after chunk.
+    Message(Vec<Poly>),
+    /// After the iterations: the next witness $\tilde w$ of the last one, its digits on the
+    /// hypercube in the clear (`hachi-pcs.tex`, step 3 of `Eval`).
+    Digits(DigitTable),
 }
 
 /// What a proof carries ahead of its iterations besides $Y$, by the kind of opening; the choice
@@ -547,10 +562,10 @@ impl<const K: usize> HachiPcs<K> {
     fn schedule(&self, first: Layout, reduction: Reduction) -> Result<Schedule> {
         let (c, q) = (&self.ctx.choices, self.ctx.q);
         if let Some(n) = c.fixed_iterations {
-            return Schedule::fixed(c, q, first, n);
+            return Schedule::fixed(c, q, K, first, n);
         }
         let mut best: Option<(usize, Schedule)> = None;
-        for schedule in Schedule::candidates(c, q, first) {
+        for schedule in Schedule::candidates(c, q, K, first) {
             let words = self.proof_words(&schedule, reduction)?;
             if best.as_ref().is_none_or(|(least, _)| words < *least) {
                 best = Some((words, schedule));
@@ -616,34 +631,36 @@ impl<const K: usize> HachiPcs<K> {
     /// iterations, one more with hiding), then $\lceil \log_2 q \rceil$ bits per residue: for a
     /// multilinear opening the $K - 1$ partial evaluations ($K$ residues each), the $\ell -
     /// \kappa$ batching rounds ($2K$ each) and $f'(\mathbf r)$ ($K$), for a masked opening
-    /// $y_{\mathfrak m}$ ($K$), $Y$ ($d$), per iteration
-    /// $\mathbf v$ ($n_D d$), $\mathbf u'$ ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3
-    /// field elements), $y'$ ($K$), the partial evaluations ($K(K - 1)$), the $L - \kappa$
-    /// batching rounds ($2K$ each), $\hat w(\mathbf r)$ ($K$) and $p'$ ($d$); the final
-    /// message, $2^{r+m} d$ residues without iterations, else as many digits of
-    /// $\lceil \log_2 b \rceil$ bits.
+    /// $y_{\mathfrak m}$ ($K$), $Y$ ($d$), per iteration $\mathbf v$ ($n_D d$), $\mathbf u'$
+    /// ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field elements), $y'$ ($K$) and, except
+    /// after the last iteration, $p'$ ($d$); the final witness, $2^{r+m} d$ residues without
+    /// iterations, else the $2^{r+m} d/K = 2^L$ digits of the last table, of $\lceil \log_2 b
+    /// \rceil$ bits each.
     ///
     /// # Errors
     /// [`Error::Parameter`] if the count of the reduction's residues overflows.
     fn proof_words(&self, schedule: &Schedule, reduction: Reduction) -> Result<usize> {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
-        let kappa = self.ctx.kappa();
         let mut residues = reduction
             .residues(K, d)
             .ok_or_else(|| Error::Parameter("the size of the proof overflows".into()))?;
-        for it in &schedule.iterations {
-            // Per iteration: v, u', the L sumcheck rounds, y', the K - 1 partial evaluations,
-            // p', then the L - kappa batching rounds (2K each) and the packed evaluation (K).
-            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K + K * (K - 1) + d;
-            residues += (it.table_vars - kappa) * 2 * K + K;
+        let count = schedule.iterations.len();
+        for (index, it) in schedule.iterations.iter().enumerate() {
+            // Per iteration: v, u', the L sumcheck rounds and y', then p' except after the last.
+            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K;
+            if index + 1 < count {
+                residues += d;
+            }
         }
         let last = schedule.final_layout;
-        let entries = last.chunks() * last.chunk_len() * d;
-        let entry_bits = if schedule.iterations.is_empty() {
-            self.residue_bits()
+        let (entries, entry_bits) = if count == 0 {
+            (last.chunks() * last.chunk_len() * d, self.residue_bits())
         } else {
-            self.digit_bits()
+            (
+                last.chunks() * last.chunk_len() * self.ctx.d_over_k(),
+                self.digit_bits(),
+            )
         };
         let bits = residues * self.residue_bits() + entries * entry_bits;
         let header = 5 + schedule.iterations.len() + usize::from(self.ctx.hiding().is_some());
@@ -1389,7 +1406,7 @@ impl<const K: usize> HachiPcs<K> {
 
     /// Runs the iterations and the final step for the prover; `reduction` is what the proof
     /// carries ahead of them (it enters the choice of the schedule). Returns the iterations and
-    /// the final message.
+    /// the final witness.
     ///
     /// The witness of each later level is owned here and handed to its iteration, which frees its
     /// message after step 2; so is the first one when `committed` is owned ([`Witness`]).
@@ -1401,7 +1418,7 @@ impl<const K: usize> HachiPcs<K> {
         claim: Claim,
         fs: &mut Fs,
         seed: &[u8; 32],
-    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
+    ) -> Result<(Vec<IterationProof<K>>, FinalWitness)> {
         self.prove_rest_with(layout, reduction, committed, claim, None, fs, seed)
     }
 
@@ -1417,17 +1434,19 @@ impl<const K: usize> HachiPcs<K> {
         mut first_w: Option<Vec<Poly>>,
         fs: &mut Fs,
         seed: &[u8; 32],
-    ) -> Result<(Vec<IterationProof<K>>, Vec<Poly>)> {
+    ) -> Result<(Vec<IterationProof<K>>, FinalWitness)> {
         let schedule = self.schedule(layout, reduction)?;
         let first: Witness<'w> = committed.into();
         // The witness of each later iteration is sourced from the previous one's table
         // (`iteration::Next`), which it reads in its steps 1 and 2 and then drops, instead of its
-        // message packed whole; the last iteration packs its next message, which is sent.
+        // message packed whole. The last iteration's table is the final witness (step 3).
         let mut current: Witness<'_> = first;
         let mut claim = claim;
-        let last = schedule.iterations.len().saturating_sub(1);
-        let mut proofs = Vec::with_capacity(schedule.iterations.len());
+        let count = schedule.iterations.len();
+        let mut proofs = Vec::with_capacity(count);
+        let protocol = |what: &str| Error::Protocol(what.into());
         for (index, params) in schedule.iterations.iter().enumerate() {
+            let last = index + 1 == count;
             let (proof, next, next_claim) = iteration::prove_next(
                 &self.ctx,
                 index,
@@ -1437,13 +1456,23 @@ impl<const K: usize> HachiPcs<K> {
                 first_w.take(),
                 fs,
                 seed,
-                index == last,
+                last,
             )?;
             proofs.push(proof);
+            if last {
+                let table = next
+                    .into_table()
+                    .ok_or_else(|| protocol("the last iteration keeps its table"))?;
+                return Ok((proofs, FinalWitness::Digits(table)));
+            }
             current = next.into_witness(&self.ctx)?;
-            claim = next_claim;
+            claim =
+                next_claim.ok_or_else(|| protocol("an iteration before the last has a claim"))?;
         }
-        Ok((proofs, current.committed().message.concat()))
+        Ok((
+            proofs,
+            FinalWitness::Message(current.committed().message.concat()),
+        ))
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
@@ -1499,7 +1528,7 @@ impl<const K: usize> HachiPcs<K> {
         let claim = self.ring_claim(state, &r, &at_r)?;
         let ring_value = claim.target.clone();
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let (iterations, final_message) = self.prove_rest(
+        let (iterations, final_witness) = self.prove_rest(
             state.committed.layout,
             self.multilinear_reduction(*vars),
             &state.committed,
@@ -1516,7 +1545,7 @@ impl<const K: usize> HachiPcs<K> {
                 mask_eval: None,
                 ring_value,
                 iterations,
-                final_message,
+                final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
             },
@@ -1645,7 +1674,7 @@ impl<const K: usize> HachiPcs<K> {
                 ));
             }
         };
-        let (iterations, final_message) = self.prove_rest_with(
+        let (iterations, final_witness) = self.prove_rest_with(
             layout,
             self.masks_or_direct(),
             committed,
@@ -1663,7 +1692,7 @@ impl<const K: usize> HachiPcs<K> {
                 mask_eval,
                 ring_value,
                 iterations,
-                final_message,
+                final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
             },
@@ -1734,7 +1763,7 @@ impl<const K: usize> HachiPcs<K> {
             (None, Claim { b, a, target: y })
         };
         let ring_value = claim.target.clone();
-        let (iterations, final_message) = self.prove_rest(
+        let (iterations, final_witness) = self.prove_rest(
             layout,
             self.masks_or_direct(),
             &state.committed,
@@ -1751,7 +1780,7 @@ impl<const K: usize> HachiPcs<K> {
                 mask_eval,
                 ring_value,
                 iterations,
-                final_message,
+                final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
             },
@@ -1780,46 +1809,88 @@ impl<const K: usize> HachiPcs<K> {
         }
         let mut u = commitment.to_vec();
         let mut claim = claim;
+        let mut evaluation = None;
+        let count = schedule.iterations.len();
         for (index, (params, it)) in schedule
             .iterations
             .iter()
             .zip(&proof.iterations)
             .enumerate()
         {
-            claim = iteration::verify(ctx, index, params, &u, &claim, it, fs)?;
+            match iteration::verify(ctx, index, params, &u, &claim, it, index + 1 == count, fs)? {
+                Reduced::Claim(next) => claim = next,
+                Reduced::Evaluation { point, value } => evaluation = Some((point, value)),
+            }
             u.clone_from(&it.next_commitment);
         }
         let last = schedule.final_layout;
-        let count = last.chunks() * last.chunk_len();
-        check_polys(ctx, "final message", &proof.final_message, count)?;
-        if !last.decomposed {
-            for p in &proof.final_message {
-                if ctx.ring.inf_norm(p)? > last.beta_s {
-                    return Err(VerifyError::Check("the final witness is not short".into()));
+        let opens = |recomputed: &Committed| -> core::result::Result<(), VerifyError> {
+            if recomputed.u != u {
+                return Err(VerifyError::Check(
+                    "the final witness does not open the commitment".into(),
+                ));
+            }
+            Ok(())
+        };
+        match (&proof.final_witness, evaluation) {
+            (FinalWitness::Message(final_message), None) => {
+                check_polys(
+                    ctx,
+                    "final message",
+                    final_message,
+                    last.chunks() * last.chunk_len(),
+                )?;
+                if !last.decomposed {
+                    for p in final_message {
+                        if ctx.ring.inf_norm(p)? > last.beta_s {
+                            return Err(VerifyError::Check(
+                                "the final witness is not short".into(),
+                            ));
+                        }
+                    }
+                }
+                let message: Vec<Vec<Poly>> = final_message
+                    .chunks_exact(last.chunk_len())
+                    .map(<[Poly]>::to_vec)
+                    .collect();
+                opens(&commit(ctx, count, last, message.clone(), Vec::new())?)?;
+                if evaluate_claim(ctx, &claim.b, &claim.a, &message)? != claim.target {
+                    return Err(VerifyError::Check(
+                        "the final witness does not satisfy the claim".into(),
+                    ));
                 }
             }
-        }
-        let message: Vec<Vec<Poly>> = proof
-            .final_message
-            .chunks_exact(last.chunk_len())
-            .map(<[Poly]>::to_vec)
-            .collect();
-        let recomputed = commit(
-            ctx,
-            schedule.iterations.len(),
-            last,
-            message.clone(),
-            Vec::new(),
-        )?;
-        if recomputed.u != u {
-            return Err(VerifyError::Check(
-                "the final witness does not open the commitment".into(),
-            ));
-        }
-        if evaluate_claim(ctx, &claim.b, &claim.a, &message)? != claim.target {
-            return Err(VerifyError::Check(
-                "the final witness does not satisfy the claim".into(),
-            ));
+            // Step 3: every value lies in the digit set, the commitment recomputed from the table
+            // is the last one received, and the table's value at the point is y'.
+            (FinalWitness::Digits(table), Some((point, value))) => {
+                let entries = last.chunks() * last.chunk_len() * ctx.d_over_k();
+                if table.len() != entries {
+                    return Err(VerifyError::Malformed(format!(
+                        "a final witness of {} digits, {entries} expected",
+                        table.len()
+                    )));
+                }
+                let (zq, (lo, hi)) = (ctx.ring.zq(), digit_range(ctx.choices.b));
+                if (0..table.len()).any(|i| {
+                    let v = i128::from(zq.to_centered(table[i]));
+                    v < lo || v > hi
+                }) {
+                    return Err(VerifyError::Check(
+                        "the final witness is not a table of digits".into(),
+                    ));
+                }
+                opens(&commit_table(ctx, count, last, table)?)?;
+                if table_eval(ctx.field(), table, &point)? != value {
+                    return Err(VerifyError::Check(
+                        "the final witness does not have the last iteration's value".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(VerifyError::Malformed(
+                    "the final witness does not fit the schedule".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -2416,7 +2487,7 @@ impl<const K: usize> HachiPcs<K> {
             .try_into()
             .map_err(|_| Error::Shape("two vectors are expected".into()))?;
         let claim = self.merged_claim(&layout, b, a, &vector_weights, &coin, &lambda, &targets)?;
-        let (iterations, final_message) = self.prove_rest(
+        let (iterations, final_witness) = self.prove_rest(
             layout,
             Reduction::Merged,
             &state.committed,
@@ -2434,7 +2505,7 @@ impl<const K: usize> HachiPcs<K> {
                 mask_eval: Some(mask_evals[0]),
                 ring_value,
                 iterations,
-                final_message,
+                final_witness,
                 blinder_mask_evals: vec![mask_evals[1], mask_evals[2]],
                 blinder_ring_values: vec![r0, r1],
             },
@@ -2657,23 +2728,26 @@ impl<const K: usize> HachiPcs<K> {
         (0..count).map(|_| self.take_ext(r)).collect()
     }
 
-    /// The next ring element of a final witness sent as digits: $d$ indices into the digit set,
-    /// the table that $\psi$ packs into the ring element.
+    /// The final witness after the iterations: `count` digits, each an index into the digit set.
     ///
     /// # Errors
     /// [`Error::Shape`] if the encoding ends or an index is outside the digit set.
-    fn take_digit_poly(&self, r: &mut BitReader<'_>) -> Result<Poly> {
-        let (zq, b) = (self.ctx.ring.zq(), self.ctx.choices.b);
+    fn take_digit_table(&self, r: &mut BitReader<'_>, count: usize) -> Result<DigitTable> {
+        let b = self.ctx.choices.b;
         let (lo, _) = digit_range(b);
-        let mut table = vec![Ext([0u64; K]); self.ctx.d_over_k()];
-        for x in table.iter_mut().flat_map(|e| e.0.iter_mut()) {
-            let index = r.take(self.digit_bits())?;
-            if index >= b {
-                return Err(Error::Shape("a digit index outside the digit set".into()));
-            }
-            *x = zq.from_i128(lo + i128::from(index));
-        }
-        Ok(self.ctx.sub.psi(&table)?)
+        let values = (0..count)
+            .map(|_| {
+                let index = r.take(self.digit_bits())?;
+                if index >= b {
+                    return Err(Error::Shape("a digit index outside the digit set".into()));
+                }
+                i8::try_from(lo + i128::from(index))
+                    .map_err(|_| Error::Shape("a digit beyond a byte".into()))
+            })
+            .collect::<Result<Vec<i8>>>()?;
+        let mut table = DigitTable::zeros(self.ctx.ring.zq(), count);
+        table.set_values(0, &values)?;
+        Ok(table)
     }
 
     /// The encoding of a commitment: `[VERSION]`, then the $n_B d$ coefficients of
@@ -2727,7 +2801,10 @@ impl<const K: usize> HachiPcs<K> {
             proof.iterations.len() as u64,
         ];
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
-        out.push(proof.final_message.len() as u64);
+        out.push(match &proof.final_witness {
+            FinalWitness::Message(message) => message.len(),
+            FinalWitness::Digits(table) => table.len(),
+        } as u64);
         if self.ctx.hiding().is_some() {
             let merged = !proof.blinder_ring_values.is_empty();
             out.push(u64::from(proof.mask_eval.is_some()) | (u64::from(merged) << 1));
@@ -2754,23 +2831,17 @@ impl<const K: usize> HachiPcs<K> {
                 self.put_exts(&mut w, &round.h_alpha);
             }
             self.put_exts(&mut w, core::slice::from_ref(&it.final_eval));
-            self.put_exts(&mut w, &it.partials);
-            for round in &it.batch_rounds {
-                self.put_exts(&mut w, round);
+            if let Some(target) = &it.next_target {
+                self.put_polys(&mut w, core::slice::from_ref(target));
             }
-            self.put_exts(&mut w, core::slice::from_ref(&it.packed_eval));
-            self.put_polys(&mut w, core::slice::from_ref(&it.next_target));
         }
-        if proof.iterations.is_empty() {
-            self.put_polys(&mut w, &proof.final_message);
-        } else {
-            let zq = self.ctx.ring.zq();
-            let (lo, _) = digit_range(self.ctx.choices.b);
-            let blank = vec![Ext([0u64; K]); self.ctx.d_over_k()];
-            for p in &proof.final_message {
-                let table = self.ctx.sub.psi_inv(p).unwrap_or_else(|_| blank.clone());
-                for x in table.iter().flat_map(|e| e.0) {
-                    let index = i128::from(zq.to_centered(x)) - lo;
+        match &proof.final_witness {
+            FinalWitness::Message(message) => self.put_polys(&mut w, message),
+            FinalWitness::Digits(table) => {
+                let zq = self.ctx.ring.zq();
+                let (lo, _) = digit_range(self.ctx.choices.b);
+                for i in 0..table.len() {
+                    let index = i128::from(zq.to_centered(table[i])) - lo;
                     w.push(index as u64, self.digit_bits());
                 }
             }
@@ -2838,31 +2909,29 @@ impl<const K: usize> HachiPcs<K> {
         // The length the header implies, checked before anything is allocated.
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
-        let kappa = self.ctx.kappa();
-        let fixed = (c.n_d + c.n_b) * d + K + K * (K - 1) + d;
+        let fixed = (c.n_d + c.n_b) * d + K;
         let mut residues = reduction.residues(K, d);
-        for l in &round_counts {
-            // Per iteration: l sumcheck rounds + fixed, then l - kappa batching rounds (2K)
-            // and the packed evaluation (K). l < kappa is a malformed header.
+        for (index, l) in round_counts.iter().enumerate() {
+            // Per iteration: l sumcheck rounds and fixed, then p' except after the last.
+            let target = if index + 1 < count { d } else { 0 };
             residues = residues.and_then(|r| {
-                let batch = l.checked_sub(kappa)?;
                 l.checked_mul(round)?
                     .checked_add(fixed)?
-                    .checked_add(batch.checked_mul(2 * K)?)?
-                    .checked_add(K)?
+                    .checked_add(target)?
                     .checked_add(r)
             });
         }
-        let entry_bits = if count == 0 {
-            self.residue_bits()
+        // The final witness: N ring elements of residues without iterations, N digits after them.
+        let (entry, entry_bits) = if count == 0 {
+            (d, self.residue_bits())
         } else {
-            self.digit_bits()
+            (1, self.digit_bits())
         };
         let bits = residues
             .and_then(|r| r.checked_mul(self.residue_bits()))
             .and_then(|b| {
                 final_count
-                    .checked_mul(d)?
+                    .checked_mul(entry)?
                     .checked_mul(entry_bits)?
                     .checked_add(b)
             })
@@ -2891,7 +2960,7 @@ impl<const K: usize> HachiPcs<K> {
         let ring_value = self.take_poly(&mut r)?;
         let blinder_ring_values = self.take_polys(&mut r, merged)?;
         let mut iterations = Vec::with_capacity(count);
-        for l in round_counts {
+        for (index, l) in round_counts.into_iter().enumerate() {
             let v = self.take_polys(&mut r, c.n_d)?;
             let next_commitment = self.take_polys(&mut r, c.n_b)?;
             let rounds = (0..l)
@@ -2903,28 +2972,23 @@ impl<const K: usize> HachiPcs<K> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let final_eval = self.take_ext(&mut r)?;
-            let partials = self.take_exts(&mut r, K - 1)?;
-            // The batching sumcheck: l - kappa rounds of 2 field elements, then the packed value.
-            let batch_rounds = (0..l - kappa)
-                .map(|_| Ok([self.take_ext(&mut r)?, self.take_ext(&mut r)?]))
-                .collect::<Result<Vec<_>>>()?;
+            let next_target = if index + 1 < count {
+                Some(self.take_poly(&mut r)?)
+            } else {
+                None
+            };
             iterations.push(IterationProof {
                 v,
                 next_commitment,
                 rounds,
                 final_eval,
-                partials,
-                batch_rounds,
-                packed_eval: self.take_ext(&mut r)?,
-                next_target: self.take_poly(&mut r)?,
+                next_target,
             });
         }
-        let final_message = if count == 0 {
-            self.take_polys(&mut r, final_count)?
+        let final_witness = if count == 0 {
+            FinalWitness::Message(self.take_polys(&mut r, final_count)?)
         } else {
-            (0..final_count)
-                .map(|_| self.take_digit_poly(&mut r))
-                .collect::<Result<Vec<_>>>()?
+            FinalWitness::Digits(self.take_digit_table(&mut r, final_count)?)
         };
         r.finish()?;
         Ok(Proof {
@@ -2934,7 +2998,7 @@ impl<const K: usize> HachiPcs<K> {
             mask_eval,
             ring_value,
             iterations,
-            final_message,
+            final_witness,
             blinder_mask_evals,
             blinder_ring_values,
         })
@@ -3073,7 +3137,7 @@ mod tests {
                 a,
                 target: ring_value.clone(),
             };
-            let (iterations, final_message) = pcs
+            let (iterations, final_witness) = pcs
                 .prove_rest(
                     committed.layout,
                     pcs.multilinear_reduction(VARS),
@@ -3090,7 +3154,7 @@ mod tests {
                 mask_eval: None,
                 ring_value,
                 iterations,
-                final_message,
+                final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
             }

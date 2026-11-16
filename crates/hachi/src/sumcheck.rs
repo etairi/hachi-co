@@ -2,7 +2,9 @@
 //! Fig. 5-7): over $\mathbf x \in \lbrace 0, 1 \rbrace^L$,
 //! - the range check $F_0(\mathbf x) = \widetilde{eq}(\tau_0, \mathbf x) \cdot P(\tilde w(\mathbf
 //!   x))$ with $P(y) = \prod_{c \in D} (y - c)$ over the digit set $D$ of base $b$, claimed sum
-//!   $0$;
+//!   $0$. It runs over every entry of the table, the zeros that pad it to $2^L$ included, with no
+//!   indicator: the reduction between levels (`hachi-pcs.tex`, `lem:hachi-transition`) relies on
+//!   every entry of the next witness being range-checked;
 //! - the linear check $F_\alpha(\mathbf x) = \tilde w(\mathbf x) \cdot \tilde g(\mathbf x)$, where
 //!   $\tilde g$ is the public multilinear table $g(u \Vert \ell) = m^\ast(u) \alpha^\ell$
 //!   (`crate::relation`), claimed sum $\sum_i \widetilde{eq}(\tau_1, i) y_i(\alpha)$.

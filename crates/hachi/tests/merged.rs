@@ -14,7 +14,8 @@
 //!   merged ones or the other way round.
 //! - the encodings round-trip, every altered word is rejected, and the outputs are pinned.
 
-use hachi::{Error, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
+use hachi::table::ResidueTable;
+use hachi::{Error, FinalWitness, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -90,16 +91,14 @@ fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     residues += K * proof.blinder_mask_evals.len() + d * proof.blinder_ring_values.len();
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
-        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
-        residues += it.batch_rounds.len() * 2 * K + K;
+        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K;
+        residues += d * usize::from(it.next_target.is_some());
     }
-    let entry = if proof.iterations.is_empty() {
-        residue
-    } else {
-        digit
+    let final_bits = match &proof.final_witness {
+        FinalWitness::Message(message) => message.len() * d * residue,
+        FinalWitness::Digits(table) => table.len() * digit,
     };
-    6 + proof.iterations.len()
-        + (residues * residue + proof.final_message.len() * d * entry).div_ceil(64)
+    6 + proof.iterations.len() + (residues * residue + final_bits).div_ceil(64)
 }
 
 /// An honest merged opening.
@@ -427,18 +426,20 @@ fn outputs_are_pinned() {
     // the Gaussian sampler: the commitment held, and the proof changed with its masks. Updated
     // again on 2026-11-02 for the masks' width with ceil(b/2): the smaller masks make the layout
     // of 4 chunks of 4 elements the smallest (8 chunks of 2 before), so the commitment changed,
-    // and version 7 moved the version word.
+    // and version 7 moved the version word. Updated on 2026-11-16 for version 8, Section 3.1 at every level: the commitment changed
+    // only in its version word (with 7 it gives the pin of version 7), and the proof with the
+    // transition between levels.
     let o = Merged::new(Q, masked(1, 1, Some(1)), 8, [33, 9], 60);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
     println!("{commitment} {proof}");
     assert_eq!(
         commitment,
-        "542907cddc6220199330f9e8da2972c14db7bc0baf0c81260b228d9559f1e633"
+        "a718553bf75a6b88f02c4c35b2e98c6993b99d88d572114817b77636fbe173a3"
     );
     assert_eq!(
         proof,
-        "40e1355b579bf4dc8a62f847a31b04d4804f89be74f45240025b8d1488b90fd8"
+        "1fb782baeb8aad004526fa39bc99bd44c30d48a7d1e80eadf2700451dd411503"
     );
 }
 

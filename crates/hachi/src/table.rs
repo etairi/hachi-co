@@ -40,8 +40,8 @@ impl ResidueTable for Vec<u64> {
     }
 }
 
-/// A table of residues as a reader that keeps it holds it (a commitment's message, the
-/// batching sumcheck's first round): residues, or a [`DigitTable`].
+/// A table of residues as a reader that keeps it holds it (a commitment's message): residues,
+/// or a [`DigitTable`].
 #[derive(Clone, Copy, Debug)]
 pub enum TableRef<'a> {
     /// Residues.

@@ -9,23 +9,27 @@
 //!
 //! ## What is implemented
 //!
-//! - **Commitments** ([`HachiPcs::commit_multilinear`], [`HachiPcs::commit_vector`]):
+//! - **Commitments** ([`HachiPcs::commit_multilinear_ext`], [`HachiPcs::commit_vector`],
+//!   [`HachiPcs::commit_multilinear`]):
 //!   - the inner-outer Ajtai commitment of Section 4.1;
-//!   - inputs are multilinear polynomials with coefficients in $\mathbb Z_q$, or vectors over
-//!     $\mathbb F_{q^K}$ (Hachi-Co's blinders);
+//!   - inputs are multilinear polynomials over $\mathbb F_{q^K}$ (Section 3.1, what
+//!     `hachi-pcs.tex` and Hachi-Co commit), vectors over $\mathbb F_{q^K}$ (Hachi-Co's
+//!     blinders), or multilinear polynomials with coefficients in $\mathbb Z_q$;
 //!   - $q$ is any prime $\equiv 5 \pmod 8$ below $2^{63}$, and $\mathbb F_{q^K} =
 //!     \mathcal R_q^H$ (Lemma 5).
 //! - **Openings at points in $\mathbb F_{q^K}$:**
-//!   - multilinear evaluations, reduced to $\mathcal R_q$ by Sections 3.2 and 3.1. A
-//!     ring-switching sumcheck binds the partial evaluations of Section 3.2 to the committed
-//!     polynomial ([`partials`]). This deviates from the paper;
-//!   - inner products with arbitrary public weights, by Theorem 2.
+//!   - multilinear evaluations over $\mathbb F_{q^K}$, reduced to $\mathcal R_q$ by Section 3.1;
+//!   - inner products with arbitrary public weights, by Theorem 2;
+//!   - multilinear evaluations of polynomials over $\mathbb Z_q$ by Sections 3.2 and 3.1, a
+//!     ring-switching sumcheck binding the partial evaluations of Section 3.2 to the committed
+//!     polynomial ([`partials`]). This deviates from the paper, and neither `hachi-pcs.tex` nor
+//!     Hachi-Co uses it.
 //! - **The complete protocol** (Section 4.4):
-//!   - iterations of Sections 4.2-4.3 (fold, ring switching, the range and linear sumchecks),
-//!     each followed by the reduction of Section 4.5. That reduction also binds its partial
-//!     evaluations by a ring-switching sumcheck ([`partials`], [`iteration`]), a deviation from
-//!     Section 4.5;
-//!   - every later witness is committed without re-decomposition;
+//!   - iterations of Sections 4.2-4.3 (fold, ring switching, the range and linear sumchecks);
+//!   - every iteration but the last commits its next witness, a table of digits, as Section 3.1
+//!     commits a polynomial over $\mathbb F_{q^K}$ ($d/K$ digits per ring element, without
+//!     re-decomposition) and reduces its claim by Theorem 2, without partial evaluations
+//!     ([`iteration`], `hachi-pcs.tex`, Appendix A). This deviates from Section 4.5;
 //!   - the last witness is sent in the clear.
 //! - **Fiat-Shamir** on a framed transcript that absorbs the parameters, the commitment, the
 //!   point and the value, starting from a caller-supplied context.
@@ -72,4 +76,4 @@ pub mod table;
 
 pub use error::{Error, Result, VerifyError};
 pub use params::{HachiChoices, Hiding, Layout, Schedule};
-pub use pcs::{Commitment, HachiPcs, Proof, State, VERSION};
+pub use pcs::{Commitment, FinalWitness, HachiPcs, Proof, State, VERSION};

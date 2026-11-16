@@ -10,7 +10,7 @@ use crate::table::{ResidueTable, TableRef};
 use crate::{Error, Result};
 use hachi_co_math::Prepared;
 use hachi_co_math::decompose::{digit_bound, g_inv, g_inv_rows, num_digits};
-use hachi_co_math::{Ext, Fqk, Poly, Ring, Subfield, Zq};
+use hachi_co_math::{Fqk, Poly, Ring, Subfield, Zq};
 use hachi_co_sampling::matrix::expand_columns;
 use hachi_co_sampling::{ShakePrg, uniform};
 use rand::Rng;
@@ -588,23 +588,27 @@ pub fn commit_source<const K: usize>(
     })
 }
 
-/// Ring element of a packed table: $\psi$ of the $d/K$ values of $\mathbb F_{q^K}$ in the $d$
-/// residues `block` (coordinates side by side).
+/// Ring element of a table committed as Section 3.1 commits a polynomial over $\mathbb F_{q^K}$
+/// (`hachi-pcs.tex`, Appendix A, the next witness of an iteration): $\psi$ of the $d/K$ residues
+/// `block`, each the constant of $\mathbb F_{q^K}$ that it is.
 ///
 /// # Errors
-/// [`Error::Shape`] unless `block` has $d$ residues; arithmetic errors.
+/// [`Error::Shape`] unless `block` has $d/K$ residues; arithmetic errors.
 #[cfg(test)]
 pub(crate) fn packed_element<const K: usize>(ctx: &Ctx<K>, block: &[u64]) -> Result<Poly> {
-    if block.len() != ctx.d() {
+    if block.len() != ctx.d_over_k() {
         return Err(Error::Shape(format!(
             "a packed element is {} residues",
-            ctx.d()
+            ctx.d_over_k()
         )));
     }
     packed_element_at(ctx, block, 0)
 }
 
-/// [`packed_element`] of the $d$ residues `table[start .. start + d]`, read by index.
+/// [`packed_element`] of the $d/K$ residues `table[start .. start + d/K]`, read by index. $\psi$
+/// places the constant coordinate of each value directly (`Subfield::psi`): value $j <
+/// d/(2K)$ is coefficient $j$, value $d/(2K) + j$ is coefficient $d/2 + j$, and every other
+/// coefficient is 0. So a table of digits gives coefficients that are single digits.
 ///
 /// # Errors
 /// [`Error::Shape`] unless the table has them; arithmetic errors.
@@ -613,16 +617,19 @@ pub(crate) fn packed_element_at<const K: usize, T: ResidueTable + ?Sized>(
     table: &T,
     start: usize,
 ) -> Result<Poly> {
-    let d = ctx.d();
-    if start.checked_add(d).is_none_or(|end| end > table.len()) {
+    let (d, per) = (ctx.d(), ctx.d_over_k());
+    if start.checked_add(per).is_none_or(|end| end > table.len()) {
         return Err(Error::Shape(format!(
-            "a packed element is {d} residues of the table"
+            "a packed element is {per} residues of the table"
         )));
     }
-    let values: Vec<Ext<K>> = (0..d / K)
-        .map(|j| Ext(core::array::from_fn(|c| table[start + j * K + c])))
-        .collect();
-    Ok(ctx.sub.psi(&values)?)
+    let (zq, half) = (ctx.ring.zq(), per / 2);
+    let mut out = ctx.ring.zero();
+    for j in 0..half {
+        out.0[j] = zq.reduce(table[start + j]);
+        out.0[d / 2 + j] = zq.reduce(table[start + half + j]);
+    }
+    Ok(out)
 }
 
 /// The $\mathbf t_i$, $\hat{\mathbf t}$ and $\mathbf u$ of a commitment ([`Committed`]).
@@ -655,10 +662,10 @@ impl Message<'_> {
         Ok(match self {
             Self::Chunks(message) => Cow::Borrowed(&message[c][range]),
             Self::Table { table, chunk_len } => {
-                let d = ctx.d();
+                let per = ctx.d_over_k();
                 Cow::Owned(
                     range
-                        .map(|e| packed_element_at(ctx, table, (c * chunk_len + e) * d))
+                        .map(|e| packed_element_at(ctx, table, (c * chunk_len + e) * per))
                         .collect::<Result<_>>()?,
                 )
             }
@@ -726,7 +733,7 @@ fn commit_table_in_blocks<const K: usize>(
     let size = layout
         .chunks()
         .checked_mul(layout.chunk_len())
-        .and_then(|n| n.checked_mul(ctx.d()));
+        .and_then(|n| n.checked_mul(ctx.d_over_k()));
     if size != Some(ResidueTable::len(&table)) {
         return Err(Error::Shape(
             "the table does not fit the commitment's layout".into(),
@@ -860,6 +867,7 @@ fn products<const K: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hachi_co_math::Ext;
     use hachi_co_sampling::uniform::uniform_mod_q;
 
     const K: usize = 4;
@@ -1116,13 +1124,32 @@ mod tests {
     }
 
     #[test]
+    fn a_packed_element_is_psi_of_its_residues_as_constants() {
+        // The direct placement against Subfield::psi of the constants (c, 0, ..., 0), and the
+        // inverse giving the constants back.
+        for d in [16usize, 64] {
+            let ctx = Ctx::<K>::new(Q, HachiChoices::toy(d)).unwrap();
+            let block =
+                uniform_mod_q(&mut ShakePrg::new(&[3u8; 32], b"psi", d as u64), Q, d / K).unwrap();
+            let constants: Vec<Ext<K>> = block
+                .iter()
+                .map(|&x| Ext(core::array::from_fn(|c| if c == 0 { x } else { 0 })))
+                .collect();
+            let packed = packed_element(&ctx, &block).unwrap();
+            assert_eq!(packed, ctx.sub.psi(&constants).unwrap());
+            assert_eq!(ctx.sub.psi_inv(&packed).unwrap(), constants);
+            assert!(packed_element(&ctx, &block[1..]).is_err());
+        }
+    }
+
+    #[test]
     fn a_commitment_of_a_table_is_the_commitment_of_its_packed_message() {
-        // A table against its message packed by psi: the same t, t-hat and u, for a decomposed
-        // layout and a short one, in both forms, with blocks of one element, of a few and of
-        // everything. The table form keeps no message and rejects a table of the wrong size and
-        // a masked layout.
+        // A table against its message packed by psi (d/K constants per ring element): the same t,
+        // t-hat and u, for a decomposed layout and a short one, in both forms, with blocks of one
+        // element, of a few and of everything. The table form keeps no message and rejects a table
+        // of the wrong size and a masked layout.
         let ctx = Ctx::<K>::new(Q, HachiChoices::toy(16)).unwrap();
-        let d = ctx.d();
+        let per = ctx.d_over_k();
         for decomposed in [true, false] {
             let layout = Layout {
                 r: 2,
@@ -1132,9 +1159,9 @@ mod tests {
                 masked: false,
                 extra: 0,
             };
-            let n = layout.chunks() * layout.chunk_len() * d;
-            // A short message needs short packed elements: psi of digits in {0, 1, -1} has
-            // coefficients in [-2, 2].
+            let n = layout.chunks() * layout.chunk_len() * per;
+            // A short message needs short packed elements: psi of constants in {0, 1, -1} has
+            // coefficients in [-1, 1].
             let table: Vec<u64> = uniform_mod_q(
                 &mut ShakePrg::new(&[7u8; 32], b"table", u64::from(decomposed)),
                 Q,
@@ -1151,15 +1178,15 @@ mod tests {
             })
             .collect();
             let message: Vec<Vec<Poly>> = table
-                .chunks_exact(layout.chunk_len() * d)
+                .chunks_exact(layout.chunk_len() * per)
                 .map(|chunk| {
                     chunk
-                        .chunks_exact(d)
+                        .chunks_exact(per)
                         .map(|e| packed_element(&ctx, e).unwrap())
                         .collect()
                 })
                 .collect();
-            for bytes in [1, 3 * d * 8, usize::MAX / 2] {
+            for bytes in [1, 3 * ctx.d() * 8, usize::MAX / 2] {
                 for (fused, group) in [(false, 1), (true, 1), (true, 3)] {
                     let want = commit_in_blocks(
                         &ctx,

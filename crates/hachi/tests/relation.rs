@@ -76,7 +76,7 @@ fn check_weights(choices: &HachiChoices) {
                 masked: is_masked,
                 extra: 0,
             };
-            let schedule = Schedule::fixed(choices, Q, layout, 1).unwrap();
+            let schedule = Schedule::fixed(choices, Q, K, layout, 1).unwrap();
             let p = &schedule.iterations[0];
             let (chunks, delta, n_a) = (layout.chunks(), p.delta, p.n_a);
             let width = layout.width(delta);
@@ -168,7 +168,7 @@ fn check_constrained(choices: &HachiChoices) {
         masked: true,
         extra: 0,
     };
-    let schedule = Schedule::fixed(choices, Q, layout, 1).unwrap();
+    let schedule = Schedule::fixed(choices, Q, K, layout, 1).unwrap();
     let p = &schedule.iterations[0];
     let (chunks, delta, n_a) = (layout.chunks(), p.delta, p.n_a);
     let width = layout.width(delta);

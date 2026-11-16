@@ -1,9 +1,11 @@
-//! The partial evaluations of a multilinear opening, and the sumcheck that binds them to the
-//! committed polynomial. This deviates from the paper's Section 3.2.
-//! The same gadget ([`prove_table`], [`verify`]) also binds the partial evaluations of
-//! every iteration's next-claim reduction (`iteration`), where the committed polynomial is the
-//! packed next witness in hypercube form; the two runs use different transcript labels
-//! ([`Labels`]). Below, $f'$ stands for whichever polynomial the caller binds.
+//! The partial evaluations of a multilinear opening of a polynomial over $\mathbb Z_q$
+//! (`HachiPcs::commit_multilinear`), and the sumcheck that binds them to the committed
+//! polynomial. This deviates from the paper's Section 3.2. Neither `hachi-pcs.tex` nor Hachi-Co
+//! uses this opening: both commit polynomials over the field (Section 3.1), and since proof
+//! format 8 the iterations hand their next witnesses on by Section 3.1 too, without partial
+//! evaluations (`iteration`). The gadget takes the polynomial in several forms ([`Packed`]) and
+//! its transcript labels as an argument ([`Labels`]). Below, $f'$ stands for the polynomial the
+//! caller binds.
 //!
 //! **The paper's reduction** (Section 3.2). Write $f \in \mathbb Z_q^{\le 1}\[X_1, \dots,
 //! X_\ell\]$ as $\sum_i \mathrm{mono}\_i(X_1, \dots, X_\kappa) f_i(X_{\kappa+1}, \dots, X_\ell)$

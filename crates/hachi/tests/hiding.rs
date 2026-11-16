@@ -20,7 +20,8 @@
 //! - the automatic schedule is still the smallest among those with an iteration.
 //! - unusable choices are refused, and the outputs are pinned.
 
-use hachi::{Error, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
+use hachi::table::ResidueTable;
+use hachi::{Error, FinalWitness, HachiChoices, HachiPcs, Hiding, Proof, VerifyError};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -100,16 +101,15 @@ fn expected_words(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     residues += K * usize::from(proof.mask_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
-        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
-        // The per-iteration batching sumcheck: its rounds (2K each) and the packed value (K).
-        residues += it.batch_rounds.len() * 2 * K + K;
+        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K;
+        // p', except after the last iteration.
+        residues += d * usize::from(it.next_target.is_some());
     }
-    let entry = if proof.iterations.is_empty() {
-        residue
-    } else {
-        digit
+    let final_bits = match &proof.final_witness {
+        FinalWitness::Message(message) => message.len() * d * residue,
+        FinalWitness::Digits(table) => table.len() * digit,
     };
-    let bits = residues * residue + proof.final_message.len() * d * entry;
+    let bits = residues * residue + final_bits;
     6 + proof.iterations.len() + bits.div_ceil(64)
 }
 
@@ -716,7 +716,9 @@ fn outputs_are_pinned() {
     // 2026-11-02 for the 192-bit tables of the Gaussian sampler: the commitments held, and the
     // proofs changed with their masks. Updated again on 2026-11-02 for the masks' width with
     // ceil(b/2), version 7: the commitments changed only in their version word, and the proofs
-    // with the halved masks and the version.
+    // with the halved masks and the version. Updated on 2026-11-16 for version 8, Section 3.1 at every level: the commitments changed
+    // only in their version word (with 7 they give the pins of version 7), and the proofs with the
+    // transition between levels.
     let o = Opening::new(Q, masked(1, 1, Some(2)), 8, 20);
     let commitment = sha256_hex(&o.pcs.commitment_to_words(&o.com));
     let proof = sha256_hex(&o.pcs.proof_to_words(&o.proof));
@@ -726,19 +728,19 @@ fn outputs_are_pinned() {
     println!("{commitment} {proof} {vector_commitment} {vector_proof}");
     assert_eq!(
         commitment,
-        "fb3ce2514888e71c45d492c90ee26a5d9629e53f85243721efeab18bce2dc25b"
+        "2a9e249a41a69f478679f8d6fa49bada119c76a145944ff199b76aeca5518a8a"
     );
     assert_eq!(
         proof,
-        "5305193c7ba9134adbe616bf5f8e05c59d367039a48c25c415b77d0fe1cdb849"
+        "01219c94f2c57d292c32fb84ed1f5ad45bde600e8b49244eb9b9c772f5f1388c"
     );
     assert_eq!(
         vector_commitment,
-        "abe0782fdaad52492626341c674e7d3e9b2a96bf93de8ad3b810b17bde566b78"
+        "02184317f7191da26f82fe0fffb5daac78d6b3927bf1f3b8ac368cae0ed1e8a3"
     );
     assert_eq!(
         vector_proof,
-        "e2c9ca904861c73cf79664584b1ea98fb8ef11efd7d2cdb6d6d47b2791e20f6f"
+        "0a381d65c2ab7c66a296dbb182c64e6718072a71a0f2ccf6905b3665f62ad39e"
     );
 }
 

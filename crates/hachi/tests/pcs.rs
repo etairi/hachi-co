@@ -8,7 +8,8 @@
 
 use hachi::params::{MAX_ITERATIONS, max_digit};
 use hachi::pcs::ExtSource;
-use hachi::{HachiChoices, HachiPcs, Layout, Proof, Schedule};
+use hachi::table::ResidueTable;
+use hachi::{FinalWitness, HachiChoices, HachiPcs, Layout, Proof, Schedule};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_sampling::uniform::uniform_mod_q;
@@ -801,7 +802,7 @@ fn the_candidates_stop_at_a_repeated_layout() {
     let pcs = HachiPcs::<K>::new(Q, wide.clone()).unwrap();
     let default = HachiPcs::<K>::new(Q, HachiChoices::toy(16)).unwrap();
     for vars in [8usize, 12, 17, 21, 26] {
-        let candidates = Schedule::candidates(&wide, Q, pcs.multilinear_layout(vars).unwrap());
+        let candidates = Schedule::candidates(&wide, Q, K, pcs.multilinear_layout(vars).unwrap());
         assert!(
             candidates.len() < 16,
             "vars {vars}: {} candidates",
@@ -869,8 +870,8 @@ fn unusable_parameters_are_refused() {
         .unwrap()
         .multilinear_layout(12)
         .unwrap();
-    assert!(Schedule::fixed(&toy, Q, first, usize::MAX).is_err());
-    assert!(Schedule::fixed(&toy, Q, first, 16).is_ok());
+    assert!(Schedule::fixed(&toy, Q, K, first, usize::MAX).is_err());
+    assert!(Schedule::fixed(&toy, Q, K, first, 16).is_ok());
 }
 
 #[test]
@@ -891,13 +892,13 @@ fn iterations_whose_digits_pass_half_of_q_are_refused() {
         masked: false,
         extra: 0,
     };
-    assert!(Schedule::fixed(&toy, q, layout(18), 1).is_ok());
-    let err = Schedule::fixed(&toy, q, layout(19), 1)
+    assert!(Schedule::fixed(&toy, q, K, layout(18), 1).is_ok());
+    let err = Schedule::fixed(&toy, q, K, layout(19), 1)
         .unwrap_err()
         .to_string();
     assert!(err.contains("beyond the centred residues"), "{err}");
     assert_eq!(
-        Schedule::candidates(&toy, q, layout(19)).len(),
+        Schedule::candidates(&toy, q, K, layout(19)).len(),
         1,
         "only the schedule without iterations"
     );
@@ -983,17 +984,15 @@ fn stream_bits(pcs: &HachiPcs<K>, proof: &Proof<K>) -> usize {
     residues += 2 * K * proof.batch_rounds.len() + K * usize::from(proof.batch_eval.is_some());
     for it in &proof.iterations {
         residues += (it.v.len() + it.next_commitment.len()) * d;
-        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K + K * it.partials.len() + d;
-        // The per-iteration batching sumcheck: its rounds (2K each) and the packed value (K).
-        residues += it.batch_rounds.len() * 2 * K + K;
+        residues += it.rounds.len() * K * (c.b as usize + 2 + 3) + K;
+        // p', except after the last iteration.
+        residues += d * usize::from(it.next_target.is_some());
     }
-    let entries = proof.final_message.len() * d;
-    let entry = if proof.iterations.is_empty() {
-        rho
-    } else {
-        digit
+    let final_bits = match &proof.final_witness {
+        FinalWitness::Message(message) => message.len() * d * rho,
+        FinalWitness::Digits(table) => table.len() * digit,
     };
-    residues * rho + entries * entry
+    residues * rho + final_bits
 }
 
 #[test]
@@ -1052,7 +1051,7 @@ fn malformed_encodings_are_rejected() {
     assert!(proof_err(&[words.clone(), vec![0]].concat()).is_some());
     assert!(com_err(&[com_words.clone(), vec![0]].concat()).is_some());
     // The version.
-    for version in [0u64, 1, 2, 3, 4, 5, 6, 8] {
+    for version in [0u64, 1, 2, 3, 4, 5, 6, 7, 9] {
         assert!(proof_err(&edited(&words, 0, version)).is_some());
         assert!(com_err(&edited(&com_words, 0, version)).is_some());
     }
@@ -1070,7 +1069,7 @@ fn malformed_encodings_are_rejected() {
         "{err}"
     );
     // The counts of the header (batching rounds, iterations, the rounds of the iteration, the
-    // final ring elements), including huge ones: errors, without allocating for them.
+    // final digits), including huge ones: errors, without allocating for them.
     assert_eq!(words[2], vars as u64 - 2, "l - kappa batching rounds");
     for (i, value) in [
         (2, words[2] + 1),
@@ -1091,8 +1090,8 @@ fn malformed_encodings_are_rejected() {
             "header {i} = {value}"
         );
     }
-    // One more final ring element may fit the padding of the last word: the decoder then reads
-    // zero digits, and that count is for the verifier to refuse.
+    // One more final digit may fit the padding of the last word: the decoder then reads a zero
+    // digit index, and that count is for the verifier to refuse.
     if let Ok(longer) = pcs.proof_from_words(&edited(&words, 5, words[5] + 1)) {
         assert!(
             pcs.verify_multilinear(&com, vars, &point, &value, &longer, &[5u8; 32])
@@ -1114,21 +1113,21 @@ fn malformed_encodings_are_rejected() {
     assert!(err.contains("padding"), "{err}");
     // A digit index outside the digit set {-3, ..., 2}: a final table entry of 3 encodes as
     // index 6.
-    let sub = &pcs.ctx().sub;
     let mut bad = proof.clone();
-    let mut table = sub.psi_inv(proof.final_message.last().unwrap()).unwrap();
-    let original = table[0].0[0];
-    table[0].0[0] = 3;
-    *bad.final_message.last_mut().unwrap() = sub.psi(&table).unwrap();
+    let FinalWitness::Digits(table) = &mut bad.final_witness else {
+        panic!("a final witness after iterations is a table of digits");
+    };
+    let original = table[0];
+    table.set_values(0, &[3]).unwrap();
     let err = proof_err(&pcs.proof_to_words(&bad)).unwrap();
     assert!(err.contains("digit index"), "{err}");
     // Another digit inside the digit set decodes, and the verifier rejects it.
-    table[0].0[0] = if original == Q34 - 3 {
-        Q34 - 2
-    } else {
-        Q34 - 3
+    let FinalWitness::Digits(table) = &mut bad.final_witness else {
+        unreachable!("the same proof");
     };
-    *bad.final_message.last_mut().unwrap() = sub.psi(&table).unwrap();
+    table
+        .set_values(0, &[if original == Q34 - 3 { -2 } else { -3 }])
+        .unwrap();
     let decoded = pcs.proof_from_words(&pcs.proof_to_words(&bad)).unwrap();
     assert_eq!(decoded, bad);
     assert!(
@@ -1230,30 +1229,33 @@ fn outputs_are_pinned() {
     // version 5 still held after that change, before the version word moved.
     // Updated on 2026-11-02 for version 7, which changes only the masks' width under hiding: the
     // pins of version 6 still held after that change, before the version word moved.
+    // Updated on 2026-11-16 for version 8, Section 3.1 at every level: the commitments changed
+    // only in their version word (with 7 they give the pins of version 7), and the proofs with the
+    // transition between levels.
     let pinned: [(&str, usize, &str, &str); 4] = [
         (
             "multilinear",
             0,
-            "0cf6f5404eaaf879e548030ee3ce22bbec58ddfc31b92a8d4342a915efbe1324",
-            "7951bc423e81f06d54bf03619012b0b400c02f4a7822cae8e390fc5f5c621d7b",
+            "fcea64a60a5d8d310cf2590cc0da90a3c0f7a0f155e41df0059042b0657049ac",
+            "4cec63be8bd2a6728d8c39b72602ab97924f65bf94eea289f01e483c912b70c4",
         ),
         (
             "multilinear",
             1,
-            "0cf6f5404eaaf879e548030ee3ce22bbec58ddfc31b92a8d4342a915efbe1324",
-            "41ac6a20c91765c1cde138247200d3618bbcd1e5de8d1489d01b843e0fb62a7d",
+            "fcea64a60a5d8d310cf2590cc0da90a3c0f7a0f155e41df0059042b0657049ac",
+            "1a090639c05c964446095057964041425b01ad6ee98d5401fa5c6ccd5fa2d550",
         ),
         (
             "vector",
             0,
-            "9528ca13a665802ac2ca987aa52e76a19000b9d003cfaf8fa7cf6b899bf97d67",
-            "0d1c64e86dd3a25890705a95fa143cbac5e2c2ffbd4efce4a5b4538dcc2cb71f",
+            "c2315fb56e2798cb68e7e36af33b6216f773236edd2e6efb2e3cb1911726e25a",
+            "9d0d3d923f5f4636929d8de26b76e17aa67be883cfd608029c618ab1102617b9",
         ),
         (
             "vector",
             1,
-            "9528ca13a665802ac2ca987aa52e76a19000b9d003cfaf8fa7cf6b899bf97d67",
-            "2ec589a7c5c79872c9257f23e3ee087765b4773203dd0af77e8855c94bc85ebb",
+            "c2315fb56e2798cb68e7e36af33b6216f773236edd2e6efb2e3cb1911726e25a",
+            "e9bcb67b50efd2161c87a2ba6af8958573bec419de18f3e17aa0ff94099a45b0",
         ),
     ];
     let mut failures = Vec::new();

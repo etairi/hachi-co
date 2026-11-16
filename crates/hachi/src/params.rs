@@ -4,11 +4,15 @@
 //! An iteration (paper, Section 4.2-4.3) works on a witness of $2^r$ chunks of $2^m$ message
 //! ring elements $\mathbf f_i$. The committed vectors are $\mathbf s_i = \mathbf G^{-1}(\mathbf f_i)$
 //! when the message is not short (the input polynomial or vector), and $\mathbf s_i = \mathbf f_i$
-//! when it is (every later witness, which is already made of short digits; Section 4.5,
-//! "Avoiding re-decomposition"). The iteration folds the chunks into $\mathbf z = \sum_i c_i
-//! \mathbf s_i$ and reduces the claim to one about its next witness $\tilde w$, a table of
-//! $2^L$ short residues, which the next iteration commits packed into $2^{L-\alpha}$ ring elements.
-//! Iterations repeat (Section 4.4), and the last witness is sent in the clear.
+//! when it is (every later witness, which is already made of short digits). The iteration folds
+//! the chunks into $\mathbf z = \sum_i c_i \mathbf s_i$ and reduces the claim to one about its
+//! next witness $\tilde w$, a table of $2^L$ digits. The next iteration commits $\tilde w$ as a
+//! polynomial over $\mathbb F_{q^K}$ whose coefficients are the digits, as Section 3.1 commits
+//! any polynomial over the field (`hachi-pcs.tex`, the blue parts of Appendix A, instead of the
+//! dense packing of Section 4.5): each digit is a constant of $\mathbb F_{q^K}$, and $\psi$ packs
+//! $d/K$ of them into one ring element, so the next witness has $2^{L-\alpha+\kappa}$ ring
+//! elements whose coefficients are single digits ([`IterParams::next`]). Iterations repeat
+//! (Section 4.4), and the last witness is sent in the clear.
 //!
 //! **How many iterations.** Only the first iteration pays $\delta$ digits per coefficient of the
 //! input; later witnesses are already short, are committed as they are, and shrink much faster.
@@ -121,7 +125,7 @@ pub struct Hiding {
 
 impl Hiding {
     /// $\mathfrak t = \max\lbrace 14, \lceil \sqrt{2 \lambda \ln 2} \rceil \rbrace$ (Setup, item
-    /// 1(f), with the square root rounded up).
+    /// 1(e), with the square root rounded up).
     pub fn t(&self) -> u64 {
         let root = (2.0 * f64::from(self.lambda) * core::f64::consts::LN_2).sqrt();
         14u64.max(root.ceil() as u64)
@@ -203,7 +207,8 @@ impl Layout {
         }
     }
 
-    /// The number of message residues, $2^{r+m} d$: what the final step sends.
+    /// The number of message residues, $2^{r+m} d$: what the final step sends without iterations.
+    /// After them it sends the last table, $2^{r+m} d/K$ digits (`pcs`, "Encodings").
     pub fn words(&self, d: usize) -> usize {
         (1usize << (self.r + self.m)) * d
     }
@@ -242,7 +247,11 @@ pub struct IterParams {
     /// $L$: the next witness $\tilde w$ is a table of $2^L$ residues, $(\mu + n'\delta) d$ padded
     /// to a power of two (the quotient rows are decomposed, Section 4.3).
     pub table_vars: usize,
-    /// The layout in which the next iteration (or the final step) commits $\tilde w$.
+    /// The layout in which the next iteration (or the final step) commits $\tilde w$: $2^{r'+m'}$
+    /// ring elements with $r' + m' = L - \alpha + \kappa$, each $\psi$ of $d/K$ digits as
+    /// constants of $\mathbb F_{q^K}$, so with coefficients of absolute value at most
+    /// $\lceil b/2 \rceil$, the bound of Setup item 2(e) for the levels $j \ge 1$ (the largest digit
+    /// is $\lfloor b/2 \rfloor$ ([`max_digit`]), the same for even $b$).
     pub next: Layout,
 }
 
@@ -316,7 +325,7 @@ fn ceil_sqrt(x: u128) -> u128 {
 /// - $\mathfrak s$ is $\phi \lceil \sqrt N \rceil 2^r \omega \lceil b/2 \rceil$ rounded up to a
 ///   multiple of 16, the widths of [`hachi_co_sampling::gauss::WideGaussian`]. The factor
 ///   $\lceil b/2 \rceil$ is the bound on the digits of $\mathbf s_i$ and $\boldsymbol\varrho_i$
-///   that the proof of Lemma 21 uses, so that $\sqrt N \, 2^r \omega \lceil b/2 \rceil$ bounds
+///   that the proof of Lemma 21 (`lem:hachi-rej`) uses, so that $\sqrt N \, 2^r \omega \lceil b/2 \rceil$ bounds
 ///   $\lVert \mathbf v(\mathbf c) \rVert_2$, as in Setup item 2(e). Versions before 7 used
 ///   $\omega b$, twice as large.
 /// - $\beta^{(0)} = \lceil \mathfrak s \sqrt{2 \ln 2 (\lceil \log_2 2N \rceil + \lambda)} \rceil$,
@@ -391,8 +400,8 @@ fn digits_fit(b: u64, tau: usize, q: u64) -> bool {
     -lo <= half && hi <= half
 }
 
-/// The quantities an iteration derives from its layout.
-fn iteration(choices: &HachiChoices, q: u64, layout: Layout) -> Result<IterParams> {
+/// The quantities an iteration derives from its layout, for the extension degree $K = $ `k`.
+fn iteration(choices: &HachiChoices, q: u64, k: usize, layout: Layout) -> Result<IterParams> {
     let d = choices.d;
     let delta = num_digits(q, choices.b)?;
     let (beta, tau, sigma, mu) = witness_size(choices, delta, &layout)?;
@@ -406,12 +415,13 @@ fn iteration(choices: &HachiChoices, q: u64, layout: Layout) -> Result<IterParam
     let rows = choices.n_d + choices.n_b + 2 + n_a;
     let entries = (mu + rows * delta) * d;
     let table_vars = entries.next_power_of_two().trailing_zeros() as usize;
-    let alpha = d.trailing_zeros() as usize;
-    let packed = table_vars.checked_sub(alpha).ok_or_else(|| {
+    // Section 3.1: d/K digits per ring element, so L - alpha + kappa variables index the ring
+    // elements, and each coefficient of one is a digit or 0.
+    let per_element = (d / k).trailing_zeros() as usize;
+    let elements = table_vars.checked_sub(per_element).ok_or_else(|| {
         Error::Parameter("the next witness is smaller than a ring element".into())
     })?;
-    let next_beta = 2 * max_digit(choices.b);
-    let next = best_layout(choices, q, packed, false, next_beta, false, 0)?;
+    let next = best_layout(choices, q, elements, false, choices.b.div_ceil(2), false, 0)?;
     Ok(IterParams {
         layout,
         n_a,
@@ -465,13 +475,20 @@ pub fn best_layout(
 }
 
 impl Schedule {
-    /// Exactly `n` iterations on a first witness of layout `first`.
+    /// Exactly `n` iterations on a first witness of layout `first`, for the extension degree
+    /// $K = $ `k`.
     ///
     /// # Errors
     /// [`Error::Parameter`] if `n` exceeds [`HachiChoices::max_iterations`], if one of the
     /// iterations cannot be parametrised, or if a masked witness has no iteration, which would
     /// send it in the clear.
-    pub fn fixed(choices: &HachiChoices, q: u64, first: Layout, n: usize) -> Result<Self> {
+    pub fn fixed(
+        choices: &HachiChoices,
+        q: u64,
+        k: usize,
+        first: Layout,
+        n: usize,
+    ) -> Result<Self> {
         if n == 0 && first.masked {
             return Err(Error::Parameter(
                 "a masked witness needs at least one iteration".into(),
@@ -486,7 +503,7 @@ impl Schedule {
         let mut iterations = Vec::new();
         let mut current = first;
         for _ in 0..n {
-            let it = iteration(choices, q, current)?;
+            let it = iteration(choices, q, k, current)?;
             current = it.next;
             iterations.push(it);
         }
@@ -497,13 +514,13 @@ impl Schedule {
     }
 
     /// The schedules the automatic rule chooses from: $0, 1, \dots$
-    /// [`HachiChoices::max_iterations`] iterations on a first witness of layout `first`, each a
-    /// prefix of the next. It contains the schedule without iterations unless `first` is masked.
+    /// [`HachiChoices::max_iterations`] iterations on a first witness of layout `first`, for the
+    /// extension degree $K = $ `k`, each a prefix of the next. It contains the schedule without iterations unless `first` is masked.
     /// The list ends early at the first iteration that cannot be parametrised (for example a fold
     /// bound beyond 64 bits), or whose next witness has the layout of an earlier final witness:
     /// the next layout depends only on the current one, so from there on every schedule has the
     /// final witness of an earlier one and strictly more words, and none can be the smallest.
-    pub fn candidates(choices: &HachiChoices, q: u64, first: Layout) -> Vec<Self> {
+    pub fn candidates(choices: &HachiChoices, q: u64, k: usize, first: Layout) -> Vec<Self> {
         let mut out = Vec::new();
         if !first.masked {
             out.push(Self {
@@ -514,7 +531,7 @@ impl Schedule {
         let mut current = first;
         let mut iterations = Vec::new();
         while iterations.len() < choices.max_iterations {
-            let Ok(it) = iteration(choices, q, current) else {
+            let Ok(it) = iteration(choices, q, k, current) else {
                 break;
             };
             if out.iter().any(|s| s.final_layout == it.next) {

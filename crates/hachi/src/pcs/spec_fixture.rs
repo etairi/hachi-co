@@ -100,14 +100,17 @@ fn level_zero(
 ) -> (IterParams, MaskedLevel) {
     let schedule = pcs.schedule(state.committed.layout, reduction).unwrap();
     let params = schedule.iterations[0];
-    let (first, _, _) = iteration::prove(
+    // The first iteration is also the last when the schedule has one: then it has no reduction.
+    let (first, _, _) = iteration::prove_next(
         pcs.ctx(),
         0,
         &params,
         &state.committed,
         claim,
+        None,
         &mut fs.clone(),
         &OPEN_SEED,
+        schedule.iterations.len() == 1,
     )
     .unwrap();
     assert_eq!(first, proof.iterations[0], "the replay is the opening");

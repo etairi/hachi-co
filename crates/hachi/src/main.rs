@@ -1,5 +1,6 @@
 //! `hachi <l> [d] [iterations]`: commits to a random multilinear polynomial in `l` variables over
-//! $\mathbb Z_q$, $q = 2^{32} - 99$, proves and verifies its evaluation at a random point of
+//! $\mathbb F_{q^4}$, $q = 2^{32} - 99$, as `hachi-pcs.tex` and Hachi's Section 3.1 commit level 0
+//! ([`HachiPcs::commit_multilinear_ext`]), proves and verifies its evaluation at a random point of
 //! $\mathbb F_{q^4}$, and prints the timings and the proof size. `d` is the ring degree (default
 //! 64); `iterations` fixes the number of iterations (default: the automatic rule). The parameters
 //! are the insecure test choices of `HachiChoices::toy`.
@@ -13,6 +14,17 @@ use std::time::Instant;
 
 const Q: u64 = 4294967197;
 const K: usize = 4;
+
+/// `count` elements of $\mathbb F_{q^K}$, uniform coordinate by coordinate.
+fn uniform_exts(prg: &mut ShakePrg, count: usize) -> Vec<Ext<K>> {
+    uniform_mod_q(prg, Q, count * K)
+        .expect("q > 0")
+        .as_chunks::<K>()
+        .0
+        .iter()
+        .map(|c| Ext(*c))
+        .collect()
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -38,14 +50,8 @@ fn main() {
         }
     };
     let mut prg = ShakePrg::new(&[1u8; 32], b"hachi/cli", 0);
-    let coeffs = uniform_mod_q(&mut prg, Q, 1 << vars).expect("q > 0");
-    let point: Vec<Ext<K>> = uniform_mod_q(&mut prg, Q, vars * K)
-        .expect("q > 0")
-        .as_chunks::<K>()
-        .0
-        .iter()
-        .map(|c| Ext(*c))
-        .collect();
+    let coeffs = uniform_exts(&mut prg, 1 << vars);
+    let point = uniform_exts(&mut prg, vars);
     // The prover's seeds (unused by these non-hiding choices), drawn after the inputs.
     let (mut commit_seed, mut open_seed) = ([0u8; 32], [0u8; 32]);
     prg.fill_bytes(&mut commit_seed);
@@ -53,12 +59,12 @@ fn main() {
     let run = || -> Result<(), String> {
         let t = Instant::now();
         let (com, state) = pcs
-            .commit_multilinear(&coeffs, &commit_seed)
+            .commit_multilinear_ext(&coeffs, &commit_seed)
             .map_err(|e| e.to_string())?;
         println!("commit  {:>10.2?}", t.elapsed());
         let t = Instant::now();
         let (value, proof) = pcs
-            .prove_multilinear(&state, &point, &[0u8; 32], &open_seed)
+            .prove_multilinear_ext(&state, &point, &[0u8; 32], &open_seed)
             .map_err(|e| e.to_string())?;
         println!(
             "prove   {:>10.2?}  ({} iterations)",
@@ -66,7 +72,7 @@ fn main() {
             proof.iterations.len()
         );
         let t = Instant::now();
-        pcs.verify_multilinear(&com, vars, &point, &value, &proof, &[0u8; 32])
+        pcs.verify_multilinear_ext(&com, vars, &point, &value, &proof, &[0u8; 32])
             .map_err(|e| e.to_string())?;
         println!("verify  {:>10.2?}", t.elapsed());
         let words = pcs.proof_to_words(&proof).len();
