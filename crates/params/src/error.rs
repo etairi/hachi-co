@@ -38,10 +38,14 @@ pub enum Error {
 
     /// [`Omega::MinForTarget`](crate::Omega::MinForTarget) found no radius up to the search cap
     /// (for the sparse set, none up to $d$).
-    #[error("no challenge radius omega <= {cap} reaches 2^(r+1)/|C| <= 2^-{lambda}")]
+    #[error(
+        "no challenge radius omega <= {cap} reaches 2 L 2^r/|C| <= 2^-{lambda} with L = {rej_iterations}"
+    )]
     NoOmega {
         /// The security target.
         lambda: u32,
+        /// The iterations $L$ of the rejection sampling.
+        rej_iterations: u64,
         /// The largest radius that was tried.
         cap: u64,
     },

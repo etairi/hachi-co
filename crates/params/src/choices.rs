@@ -12,7 +12,8 @@ pub enum Omega {
     /// A fixed radius $\omega \ge 1$.
     Fixed(u64),
     /// The smallest $\omega \ge 1$ whose challenge set reaches the knowledge-error target
-    /// $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$, for the chosen [`ChallengeSet`]
+    /// $2L \cdot 2^r/\lvert C \rvert \le 2^{-\lambda}$ of $\Pi_B$'s extractor, for the chosen
+    /// [`ChallengeSet`] and $L$ the iterations of the rejection sampling
     /// ([`rules::min_omega`](crate::rules::min_omega)).
     MinForTarget,
 }

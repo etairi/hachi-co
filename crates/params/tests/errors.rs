@@ -118,7 +118,8 @@ fn no_omega_for_the_sparse_set() {
         derive(&c),
         Err(Error::NoOmega {
             cap: 16,
-            lambda: 30
+            lambda: 30,
+            ..
         })
     ));
 }

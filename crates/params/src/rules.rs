@@ -222,14 +222,24 @@ pub fn challenge_set_size(set: ChallengeSet, d: u64, omega: u64) -> BigUint {
 }
 
 /// Whether the knowledge error of the folding challenge meets the target:
-/// $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$, i.e. $\lvert C \rvert \ge 2^{r + 1 + \lambda}$.
+/// $2L \cdot 2^r/\lvert C \rvert \le 2^{-\lambda}$, i.e. $\lvert C \rvert \ge L \cdot
+/// 2^{r + 1 + \lambda}$, with $L$ the iterations of the rejection sampling (`rej_iterations`).
 ///
-/// The error is that of coordinate-wise special soundness with $2^r$ coordinates and two
-/// transcripts per coordinate (Hachi, Lemma 4); the draft does not state the condition in its
-/// Setup, so it is the assumption (A3) of the earlier analysis, adopted by `docs/m0-spec.md`.
-pub fn knowledge_error_holds(size: &BigUint, r: u32, lambda: u32) -> bool {
+/// $2L \cdot 2^r/\lvert C \rvert$ bounds the abort of the extractor of $\Pi_B$ (the draft's
+/// `thm:pi-B-knowledge-soundness`, `5_Building_Blocks.tex`) when its forking step stops after
+/// $\lvert C \rvert$ attempts, as the authors decided on 2026-11-16: at most $2L$ expected
+/// attempts per coordinate, Markov's inequality, and a union bound over the $2^r$ coordinates.
+/// Until then the rule was $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$ (two transcripts per
+/// coordinate, Hachi's Lemma 4), without the factor $L$.
+pub fn knowledge_error_holds(size: &BigUint, r: u32, lambda: u32, rej_iterations: u64) -> bool {
     let exponent = u64::from(r) + 1 + u64::from(lambda);
-    *size >= (BigUint::one() << exponent)
+    *size >= (BigUint::from(rej_iterations) << exponent)
+}
+
+/// $\log_2$ of the knowledge error $2L \cdot 2^r/\lvert C \rvert$ of [`knowledge_error_holds`],
+/// for display.
+pub fn log2_knowledge_error(size: &BigUint, r: u32, rej_iterations: u64) -> f64 {
+    1.0 + (rej_iterations as f64).log2() + f64::from(r) - log2_biguint(size)
 }
 
 /// $\log_2 x$ of a positive [`BigUint`], for display (`-inf` for zero).
@@ -250,20 +260,38 @@ pub fn log2_biguint(x: &BigUint) -> f64 {
 /// The largest radius [`min_omega`] tries for the $\ell_1$ ball.
 pub const OMEGA_SEARCH_CAP: u64 = 1 << 16;
 
-/// The smallest radius $\omega \ge 1$ with $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$
-/// ([`Omega::MinForTarget`](crate::Omega::MinForTarget)).
+/// The smallest radius $\omega \ge 1$ with $2L \cdot 2^r/\lvert C \rvert \le 2^{-\lambda}$
+/// ([`Omega::MinForTarget`](crate::Omega::MinForTarget), [`knowledge_error_holds`]), for $L$ =
+/// `rej_iterations`.
 ///
 /// For the $\ell_1$ ball $\lvert C \rvert$ grows strictly with $\omega$; the search stops at
 /// [`OMEGA_SEARCH_CAP`]. For the sparse set it tries $\omega = 1, \ldots, d$. Either way the
 /// failure is [`Error::NoOmega`].
-pub fn min_omega(set: ChallengeSet, d: u64, r: u32, lambda: u32) -> Result<u64> {
+pub fn min_omega(
+    set: ChallengeSet,
+    d: u64,
+    r: u32,
+    lambda: u32,
+    rej_iterations: u64,
+) -> Result<u64> {
     let cap = match set {
         ChallengeSet::L1Ball => OMEGA_SEARCH_CAP,
         ChallengeSet::Sparse => d,
     };
     (1..=cap)
-        .find(|&omega| knowledge_error_holds(&challenge_set_size(set, d, omega), r, lambda))
-        .ok_or(Error::NoOmega { lambda, cap })
+        .find(|&omega| {
+            knowledge_error_holds(
+                &challenge_set_size(set, d, omega),
+                r,
+                lambda,
+                rej_iterations,
+            )
+        })
+        .ok_or(Error::NoOmega {
+            lambda,
+            rej_iterations,
+            cap,
+        })
 }
 
 /// $\log_2 M$ for the rejection constant
@@ -572,43 +600,59 @@ mod tests {
     }
 
     #[test]
-    fn knowledge_error_flips_at_the_exact_power_of_two() {
-        // |C| = 2^(r + 1 + lambda) holds; one less fails.
-        let r = 3;
-        let lambda = 10;
-        let exact = BigUint::one() << (r + 1 + lambda);
-        assert!(knowledge_error_holds(&exact, r, lambda));
-        assert!(!knowledge_error_holds(&(exact - 1u32), r, lambda));
-        // Toy preset: d = 16, omega = 2, |C| = 545, r = 2: 2^9 <= 545 < 2^10.
+    fn knowledge_error_flips_at_the_exact_bound() {
+        // |C| = 2 L 2^(r + lambda) holds; one less fails.
+        let (r, lambda) = (3, 10);
+        for l in [1u64, 3, 16, 115] {
+            let exact = BigUint::from(2 * l) << (r + lambda);
+            assert!(knowledge_error_holds(&exact, r, lambda, l));
+            assert!(!knowledge_error_holds(
+                &(exact.clone() - 1u32),
+                r,
+                lambda,
+                l
+            ));
+            assert!((log2_knowledge_error(&exact, r, l) + f64::from(lambda)).abs() < 1e-9);
+        }
+        // Toy preset: d = 16, omega = 2, |C| = 545, r = 2: 2^9 <= 545 < 2^10, so with L = 1 the
+        // target 6 holds and 7 fails, and L = 2 costs one bit.
         let c = challenge_set_size(ChallengeSet::L1Ball, 16, 2);
         assert_eq!(c, BigUint::from(545u32));
-        assert!(knowledge_error_holds(&c, 2, 6));
-        assert!(!knowledge_error_holds(&c, 2, 7));
+        assert!(knowledge_error_holds(&c, 2, 6, 1));
+        assert!(!knowledge_error_holds(&c, 2, 7, 1));
+        assert!(knowledge_error_holds(&c, 2, 5, 2));
+        assert!(!knowledge_error_holds(&c, 2, 6, 2));
     }
 
     #[test]
     fn min_omega_is_minimal() {
-        for (d, r, lambda) in [
-            (16u64, 2u32, 6u32),
-            (256, 8, 115),
-            (1024, 7, 115),
-            (64, 5, 40),
+        for (d, r, lambda, l) in [
+            (16u64, 2u32, 6u32, 1u64),
+            (256, 8, 115, 115),
+            (1024, 7, 115, 115),
+            (64, 5, 40, 16),
         ] {
             for set in [ChallengeSet::L1Ball, ChallengeSet::Sparse] {
-                let w = min_omega(set, d, r, lambda).unwrap();
-                assert!(knowledge_error_holds(
-                    &challenge_set_size(set, d, w),
-                    r,
-                    lambda
-                ));
-                assert!(
-                    w == 1 || !knowledge_error_holds(&challenge_set_size(set, d, w - 1), r, lambda)
-                );
+                let w = min_omega(set, d, r, lambda, l).unwrap();
+                let holds = |w| knowledge_error_holds(&challenge_set_size(set, d, w), r, lambda, l);
+                assert!(holds(w));
+                assert!(w == 1 || !holds(w - 1));
             }
         }
+        // The values of 2026-11-16 at d = 256 and lambda = 115 with L = lambda: 23 at r = 6 and 24
+        // at r = 10 (21 and 22 under the earlier rule 2^(r+1)/|C|).
+        assert_eq!(
+            min_omega(ChallengeSet::L1Ball, 256, 6, 115, 115).unwrap(),
+            23
+        );
+        assert_eq!(
+            min_omega(ChallengeSet::L1Ball, 256, 10, 115, 115).unwrap(),
+            24
+        );
+        assert_eq!(min_omega(ChallengeSet::L1Ball, 256, 6, 115, 1).unwrap(), 21);
         // The sparse set of degree 16 has at most C(16, 11) 2^11 < 2^23 elements.
         assert!(matches!(
-            min_omega(ChallengeSet::Sparse, 16, 2, 30),
+            min_omega(ChallengeSet::Sparse, 16, 2, 30, 1),
             Err(Error::NoOmega { cap: 16, .. })
         ));
     }

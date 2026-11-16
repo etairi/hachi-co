@@ -35,6 +35,20 @@ preset files, checked out as `lattice-estimator` next to them (copy them next to
    sage msis_thresholds.sage <the moduli of secure100.json> targets=100 ranks=256,512,1024,1280,1536,1792,2048,3072,4096 mlwe=none > thresholds-100.txt
    ```
 
+   On 2026-11-16 the presets were regenerated with Hachi-Co's knowledge-error rule 2L·2^r/|𝒞| ≤ 2^−λ (the forking of
+   Π_B capped at |𝒞|), which moved q at every preset but `secure100-l24-n8-a10`. Of the 24 moduli of the two
+   families, 22 had no rows (8327002901668021, now the modulus of a preset of `secure.json`, and 65326880641120541,
+   that of `secure100-l24-n8-a10`, had them). The rows of the 22 have only the ranks that `choose.py` reads (n_A·d for
+   n_A ≤ 8 at d = 256, n_A ≤ 6 at d = 1024) and the family's target, about 25 minutes per modulus: the 11 of
+   `secure.json` in `thresholds-115-2026-11-16.txt` (115 bits, its own header, as `thresholds.txt` has two columns),
+   and the 11 of `secure100.json` at the end of `thresholds-100.txt`. Three moduli of `secure.json` were run first
+   with the ranks of the command above and both targets, and the file keeps their 115 column.
+
+   ```text
+   sage msis_thresholds.sage <modulus> ranks=256,512,768,1024,1280,1536,1792,2048 mlwe=none targets=115    # d = 256
+   sage msis_thresholds.sage <modulus> ranks=1024,2048,3072,4096,5120,6144 mlwe=none targets=115           # d = 1024
+   ```
+
 2. `mlwe_ranks-<λ>.txt`: the least ν per modulus, ring degree and base at λ bits, for uniform digits as secret and
    error. Some minutes on one core (6 for the 26 presets of `secure.json`). `mlwe_ranks-128.txt` is the 128-bit file
    that the main family used until 2026-11-12:
@@ -57,9 +71,15 @@ preset files, checked out as `lattice-estimator` next to them (copy them next to
    with the fewest proof words, a masked share polynomial first (`choose.py` documents the instances):
 
    ```text
-   python3 scripts/hachi-parameters/choose.py /tmp/layouts-secure.jsonl --target 115 > crates/params/presets/hachi.json
+   python3 scripts/hachi-parameters/choose.py /tmp/layouts-secure.jsonl --target 115 \
+     --thresholds scripts/hachi-parameters/thresholds.txt \
+     --thresholds scripts/hachi-parameters/thresholds-115-2026-11-16.txt > crates/params/presets/hachi.json
    python3 scripts/hachi-parameters/choose.py /tmp/layouts-secure100.jsonl --target 100 \
      --thresholds scripts/hachi-parameters/thresholds-100.txt > crates/params/presets/hachi100.json
    ```
+
+   The files of 2026-11-16 were chosen this way for the regenerated presets, with the layouts of the code that
+   commits every later witness as Section 3.1 commits a polynomial over the field (proof format 8). Every preset of
+   both families has masks.
 
    The test `every_hachi_file_targets_its_family` checks that each file was chosen at its family's λ.

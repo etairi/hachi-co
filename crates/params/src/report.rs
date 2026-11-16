@@ -71,8 +71,8 @@ pub enum ConstraintId {
     /// $\mathbf J^{-1}$ on every $\mathbf t$ with $\lVert \mathbf t \rVert_\infty \le \beta$).
     /// Fatal.
     JInvRepresentable,
-    /// The knowledge error of the folding challenge, $2^{r+1}/\lvert C \rvert \le 2^{-\lambda}$
-    /// ([`rules::knowledge_error_holds`]). Warning.
+    /// The knowledge error of the folding challenge, $2L \cdot 2^r/\lvert C \rvert \le
+    /// 2^{-\lambda}$ ([`rules::knowledge_error_holds`]). Warning.
     KnowledgeError,
     /// $L = \lambda$ iterations of the rejection sampling (the draft's `fig:parameters` since its
     /// commit `1096ea2`), with which the honest provers abort with probability
@@ -125,7 +125,7 @@ impl ConstraintId {
             ConstraintId::QBelow2Pow63 => "q < 2^63",
             ConstraintId::RejectionConstant => "M <= e^(1/n)",
             ConstraintId::JInvRepresentable => "(ceil(b/2) - 1)(b^tau - 1)/(b - 1) >= beta",
-            ConstraintId::KnowledgeError => "2^(r+1)/|C| <= 2^-lambda",
+            ConstraintId::KnowledgeError => "2 L 2^r/|C| <= 2^-lambda",
             ConstraintId::RejIterationsLambda => "L = lambda",
         }
     }
@@ -146,7 +146,9 @@ impl ConstraintId {
             ConstraintId::JInvRepresentable => {
                 "4_preliminaries.tex:100; docs/m0-spec.md (tau rule)"
             }
-            ConstraintId::KnowledgeError => "Hachi Lemma 4; docs/m0-spec.md (Omega::MinForTarget)",
+            ConstraintId::KnowledgeError => {
+                "5_Building_Blocks.tex, thm:pi-B-knowledge-soundness, forking capped at |C|"
+            }
             ConstraintId::RejIterationsLambda => {
                 "6_Collaborative_Hachi.tex, fig:parameters (draft commit 1096ea2)"
             }
@@ -189,7 +191,7 @@ impl Report {
         let q = u128::from(p.q);
         let alpha_minus_kappa = i64::from(c.alpha) - i64::from(c.kappa);
         let size = rules::challenge_set_size(c.challenge_set, p.d, p.omega);
-        let log2_error = f64::from(p.r) + 1.0 - rules::log2_biguint(&size);
+        let log2_error = rules::log2_knowledge_error(&size, p.r, p.rej_iterations);
         let mut constraints = Vec::with_capacity(ConstraintId::ALL.len());
         let mut push = |id: ConstraintId, holds: bool, detail: String| {
             constraints.push(Constraint {
@@ -267,10 +269,11 @@ impl Report {
         );
         push(
             ConstraintId::KnowledgeError,
-            rules::knowledge_error_holds(&size, p.r, c.lambda),
+            rules::knowledge_error_holds(&size, p.r, c.lambda, p.rej_iterations),
             format!(
-                "log2(2^(r+1)/|C|) = {log2_error:.2} ({:?}, d = {}, omega = {}, r = {}), target -{}",
-                c.challenge_set, p.d, p.omega, p.r, c.lambda
+                "log2(2 L 2^r/|C|) = {log2_error:.2} ({:?}, d = {}, omega = {}, r = {}, L = {}), \
+                 target -{}",
+                c.challenge_set, p.d, p.omega, p.r, p.rej_iterations, c.lambda
             ),
         );
         push(

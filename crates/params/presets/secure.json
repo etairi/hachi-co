@@ -7,7 +7,7 @@
   "repository": "https://github.com/malb/lattice-estimator",
   "revision": "53da5982597709ba0fdf94ea37a84d822310fd84"
  },
- "generated": "2026-11-12",
+ "generated": "2026-11-15",
  "presets": [
   {
    "name": "secure-l16-n2-a8",
@@ -30,11 +30,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 34801213478789
+      "Fixed": 41160292688429
      }
     },
-    "omega": 21,
-    "q": 34801213478789,
+    "omega": 23,
+    "q": 41160292688429,
     "d": 256,
     "k": 4,
     "delta": 12,
@@ -42,15 +42,15 @@
     "ell_prime": 11,
     "r": 6,
     "m": 5,
-    "beta1": 5376,
+    "beta1": 5888,
     "big_n": 98304,
-    "gamma": 2113929216,
-    "rejection_m": 1.284025824793259,
-    "log2_rejection_m": 0.3606742187581116,
-    "beta": 4227858432,
+    "gamma": 2315255808,
+    "rejection_m": 1.2840258247998613,
+    "log2_rejection_m": 0.3606742187655298,
+    "beta": 4630511616,
     "tau": 9,
     "beta_bar": 137438953472,
-    "omega_bar": 42,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 31702,
@@ -62,8 +62,8 @@
     "width_a": 384,
     "width_b": 5386,
     "width_d": 22858,
-    "binding_guard": 23089744183296,
-    "msis_bound_a": 11544872091648,
+    "binding_guard": 25288767438848,
+    "msis_bound_a": 12644383719424,
     "msis_bound_b": 30,
     "j_inv_capacity": 32069089143
    },
@@ -72,20 +72,20 @@
     "msis_a": {
      "rank": 1792,
      "columns": 98304,
-     "estimator_columns": 3333,
-     "bound": 11544872091648,
-     "trivial_bits": 1060.6586777391499,
-     "lattice_bits": 115.00118712123687,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3333 of 98304 columns (beta = 290; 35 widths evaluated)"
+     "estimator_columns": 3330,
+     "bound": 12644383719424,
+     "trivial_bits": 1259.3396814510495,
+     "lattice_bits": 115.000488858398,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3330 of 98304 columns (beta = 290; 35 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 1378816,
-     "estimator_columns": 2547,
+     "estimator_columns": 2490,
      "bound": 30,
-     "trivial_bits": 9997.68717006373,
-     "lattice_bits": 509.4029833557371,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2547 of 1378816 columns (beta = 1705; 40 widths evaluated)"
+     "trivial_bits": 10059.668771113233,
+     "lattice_bits": 512.2238985820381,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2490 of 1378816 columns (beta = 1716; 39 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -94,7 +94,7 @@
       -8,
       7
      ],
-     "bits": 145.6175441399331,
+     "bits": 144.62690359107842,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -104,7 +104,7 @@
       -8,
       7
      ],
-     "bits": 145.6175441399331,
+     "bits": 144.62690359107842,
      "attack": "bdd"
     }
    }
@@ -130,40 +130,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 17171531776141
+      "Fixed": 18321384349621
      }
     },
-    "omega": 15,
-    "q": 17171531776141,
+    "omega": 16,
+    "q": 18321384349621,
     "d": 1024,
     "k": 4,
-    "delta": 11,
+    "delta": 12,
     "log_n": 1,
     "ell_prime": 9,
     "r": 5,
     "m": 4,
-    "beta1": 1920,
-    "big_n": 180224,
-    "gamma": 1384120320,
-    "rejection_m": 1.2840256392160172,
-    "log2_rejection_m": 0.3606740102487652,
-    "beta": 2768240640,
+    "beta1": 2048,
+    "big_n": 196608,
+    "gamma": 1610612736,
+    "rejection_m": 1.2840256206786207,
+    "log2_rejection_m": 0.36067398942066836,
+    "beta": 3221225472,
     "tau": 9,
     "beta_bar": 137438953472,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 10244,
+    "mu": 11174,
     "n_prime": 6,
     "ell_dprime": 25,
     "d0": 39,
     "d1": 3,
-    "nu": 10497030,
-    "width_a": 176,
-    "width_b": 710,
-    "width_d": 7948,
-    "binding_guard": 16492674416640,
-    "msis_bound_a": 8246337208320,
+    "nu": 11449350,
+    "width_a": 192,
+    "width_b": 774,
+    "width_d": 8670,
+    "binding_guard": 17592186044416,
+    "msis_bound_a": 8796093022208,
     "msis_bound_b": 30,
     "j_inv_capacity": 32069089143
    },
@@ -171,19 +171,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 180224,
-     "estimator_columns": 3690,
-     "bound": 8246337208320,
-     "trivial_bits": 119.18003762999246,
-     "lattice_bits": 131.95659440539595,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3690 of 180224 columns (beta = 351; 34 widths evaluated)"
+     "columns": 196608,
+     "estimator_columns": 3699,
+     "bound": 8796093022208,
+     "trivial_bits": 120.00000001981309,
+     "lattice_bits": 131.67248555229602,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3699 of 196608 columns (beta = 350; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 727040,
+     "columns": 792576,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 38947.170955053814,
+     "trivial_bits": 39042.92496634559,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -194,7 +194,7 @@
       -8,
       7
      ],
-     "bits": 201.5982553044089,
+     "bits": 201.04120233027376,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -204,7 +204,7 @@
       -8,
       7
      ],
-     "bits": 201.5982553044089,
+     "bits": 201.04120233027376,
      "attack": "bdd"
     }
    }
@@ -230,11 +230,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 34801213478789
+      "Fixed": 41160292688429
      }
     },
-    "omega": 21,
-    "q": 34801213478789,
+    "omega": 23,
+    "q": 41160292688429,
     "d": 256,
     "k": 4,
     "delta": 12,
@@ -242,15 +242,15 @@
     "ell_prime": 12,
     "r": 6,
     "m": 6,
-    "beta1": 2688,
+    "beta1": 2944,
     "big_n": 196608,
-    "gamma": 4227858432,
-    "rejection_m": 1.1331484980773692,
-    "log2_rejection_m": 0.18033693741736778,
-    "beta": 16911433728,
+    "gamma": 4630511616,
+    "rejection_m": 1.1331484980788258,
+    "log2_rejection_m": 0.18033693741922233,
+    "beta": 18522046464,
     "tau": 9,
     "beta_bar": 137438953472,
-    "omega_bar": 42,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 57258,
@@ -262,8 +262,8 @@
     "width_a": 768,
     "width_b": 5396,
     "width_d": 44948,
-    "binding_guard": 23089744183296,
-    "msis_bound_a": 11544872091648,
+    "binding_guard": 25288767438848,
+    "msis_bound_a": 12644383719424,
     "msis_bound_b": 30,
     "j_inv_capacity": 32069089143
    },
@@ -272,20 +272,20 @@
     "msis_a": {
      "rank": 1792,
      "columns": 196608,
-     "estimator_columns": 3333,
-     "bound": 11544872091648,
-     "trivial_bits": 1060.6586777391499,
-     "lattice_bits": 115.00118712123687,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3333 of 196608 columns (beta = 290; 35 widths evaluated)"
+     "estimator_columns": 3330,
+     "bound": 12644383719424,
+     "trivial_bits": 1259.3396814510495,
+     "lattice_bits": 115.000488858398,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3330 of 196608 columns (beta = 290; 35 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 1381376,
-     "estimator_columns": 2547,
+     "estimator_columns": 2490,
      "bound": 30,
-     "trivial_bits": 9997.68717006373,
-     "lattice_bits": 509.4029833557371,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2547 of 1381376 columns (beta = 1705; 40 widths evaluated)"
+     "trivial_bits": 10059.668771113233,
+     "lattice_bits": 512.2238985820381,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2490 of 1381376 columns (beta = 1716; 39 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -294,7 +294,7 @@
       -8,
       7
      ],
-     "bits": 145.6175441399331,
+     "bits": 144.62690359107842,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -304,7 +304,7 @@
       -8,
       7
      ],
-     "bits": 145.6175441399331,
+     "bits": 144.62690359107842,
      "attack": "bdd"
     }
    }
@@ -330,40 +330,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 17171531776141
+      "Fixed": 18321384349621
      }
     },
-    "omega": 15,
-    "q": 17171531776141,
+    "omega": 16,
+    "q": 18321384349621,
     "d": 1024,
     "k": 4,
-    "delta": 11,
+    "delta": 12,
     "log_n": 2,
     "ell_prime": 10,
     "r": 5,
     "m": 5,
-    "beta1": 960,
-    "big_n": 360448,
-    "gamma": 2768240640,
-    "rejection_m": 1.1331484776015799,
-    "log2_rejection_m": 0.18033691134812804,
-    "beta": 11072962560,
+    "beta1": 1024,
+    "big_n": 393216,
+    "gamma": 3221225472,
+    "rejection_m": 1.1331484755584824,
+    "log2_rejection_m": 0.18033690874690966,
+    "beta": 12884901888,
     "tau": 9,
     "beta_bar": 137438953472,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 19430,
+    "mu": 21194,
     "n_prime": 6,
     "ell_dprime": 26,
     "d0": 39,
     "d1": 3,
-    "nu": 19903494,
-    "width_a": 352,
-    "width_b": 716,
-    "width_d": 15544,
-    "binding_guard": 16492674416640,
-    "msis_bound_a": 8246337208320,
+    "nu": 21709830,
+    "width_a": 384,
+    "width_b": 780,
+    "width_d": 16956,
+    "binding_guard": 17592186044416,
+    "msis_bound_a": 8796093022208,
     "msis_bound_b": 30,
     "j_inv_capacity": 32069089143
    },
@@ -371,19 +371,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 360448,
-     "estimator_columns": 3690,
-     "bound": 8246337208320,
-     "trivial_bits": 119.18003762999246,
-     "lattice_bits": 131.95659440539595,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3690 of 360448 columns (beta = 351; 34 widths evaluated)"
+     "columns": 393216,
+     "estimator_columns": 3699,
+     "bound": 8796093022208,
+     "trivial_bits": 120.00000001981309,
+     "lattice_bits": 131.67248555229602,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3699 of 393216 columns (beta = 350; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 733184,
+     "columns": 798720,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 38947.170955053814,
+     "trivial_bits": 39042.92496634559,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -394,7 +394,7 @@
       -8,
       7
      ],
-     "bits": 201.5982553044089,
+     "bits": 201.04120233027376,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -404,7 +404,7 @@
       -8,
       7
      ],
-     "bits": 201.5982553044089,
+     "bits": 201.04120233027376,
      "attack": "bdd"
     }
    }
@@ -430,11 +430,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 403122206336093
+      "Fixed": 421135043797661
      }
     },
-    "omega": 22,
-    "q": 403122206336093,
+    "omega": 23,
+    "q": 421135043797661,
     "d": 256,
     "k": 4,
     "delta": 13,
@@ -442,15 +442,15 @@
     "ell_prime": 15,
     "r": 8,
     "m": 7,
-    "beta1": 22528,
+    "beta1": 23552,
     "big_n": 425984,
-    "gamma": 38386270208,
-    "rejection_m": 1.2840255108791436,
-    "log2_rejection_m": 0.36067386605306173,
-    "beta": 76772540416,
+    "gamma": 40131100672,
+    "rejection_m": 1.2840255108793255,
+    "log2_rejection_m": 0.360673866053266,
+    "beta": 80262201344,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 44,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 73524,
@@ -462,8 +462,8 @@
     "width_a": 1664,
     "width_b": 26634,
     "width_d": 30248,
-    "binding_guard": 387028092977152,
-    "msis_bound_a": 193514046488576,
+    "binding_guard": 404620279021568,
+    "msis_bound_a": 202310139510784,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -472,20 +472,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 425984,
-     "estimator_columns": 3719,
-     "bound": 193514046488576,
-     "trivial_bits": 120.37932496967045,
-     "lattice_bits": 120.66399364453356,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3719 of 425984 columns (beta = 310; 34 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 202310139510784,
+     "trivial_bits": 118.1988934951635,
+     "lattice_bits": 120.39315736102132,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 425984 columns (beta = 309; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 6818304,
-     "estimator_columns": 2679,
+     "estimator_columns": 2693,
      "bound": 30,
-     "trivial_bits": 10902.39315157626,
-     "lattice_bits": 550.6778434642142,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2679 of 6818304 columns (beta = 1852; 43 widths evaluated)"
+     "trivial_bits": 10918.537964021392,
+     "lattice_bits": 551.418546400151,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2693 of 6818304 columns (beta = 1854; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -494,7 +494,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -504,7 +504,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     }
    }
@@ -530,40 +530,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 274744508417461
+      "Fixed": 293142149592181
      }
     },
-    "omega": 15,
-    "q": 274744508417461,
+    "omega": 16,
+    "q": 293142149592181,
     "d": 1024,
     "k": 4,
-    "delta": 12,
+    "delta": 13,
     "log_n": 1,
     "ell_prime": 13,
     "r": 7,
     "m": 6,
-    "beta1": 7680,
-    "big_n": 786432,
-    "gamma": 24159191040,
-    "rejection_m": 1.2840254677036957,
-    "log2_rejection_m": 0.36067381754233874,
-    "beta": 48318382080,
+    "beta1": 8192,
+    "big_n": 851968,
+    "gamma": 27917287424,
+    "rejection_m": 1.284025463779774,
+    "log2_rejection_m": 0.36067381313353025,
+    "beta": 55834574848,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 20582,
+    "mu": 22296,
     "n_prime": 6,
     "ell_dprime": 26,
     "d0": 39,
     "d1": 3,
-    "nu": 21083142,
-    "width_a": 768,
-    "width_b": 3078,
-    "width_d": 9822,
-    "binding_guard": 263882790666240,
-    "msis_bound_a": 131941395333120,
+    "nu": 22838278,
+    "width_a": 832,
+    "width_b": 3334,
+    "width_d": 10640,
+    "binding_guard": 281474976710656,
+    "msis_bound_a": 140737488355328,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -571,19 +571,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 786432,
-     "estimator_columns": 3677,
-     "bound": 131941395333120,
-     "trivial_bits": 119.18003762161052,
-     "lattice_bits": 121.94194690271091,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3677 of 786432 columns (beta = 315; 34 widths evaluated)"
+     "columns": 851968,
+     "estimator_columns": 3697,
+     "bound": 140737488355328,
+     "trivial_bits": 120.00000000228157,
+     "lattice_bits": 121.66094976147455,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3697 of 851968 columns (beta = 314; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 3151872,
+     "columns": 3414016,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 43043.170955049536,
+     "trivial_bits": 43138.92496633675,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -594,7 +594,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -604,7 +604,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     }
    }
@@ -630,11 +630,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 403122206336093
+      "Fixed": 421135043797661
      }
     },
-    "omega": 22,
-    "q": 403122206336093,
+    "omega": 23,
+    "q": 421135043797661,
     "d": 256,
     "k": 4,
     "delta": 13,
@@ -642,15 +642,15 @@
     "ell_prime": 16,
     "r": 8,
     "m": 8,
-    "beta1": 11264,
+    "beta1": 11776,
     "big_n": 851968,
-    "gamma": 76772540416,
-    "rejection_m": 1.1331484634568143,
-    "log2_rejection_m": 0.1803368933393819,
-    "beta": 307090161664,
+    "gamma": 80262201344,
+    "rejection_m": 1.1331484634568545,
+    "log2_rejection_m": 0.18033689333943298,
+    "beta": 321048805376,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 44,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 117094,
@@ -662,8 +662,8 @@
     "width_a": 3328,
     "width_b": 26644,
     "width_d": 57168,
-    "binding_guard": 387028092977152,
-    "msis_bound_a": 193514046488576,
+    "binding_guard": 404620279021568,
+    "msis_bound_a": 202310139510784,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -672,20 +672,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 851968,
-     "estimator_columns": 3719,
-     "bound": 193514046488576,
-     "trivial_bits": 120.37932496967045,
-     "lattice_bits": 120.66399364453356,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3719 of 851968 columns (beta = 310; 34 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 202310139510784,
+     "trivial_bits": 118.1988934951635,
+     "lattice_bits": 120.39315736102132,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 851968 columns (beta = 309; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 6820864,
-     "estimator_columns": 2679,
+     "estimator_columns": 2693,
      "bound": 30,
-     "trivial_bits": 10902.39315157626,
-     "lattice_bits": 550.6778434642142,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2679 of 6820864 columns (beta = 1852; 43 widths evaluated)"
+     "trivial_bits": 10918.537964021392,
+     "lattice_bits": 551.418546400151,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2693 of 6820864 columns (beta = 1854; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -694,7 +694,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -704,7 +704,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     }
    }
@@ -730,40 +730,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 274744508417461
+      "Fixed": 293142149592181
      }
     },
-    "omega": 15,
-    "q": 274744508417461,
+    "omega": 16,
+    "q": 293142149592181,
     "d": 1024,
     "k": 4,
-    "delta": 12,
+    "delta": 13,
     "log_n": 2,
     "ell_prime": 14,
     "r": 7,
     "m": 7,
-    "beta1": 3840,
-    "big_n": 1572864,
-    "gamma": 48318382080,
-    "rejection_m": 1.1331484586937701,
-    "log2_rejection_m": 0.18033688727519845,
-    "beta": 193273528320,
+    "beta1": 4096,
+    "big_n": 1703936,
+    "gamma": 55834574848,
+    "rejection_m": 1.133148458261013,
+    "log2_rejection_m": 0.18033688672422316,
+    "beta": 223338299392,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 36554,
+    "mu": 39598,
     "n_prime": 6,
     "ell_dprime": 27,
     "d0": 39,
     "d1": 3,
-    "nu": 37438470,
-    "width_a": 1536,
-    "width_b": 3084,
-    "width_d": 18108,
-    "binding_guard": 263882790666240,
-    "msis_bound_a": 131941395333120,
+    "nu": 40555526,
+    "width_a": 1664,
+    "width_b": 3340,
+    "width_d": 19616,
+    "binding_guard": 281474976710656,
+    "msis_bound_a": 140737488355328,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -771,19 +771,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 1572864,
-     "estimator_columns": 3677,
-     "bound": 131941395333120,
-     "trivial_bits": 119.18003762161052,
-     "lattice_bits": 121.94194690271091,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3677 of 1572864 columns (beta = 315; 34 widths evaluated)"
+     "columns": 1703936,
+     "estimator_columns": 3697,
+     "bound": 140737488355328,
+     "trivial_bits": 120.00000000228157,
+     "lattice_bits": 121.66094976147455,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3697 of 1703936 columns (beta = 314; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 3158016,
+     "columns": 3420160,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 43043.170955049536,
+     "trivial_bits": 43138.92496633675,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -794,7 +794,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -804,7 +804,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     }
    }
@@ -830,11 +830,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 403122206336093
+      "Fixed": 421135043797661
      }
     },
-    "omega": 22,
-    "q": 403122206336093,
+    "omega": 23,
+    "q": 421135043797661,
     "d": 256,
     "k": 4,
     "delta": 13,
@@ -842,15 +842,15 @@
     "ell_prime": 17,
     "r": 9,
     "m": 8,
-    "beta1": 45056,
+    "beta1": 47104,
     "big_n": 851968,
-    "gamma": 153545080832,
-    "rejection_m": 1.284025463784478,
-    "log2_rejection_m": 0.36067381313881547,
-    "beta": 307090161664,
+    "gamma": 160524402688,
+    "rejection_m": 1.2840254637845232,
+    "log2_rejection_m": 0.3606738131388665,
+    "beta": 321048805376,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 44,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 120116,
@@ -862,8 +862,8 @@
     "width_a": 3328,
     "width_b": 53258,
     "width_d": 33576,
-    "binding_guard": 387028092977152,
-    "msis_bound_a": 193514046488576,
+    "binding_guard": 404620279021568,
+    "msis_bound_a": 202310139510784,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -872,20 +872,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 851968,
-     "estimator_columns": 3719,
-     "bound": 193514046488576,
-     "trivial_bits": 120.37932496967045,
-     "lattice_bits": 120.66399364453356,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3719 of 851968 columns (beta = 310; 34 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 202310139510784,
+     "trivial_bits": 118.1988934951635,
+     "lattice_bits": 120.39315736102132,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 851968 columns (beta = 309; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 13634048,
-     "estimator_columns": 2679,
+     "estimator_columns": 2693,
      "bound": 30,
-     "trivial_bits": 10902.39315157626,
-     "lattice_bits": 550.6778434642142,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2679 of 13634048 columns (beta = 1852; 43 widths evaluated)"
+     "trivial_bits": 10918.537964021392,
+     "lattice_bits": 551.418546400151,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2693 of 13634048 columns (beta = 1854; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -894,7 +894,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -904,7 +904,7 @@
       -8,
       7
      ],
-     "bits": 132.6136169343197,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     }
    }
@@ -930,40 +930,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 274744508417461
+      "Fixed": 293142149592181
      }
     },
-    "omega": 15,
-    "q": 274744508417461,
+    "omega": 16,
+    "q": 293142149592181,
     "d": 1024,
     "k": 4,
-    "delta": 12,
+    "delta": 13,
     "log_n": 1,
     "ell_prime": 15,
     "r": 8,
     "m": 7,
-    "beta1": 15360,
-    "big_n": 1572864,
-    "gamma": 96636764160,
-    "rejection_m": 1.2840254421973765,
-    "log2_rejection_m": 0.3606737888841529,
-    "beta": 193273528320,
+    "beta1": 16384,
+    "big_n": 1703936,
+    "gamma": 111669149696,
+    "rejection_m": 1.2840254402351925,
+    "log2_rejection_m": 0.3606737866794979,
+    "beta": 223338299392,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 32870,
+    "mu": 35608,
     "n_prime": 6,
     "ell_dprime": 27,
     "d0": 39,
     "d1": 3,
-    "nu": 33666054,
-    "width_a": 1536,
-    "width_b": 6150,
-    "width_d": 11358,
-    "binding_guard": 263882790666240,
-    "msis_bound_a": 131941395333120,
+    "nu": 36469766,
+    "width_a": 1664,
+    "width_b": 6662,
+    "width_d": 12304,
+    "binding_guard": 281474976710656,
+    "msis_bound_a": 140737488355328,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -971,19 +971,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 1572864,
-     "estimator_columns": 3677,
-     "bound": 131941395333120,
-     "trivial_bits": 119.18003762161052,
-     "lattice_bits": 121.94194690271091,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3677 of 1572864 columns (beta = 315; 34 widths evaluated)"
+     "columns": 1703936,
+     "estimator_columns": 3697,
+     "bound": 140737488355328,
+     "trivial_bits": 120.00000000228157,
+     "lattice_bits": 121.66094976147455,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3697 of 1703936 columns (beta = 314; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 6297600,
+     "columns": 6821888,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 43043.170955049536,
+     "trivial_bits": 43138.92496633675,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -994,7 +994,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1004,7 +1004,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     }
    }
@@ -1030,11 +1030,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 15395032342003157
+      "Fixed": 16790798540447021
      }
     },
-    "omega": 22,
-    "q": 15395032342003157,
+    "omega": 23,
+    "q": 16790798540447021,
     "d": 256,
     "k": 4,
     "delta": 14,
@@ -1042,15 +1042,15 @@
     "ell_prime": 18,
     "r": 9,
     "m": 9,
-    "beta1": 22528,
+    "beta1": 23552,
     "big_n": 1835008,
-    "gamma": 330712481792,
-    "rejection_m": 1.1331484578909632,
-    "log2_rejection_m": 0.18033688625308558,
-    "beta": 1322849927168,
+    "gamma": 345744867328,
+    "rejection_m": 1.1331484578909725,
+    "log2_rejection_m": 0.18033688625309743,
+    "beta": 1382979469312,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 44,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 201362,
@@ -1062,8 +1062,8 @@
     "width_a": 7168,
     "width_b": 57364,
     "width_d": 65148,
-    "binding_guard": 6192449487634432,
-    "msis_bound_a": 3096224743817216,
+    "binding_guard": 6473924464345088,
+    "msis_bound_a": 3236962232172544,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -1072,20 +1072,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 1835008,
-     "estimator_columns": 3783,
-     "bound": 3096224743817216,
-     "trivial_bits": 2690.8319698356786,
-     "lattice_bits": 115.10227543378042,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3783 of 1835008 columns (beta = 290; 32 widths evaluated)"
+     "estimator_columns": 3788,
+     "bound": 3236962232172544,
+     "trivial_bits": 2815.914815593848,
+     "lattice_bits": 115.1033597819468,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3788 of 1835008 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 14685184,
-     "estimator_columns": 2929,
+     "estimator_columns": 2938,
      "bound": 30,
-     "trivial_bits": 12247.699732184508,
-     "lattice_bits": 612.5247223649486,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2929 of 14685184 columns (beta = 2071; 43 widths evaluated)"
+     "trivial_bits": 12279.752454283727,
+     "lattice_bits": 613.9741808818931,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2938 of 14685184 columns (beta = 2076; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -1094,7 +1094,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.68743054211905,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1104,7 +1104,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.68743054211905,
      "attack": "bdd"
     }
    }
@@ -1124,66 +1124,66 @@
      "challenge_set": "L1Ball",
      "tau_rule": "Tight",
      "rej_iterations": "Lambda",
-     "n_a": 3,
+     "n_a": 2,
      "n_b": 1,
      "n_d": 1,
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 4334287545157813
+      "Fixed": 8327002901668021
      }
     },
-    "omega": 15,
-    "q": 4334287545157813,
+    "omega": 16,
+    "q": 8327002901668021,
     "d": 1024,
     "k": 4,
-    "delta": 13,
+    "delta": 14,
     "log_n": 2,
     "ell_prime": 16,
     "r": 8,
     "m": 8,
-    "beta1": 7680,
-    "big_n": 3407872,
-    "gamma": 209379655680,
-    "rejection_m": 1.1331484556642155,
-    "log2_rejection_m": 0.18033688341804854,
-    "beta": 837518622720,
+    "beta1": 8192,
+    "big_n": 3670016,
+    "gamma": 240518168576,
+    "rejection_m": 1.1331484554787072,
+    "log2_rejection_m": 0.18033688318186436,
+    "beta": 962072674304,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 73866,
-    "n_prime": 7,
+    "mu": 69522,
+    "n_prime": 6,
     "ell_dprime": 28,
-    "d0": 40,
+    "d0": 39,
     "d1": 3,
-    "nu": 75646983,
-    "width_a": 3328,
-    "width_b": 9996,
-    "width_d": 27260,
-    "binding_guard": 4222124650659840,
-    "msis_bound_a": 2111062325329920,
+    "nu": 71197702,
+    "width_a": 3584,
+    "width_b": 7180,
+    "width_d": 22916,
+    "binding_guard": 4503599627370496,
+    "msis_bound_a": 2251799813685248,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
    "security": {
     "lambda": 115,
     "msis_a": {
-     "rank": 3072,
-     "columns": 3407872,
-     "estimator_columns": 5632,
-     "bound": 2111062325329920,
-     "trivial_bits": 116.20053668080237,
-     "lattice_bits": 174.85351381309437,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5632 of 3407872 columns (beta = 503; 35 widths evaluated)"
+     "rank": 2048,
+     "columns": 3670016,
+     "estimator_columns": 3751,
+     "bound": 2251799813685248,
+     "trivial_bits": 1816.0000000000218,
+     "lattice_bits": 115.09531623909136,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3751 of 3670016 columns (beta = 290; 35 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 10235904,
+     "columns": 7352320,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 47118.31444846566,
+     "trivial_bits": 48082.92496633562,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -1194,7 +1194,7 @@
       -8,
       7
      ],
-     "bits": 165.09969856761208,
+     "bits": 161.60746408645906,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1204,7 +1204,7 @@
       -8,
       7
      ],
-     "bits": 165.09969856761208,
+     "bits": 161.60746408645906,
      "attack": "bdd"
     }
    }
@@ -1230,11 +1230,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 15395032342003157
+      "Fixed": 18211211930825437
      }
     },
-    "omega": 22,
-    "q": 15395032342003157,
+    "omega": 24,
+    "q": 18211211930825437,
     "d": 256,
     "k": 4,
     "delta": 14,
@@ -1242,15 +1242,15 @@
     "ell_prime": 19,
     "r": 10,
     "m": 9,
-    "beta1": 90112,
+    "beta1": 98304,
     "big_n": 1835008,
-    "gamma": 661424963584,
-    "rejection_m": 1.2840254385543235,
-    "log2_rejection_m": 0.36067378479092055,
-    "beta": 1322849927168,
+    "gamma": 721554505728,
+    "rejection_m": 1.2840254385543437,
+    "log2_rejection_m": 0.36067378479094325,
+    "beta": 1443109011456,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 44,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 236874,
@@ -1262,8 +1262,8 @@
     "width_a": 7168,
     "width_b": 114698,
     "width_d": 43326,
-    "binding_guard": 6192449487634432,
-    "msis_bound_a": 3096224743817216,
+    "binding_guard": 6755399441055744,
+    "msis_bound_a": 3377699720527872,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -1272,20 +1272,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 1835008,
-     "estimator_columns": 3783,
-     "bound": 3096224743817216,
-     "trivial_bits": 2690.8319698356786,
-     "lattice_bits": 115.10227543378042,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3783 of 1835008 columns (beta = 290; 32 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 3377699720527872,
+     "trivial_bits": 2930.1021743812958,
+     "lattice_bits": 115.10400999985731,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 1835008 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 29362688,
-     "estimator_columns": 2929,
+     "estimator_columns": 2932,
      "bound": 30,
-     "trivial_bits": 12247.699732184508,
-     "lattice_bits": 612.5247223649486,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2929 of 29362688 columns (beta = 2071; 43 widths evaluated)"
+     "trivial_bits": 12309.744413566179,
+     "lattice_bits": 615.4124254164441,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2932 of 29362688 columns (beta = 2081; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -1294,7 +1294,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.4115867643251,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1304,7 +1304,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.4115867643251,
      "attack": "bdd"
     }
    }
@@ -1330,11 +1330,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 8327002901668021
+      "Fixed": 9351599833054789
      }
     },
-    "omega": 16,
-    "q": 8327002901668021,
+    "omega": 17,
+    "q": 9351599833054789,
     "d": 1024,
     "k": 4,
     "delta": 14,
@@ -1342,15 +1342,15 @@
     "ell_prime": 17,
     "r": 9,
     "m": 8,
-    "beta1": 32768,
+    "beta1": 34816,
     "big_n": 3670016,
-    "gamma": 481036337152,
-    "rejection_m": 1.2840254276208196,
-    "log2_rejection_m": 0.3606737725063416,
-    "beta": 962072674304,
+    "gamma": 511101108224,
+    "rejection_m": 1.2840254276208392,
+    "log2_rejection_m": 0.3606737725063636,
+    "beta": 1022202216448,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 70602,
@@ -1362,8 +1362,8 @@
     "width_a": 3584,
     "width_b": 14342,
     "width_d": 16834,
-    "binding_guard": 4503599627370496,
-    "msis_bound_a": 2251799813685248,
+    "binding_guard": 4785074604081152,
+    "msis_bound_a": 2392537302040576,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -1372,18 +1372,18 @@
     "msis_a": {
      "rank": 2048,
      "columns": 3670016,
-     "estimator_columns": 3751,
-     "bound": 2251799813685248,
-     "trivial_bits": 1816.0000000000218,
-     "lattice_bits": 115.09531623909136,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3751 of 3670016 columns (beta = 290; 35 widths evaluated)"
+     "estimator_columns": 3757,
+     "bound": 2392537302040576,
+     "trivial_bits": 1979.743802327467,
+     "lattice_bits": 115.09662364770897,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3757 of 3670016 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 14686208,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 48082.92496633562,
+     "trivial_bits": 48254.35881693968,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -1394,7 +1394,7 @@
       -8,
       7
      ],
-     "bits": 161.60746408645906,
+     "bits": 160.98820480276336,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1404,7 +1404,7 @@
       -8,
       7
      ],
-     "bits": 161.60746408645906,
+     "bits": 160.98820480276336,
      "attack": "bdd"
     }
    }
@@ -1430,11 +1430,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 15395032342003157
+      "Fixed": 18211211930825437
      }
     },
-    "omega": 22,
-    "q": 15395032342003157,
+    "omega": 24,
+    "q": 18211211930825437,
     "d": 256,
     "k": 4,
     "delta": 14,
@@ -1442,15 +1442,15 @@
     "ell_prime": 20,
     "r": 10,
     "m": 10,
-    "beta1": 45056,
+    "beta1": 49152,
     "big_n": 3670016,
-    "gamma": 1322849927168,
-    "rejection_m": 1.1331484554789482,
-    "log2_rejection_m": 0.1803368831821711,
-    "beta": 5291399708672,
+    "gamma": 1443109011456,
+    "rejection_m": 1.1331484554789526,
+    "log2_rejection_m": 0.18033688318217678,
+    "beta": 5772436045824,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 44,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 344722,
@@ -1462,8 +1462,8 @@
     "width_a": 14336,
     "width_b": 114708,
     "width_d": 72316,
-    "binding_guard": 6192449487634432,
-    "msis_bound_a": 3096224743817216,
+    "binding_guard": 6755399441055744,
+    "msis_bound_a": 3377699720527872,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -1472,20 +1472,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 3670016,
-     "estimator_columns": 3783,
-     "bound": 3096224743817216,
-     "trivial_bits": 2690.8319698356786,
-     "lattice_bits": 115.10227543378042,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3783 of 3670016 columns (beta = 290; 32 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 3377699720527872,
+     "trivial_bits": 2930.1021743812958,
+     "lattice_bits": 115.10400999985731,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 3670016 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 29365248,
-     "estimator_columns": 2929,
+     "estimator_columns": 2932,
      "bound": 30,
-     "trivial_bits": 12247.699732184508,
-     "lattice_bits": 612.5247223649486,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2929 of 29365248 columns (beta = 2071; 43 widths evaluated)"
+     "trivial_bits": 12309.744413566179,
+     "lattice_bits": 615.4124254164441,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2932 of 29365248 columns (beta = 2081; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -1494,7 +1494,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.4115867643251,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1504,7 +1504,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.4115867643251,
      "attack": "bdd"
     }
    }
@@ -1530,11 +1530,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 8327002901668021
+      "Fixed": 9351599833054789
      }
     },
-    "omega": 16,
-    "q": 8327002901668021,
+    "omega": 17,
+    "q": 9351599833054789,
     "d": 1024,
     "k": 4,
     "delta": 14,
@@ -1542,15 +1542,15 @@
     "ell_prime": 18,
     "r": 9,
     "m": 9,
-    "beta1": 16384,
+    "beta1": 17408,
     "big_n": 7340032,
-    "gamma": 962072674304,
-    "rejection_m": 1.1331484542728405,
-    "log2_rejection_m": 0.1803368816465861,
-    "beta": 3848290697216,
+    "gamma": 1022202216448,
+    "rejection_m": 1.1331484542728447,
+    "log2_rejection_m": 0.18033688164659162,
+    "beta": 4088808865792,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 119698,
@@ -1562,8 +1562,8 @@
     "width_a": 7168,
     "width_b": 14348,
     "width_d": 26500,
-    "binding_guard": 4503599627370496,
-    "msis_bound_a": 2251799813685248,
+    "binding_guard": 4785074604081152,
+    "msis_bound_a": 2392537302040576,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -1572,18 +1572,18 @@
     "msis_a": {
      "rank": 2048,
      "columns": 7340032,
-     "estimator_columns": 3751,
-     "bound": 2251799813685248,
-     "trivial_bits": 1816.0000000000218,
-     "lattice_bits": 115.09531623909136,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3751 of 7340032 columns (beta = 290; 35 widths evaluated)"
+     "estimator_columns": 3757,
+     "bound": 2392537302040576,
+     "trivial_bits": 1979.743802327467,
+     "lattice_bits": 115.09662364770897,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3757 of 7340032 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 14692352,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 48082.92496633562,
+     "trivial_bits": 48254.35881693968,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -1594,7 +1594,7 @@
       -8,
       7
      ],
-     "bits": 161.60746408645906,
+     "bits": 160.98820480276336,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1604,7 +1604,7 @@
       -8,
       7
      ],
-     "bits": 161.60746408645906,
+     "bits": 160.98820480276336,
      "attack": "bdd"
     }
    }
@@ -1630,11 +1630,11 @@
      "m_u": 6,
      "m_v": 6,
      "q": {
-      "Fixed": 102705810279674029
+      "Fixed": 111899985626772997
      }
     },
-    "omega": 22,
-    "q": 102705810279674029,
+    "omega": 24,
+    "q": 111899985626772997,
     "d": 256,
     "k": 4,
     "delta": 15,
@@ -1642,15 +1642,15 @@
     "ell_prime": 23,
     "r": 12,
     "m": 11,
-    "beta1": 360448,
+    "beta1": 393216,
     "big_n": 7864320,
-    "gamma": 11338713661440,
-    "rejection_m": 1.284025421789986,
-    "log2_rejection_m": 0.3606737659549801,
-    "beta": 22677427322880,
+    "gamma": 12369505812480,
+    "rejection_m": 1.2840254217899871,
+    "log2_rejection_m": 0.3606737659549814,
+    "beta": 24739011624960,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 44,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 1017566,
@@ -1662,8 +1662,8 @@
     "width_a": 30720,
     "width_b": 552972,
     "width_d": 95952,
-    "binding_guard": 99079191802150912,
-    "msis_bound_a": 49539595901075456,
+    "binding_guard": 108086391056891904,
+    "msis_bound_a": 54043195528445952,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -1672,20 +1672,20 @@
     "msis_a": {
      "rank": 2304,
      "columns": 7864320,
-     "estimator_columns": 4211,
-     "bound": 49539595901075456,
-     "trivial_bits": 119.49418287098959,
-     "lattice_bits": 118.61933427475961,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4211 of 7864320 columns (beta = 302; 36 widths evaluated)"
+     "estimator_columns": 4225,
+     "bound": 54043195528445952,
+     "trivial_bits": 115.2575156006769,
+     "lattice_bits": 118.33601011064954,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4225 of 7864320 columns (beta = 301; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 141560832,
-     "estimator_columns": 3073,
+     "estimator_columns": 3079,
      "bound": 30,
-     "trivial_bits": 12948.622867385158,
-     "lattice_bits": 644.7713057539007,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3073 of 141560832 columns (beta = 2185; 44 widths evaluated)"
+     "trivial_bits": 12980.288032390814,
+     "lattice_bits": 646.2193451554655,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3079 of 141560832 columns (beta = 2190; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1280,
@@ -1694,7 +1694,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1704,7 +1704,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     }
    }
@@ -1730,11 +1730,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 74035283097514237
+      "Fixed": 78615930945368149
      }
     },
-    "omega": 16,
-    "q": 74035283097514237,
+    "omega": 17,
+    "q": 78615930945368149,
     "d": 1024,
     "k": 4,
     "delta": 15,
@@ -1742,15 +1742,15 @@
     "ell_prime": 21,
     "r": 11,
     "m": 10,
-    "beta1": 131072,
+    "beta1": 139264,
     "big_n": 15728640,
-    "gamma": 8246337208320,
-    "rejection_m": 1.2840254192388514,
-    "log2_rejection_m": 0.36067376308859656,
-    "beta": 16492674416640,
+    "gamma": 8761733283840,
+    "rejection_m": 1.2840254192388525,
+    "log2_rejection_m": 0.36067376308859783,
+    "beta": 17523466567680,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 321014,
@@ -1762,8 +1762,8 @@
     "width_a": 15360,
     "width_b": 92166,
     "width_d": 44526,
-    "binding_guard": 72057594037927936,
-    "msis_bound_a": 36028797018963968,
+    "binding_guard": 76561193665298432,
+    "msis_bound_a": 38280596832649216,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -1772,18 +1772,18 @@
     "msis_a": {
      "rank": 3072,
      "columns": 15728640,
-     "estimator_columns": 5624,
-     "bound": 36028797018963968,
-     "trivial_bits": 120.00000000004812,
-     "lattice_bits": 162.52215516571215,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5624 of 15728640 columns (beta = 459; 35 widths evaluated)"
+     "estimator_columns": 5641,
+     "bound": 38280596832649216,
+     "trivial_bits": 117.37611476250726,
+     "lattice_bits": 162.2384559862093,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5641 of 15728640 columns (beta = 458; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 94377984,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 51310.92496633562,
+     "trivial_bits": 51399.61228736345,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -1794,7 +1794,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1804,7 +1804,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     }
    }
@@ -1830,11 +1830,11 @@
      "m_u": 6,
      "m_v": 6,
      "q": {
-      "Fixed": 102705810279674029
+      "Fixed": 111899985626772997
      }
     },
-    "omega": 22,
-    "q": 102705810279674029,
+    "omega": 24,
+    "q": 111899985626772997,
     "d": 256,
     "k": 4,
     "delta": 15,
@@ -1842,15 +1842,15 @@
     "ell_prime": 24,
     "r": 12,
     "m": 12,
-    "beta1": 180224,
+    "beta1": 196608,
     "big_n": 15728640,
-    "gamma": 22677427322880,
-    "rejection_m": 1.133148453629664,
-    "log2_rejection_m": 0.18033688082771082,
-    "beta": 90709709291520,
+    "gamma": 24739011624960,
+    "rejection_m": 1.1331484536296643,
+    "log2_rejection_m": 0.18033688082771115,
+    "beta": 98956046499840,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 44,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 1420730,
@@ -1862,8 +1862,8 @@
     "width_a": 61440,
     "width_b": 552984,
     "width_d": 130464,
-    "binding_guard": 99079191802150912,
-    "msis_bound_a": 49539595901075456,
+    "binding_guard": 108086391056891904,
+    "msis_bound_a": 54043195528445952,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -1872,20 +1872,20 @@
     "msis_a": {
      "rank": 2304,
      "columns": 15728640,
-     "estimator_columns": 4211,
-     "bound": 49539595901075456,
-     "trivial_bits": 119.49418287098959,
-     "lattice_bits": 118.61933427475961,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4211 of 15728640 columns (beta = 302; 36 widths evaluated)"
+     "estimator_columns": 4225,
+     "bound": 54043195528445952,
+     "trivial_bits": 115.2575156006769,
+     "lattice_bits": 118.33601011064954,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4225 of 15728640 columns (beta = 301; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 141563904,
-     "estimator_columns": 3073,
+     "estimator_columns": 3079,
      "bound": 30,
-     "trivial_bits": 12948.622867385158,
-     "lattice_bits": 644.7713057539007,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3073 of 141563904 columns (beta = 2185; 44 widths evaluated)"
+     "trivial_bits": 12980.288032390814,
+     "lattice_bits": 646.2193451554655,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3079 of 141563904 columns (beta = 2190; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1280,
@@ -1894,7 +1894,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -1904,7 +1904,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     }
    }
@@ -1930,11 +1930,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 74035283097514237
+      "Fixed": 78615930945368149
      }
     },
-    "omega": 16,
-    "q": 74035283097514237,
+    "omega": 17,
+    "q": 78615930945368149,
     "d": 1024,
     "k": 4,
     "delta": 15,
@@ -1942,15 +1942,15 @@
     "ell_prime": 22,
     "r": 11,
     "m": 11,
-    "beta1": 65536,
+    "beta1": 69632,
     "big_n": 31457280,
-    "gamma": 16492674416640,
-    "rejection_m": 1.1331484533482425,
-    "log2_rejection_m": 0.18033688046941215,
-    "beta": 65970697666560,
+    "gamma": 17523466567680,
+    "rejection_m": 1.1331484533482428,
+    "log2_rejection_m": 0.18033688046941246,
+    "beta": 70093866270720,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 519146,
@@ -1962,8 +1962,8 @@
     "width_a": 30720,
     "width_b": 92172,
     "width_d": 58332,
-    "binding_guard": 72057594037927936,
-    "msis_bound_a": 36028797018963968,
+    "binding_guard": 76561193665298432,
+    "msis_bound_a": 38280596832649216,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -1972,18 +1972,18 @@
     "msis_a": {
      "rank": 3072,
      "columns": 31457280,
-     "estimator_columns": 5624,
-     "bound": 36028797018963968,
-     "trivial_bits": 120.00000000004812,
-     "lattice_bits": 162.52215516571215,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5624 of 31457280 columns (beta = 459; 35 widths evaluated)"
+     "estimator_columns": 5641,
+     "bound": 38280596832649216,
+     "trivial_bits": 117.37611476250726,
+     "lattice_bits": 162.2384559862093,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5641 of 31457280 columns (beta = 458; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 94384128,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 51310.92496633562,
+     "trivial_bits": 51399.61228736345,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -1994,7 +1994,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2004,7 +2004,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     }
    }
@@ -2030,11 +2030,11 @@
      "m_u": 6,
      "m_v": 6,
      "q": {
-      "Fixed": 107304362334462661
+      "Fixed": 111899985626772997
      }
     },
-    "omega": 23,
-    "q": 107304362334462661,
+    "omega": 24,
+    "q": 111899985626772997,
     "d": 256,
     "k": 4,
     "delta": 15,
@@ -2042,15 +2042,15 @@
     "ell_prime": 25,
     "r": 13,
     "m": 12,
-    "beta1": 753664,
+    "beta1": 786432,
     "big_n": 15728640,
-    "gamma": 47416438947840,
-    "rejection_m": 1.2840254192388674,
-    "log2_rejection_m": 0.3606737630886146,
-    "beta": 94832877895680,
+    "gamma": 49478023249920,
+    "rejection_m": 1.2840254192388676,
+    "log2_rejection_m": 0.36067376308861476,
+    "beta": 98956046499840,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 46,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 2000606,
@@ -2062,8 +2062,8 @@
     "width_a": 61440,
     "width_b": 1105932,
     "width_d": 157392,
-    "binding_guard": 103582791429521408,
-    "msis_bound_a": 51791395714760704,
+    "binding_guard": 108086391056891904,
+    "msis_bound_a": 54043195528445952,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -2072,20 +2072,20 @@
     "msis_a": {
      "rank": 2304,
      "columns": 15728640,
-     "estimator_columns": 4313,
-     "bound": 51791395714760704,
-     "trivial_bits": 117.32978398305995,
-     "lattice_bits": 118.35265352176903,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4313 of 15728640 columns (beta = 301; 35 widths evaluated)"
+     "estimator_columns": 4225,
+     "bound": 54043195528445952,
+     "trivial_bits": 115.2575156006769,
+     "lattice_bits": 118.33601011064954,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4225 of 15728640 columns (beta = 301; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 283118592,
-     "estimator_columns": 3057,
+     "estimator_columns": 3079,
      "bound": 30,
-     "trivial_bits": 12964.799744999282,
-     "lattice_bits": 645.6247312285047,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3057 of 283118592 columns (beta = 2188; 43 widths evaluated)"
+     "trivial_bits": 12980.288032390814,
+     "lattice_bits": 646.2193451554655,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3079 of 283118592 columns (beta = 2190; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1280,
@@ -2094,7 +2094,7 @@
       -8,
       7
      ],
-     "bits": 165.4805722747791,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2104,7 +2104,7 @@
       -8,
       7
      ],
-     "bits": 165.4805722747791,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     }
    }
@@ -2130,11 +2130,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 74035283097514237
+      "Fixed": 78615930945368149
      }
     },
-    "omega": 16,
-    "q": 74035283097514237,
+    "omega": 17,
+    "q": 78615930945368149,
     "d": 1024,
     "k": 4,
     "delta": 15,
@@ -2142,15 +2142,15 @@
     "ell_prime": 23,
     "r": 12,
     "m": 11,
-    "beta1": 262144,
+    "beta1": 278528,
     "big_n": 31457280,
-    "gamma": 32985348833280,
-    "rejection_m": 1.2840254179633013,
-    "log2_rejection_m": 0.36067376165542414,
-    "beta": 65970697666560,
+    "gamma": 35046933135360,
+    "rejection_m": 1.2840254179633015,
+    "log2_rejection_m": 0.3606737616554245,
+    "beta": 70093866270720,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 628214,
@@ -2162,8 +2162,8 @@
     "width_a": 30720,
     "width_b": 184326,
     "width_d": 75246,
-    "binding_guard": 72057594037927936,
-    "msis_bound_a": 36028797018963968,
+    "binding_guard": 76561193665298432,
+    "msis_bound_a": 38280596832649216,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -2172,18 +2172,18 @@
     "msis_a": {
      "rank": 3072,
      "columns": 31457280,
-     "estimator_columns": 5624,
-     "bound": 36028797018963968,
-     "trivial_bits": 120.00000000004812,
-     "lattice_bits": 162.52215516571215,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5624 of 31457280 columns (beta = 459; 35 widths evaluated)"
+     "estimator_columns": 5641,
+     "bound": 38280596832649216,
+     "trivial_bits": 117.37611476250726,
+     "lattice_bits": 162.2384559862093,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5641 of 31457280 columns (beta = 458; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 188749824,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 51310.92496633562,
+     "trivial_bits": 51399.61228736345,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -2194,7 +2194,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2204,7 +2204,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     }
    }
@@ -2230,11 +2230,11 @@
      "m_u": 6,
      "m_v": 6,
      "q": {
-      "Fixed": 6618259129420972141
+      "Fixed": 7194089776299060413
      }
     },
-    "omega": 23,
-    "q": 6618259129420972141,
+    "omega": 24,
+    "q": 7194089776299060413,
     "d": 256,
     "k": 4,
     "delta": 16,
@@ -2242,15 +2242,15 @@
     "ell_prime": 26,
     "r": 13,
     "m": 13,
-    "beta1": 376832,
+    "beta1": 393216,
     "big_n": 33554432,
-    "gamma": 101155069755392,
+    "gamma": 105553116266496,
     "rejection_m": 1.1331484533306573,
-    "log2_rejection_m": 0.18033688044702315,
-    "beta": 404620279021568,
+    "log2_rejection_m": 0.1803368804470232,
+    "beta": 422212465065984,
     "tau": 13,
     "beta_bar": 9007199254740992,
-    "omega_bar": 46,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 3088306,
@@ -2262,8 +2262,8 @@
     "width_a": 131072,
     "width_b": 1179672,
     "width_d": 204696,
-    "binding_guard": 1657324662872342528,
-    "msis_bound_a": 828662331436171264,
+    "binding_guard": 1729382256910270464,
+    "msis_bound_a": 864691128455135232,
     "msis_bound_b": 30,
     "j_inv_capacity": 2101679826106231
    },
@@ -2272,20 +2272,20 @@
     "msis_a": {
      "rank": 2304,
      "columns": 33554432,
-     "estimator_columns": 4316,
-     "bound": 828662331436171264,
-     "trivial_bits": 4602.460104668019,
-     "lattice_bits": 115.06519593136156,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4316 of 33554432 columns (beta = 289; 36 widths evaluated)"
+     "estimator_columns": 4320,
+     "bound": 864691128455135232,
+     "trivial_bits": 4738.303573585075,
+     "lattice_bits": 115.06593076244172,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4320 of 33554432 columns (beta = 289; 35 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 301996032,
-     "estimator_columns": 3369,
+     "estimator_columns": 3370,
      "bound": 30,
-     "trivial_bits": 14487.14755840872,
-     "lattice_bits": 715.9132846605353,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3369 of 301996032 columns (beta = 2437; 44 widths evaluated)"
+     "trivial_bits": 14517.959816611303,
+     "lattice_bits": 717.3563507596772,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3370 of 301996032 columns (beta = 2442; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1280,
@@ -2294,7 +2294,7 @@
       -8,
       7
      ],
-     "bits": 146.31816976454041,
+     "bits": 145.95249153440759,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2304,7 +2304,7 @@
       -8,
       7
      ],
-     "bits": 146.31816976454041,
+     "bits": 145.95249153440759,
      "attack": "bdd"
     }
    }
@@ -2330,11 +2330,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 1183762967321726413
+      "Fixed": 1259260689129766237
      }
     },
-    "omega": 16,
-    "q": 1183762967321726413,
+    "omega": 17,
+    "q": 1259260689129766237,
     "d": 1024,
     "k": 4,
     "delta": 16,
@@ -2342,15 +2342,15 @@
     "ell_prime": 24,
     "r": 12,
     "m": 12,
-    "beta1": 131072,
+    "beta1": 139264,
     "big_n": 67108864,
-    "gamma": 70368744177664,
+    "gamma": 74766790688768,
     "rejection_m": 1.1331484531987412,
-    "log2_rejection_m": 0.18033688027907097,
-    "beta": 281474976710656,
+    "log2_rejection_m": 0.18033688027907102,
+    "beta": 299067162755072,
     "tau": 13,
     "beta_bar": 9007199254740992,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 1143578,
@@ -2362,8 +2362,8 @@
     "width_a": 65536,
     "width_b": 196620,
     "width_d": 94988,
-    "binding_guard": 1152921504606846976,
-    "msis_bound_a": 576460752303423488,
+    "binding_guard": 1224979098644774912,
+    "msis_bound_a": 612489549322387456,
     "msis_bound_b": 30,
     "j_inv_capacity": 2101679826106231
    },
@@ -2372,18 +2372,18 @@
     "msis_a": {
      "rank": 3072,
      "columns": 67108864,
-     "estimator_columns": 5714,
-     "bound": 576460752303423488,
-     "trivial_bits": 117.00000000000124,
-     "lattice_bits": 152.07192094446089,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5714 of 67108864 columns (beta = 421; 36 widths evaluated)"
+     "estimator_columns": 5597,
+     "bound": 612489549322387456,
+     "trivial_bits": 122.32656066749288,
+     "lattice_bits": 152.05558143477748,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5597 of 67108864 columns (beta = 421; 37 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 201338880,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 55405.9249663356,
+     "trivial_bits": 55497.26243599845,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -2394,7 +2394,7 @@
       -8,
       7
      ],
-     "bits": 139.29393893791638,
+     "bits": 139.06959900607734,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2404,7 +2404,7 @@
       -8,
       7
      ],
-     "bits": 139.29393893791638,
+     "bits": 139.06959900607734,
      "attack": "bdd"
     }
    }
@@ -2430,11 +2430,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 384156492036173
+      "Fixed": 421135043797661
      }
     },
-    "omega": 21,
-    "q": 384156492036173,
+    "omega": 23,
+    "q": 421135043797661,
     "d": 256,
     "k": 4,
     "delta": 13,
@@ -2442,15 +2442,15 @@
     "ell_prime": 13,
     "r": 7,
     "m": 6,
-    "beta1": 2688,
+    "beta1": 2944,
     "big_n": 212992,
-    "gamma": 9160359936,
-    "rejection_m": 1.064494468675586,
-    "log2_rejection_m": 0.09016845328007582,
-    "beta": 73282879488,
+    "gamma": 10032775168,
+    "rejection_m": 1.0644944686759017,
+    "log2_rejection_m": 0.09016845328050378,
+    "beta": 80262201344,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 42,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 131018,
@@ -2462,8 +2462,8 @@
     "width_a": 832,
     "width_b": 13352,
     "width_d": 109344,
-    "binding_guard": 369435906932736,
-    "msis_bound_a": 184717953466368,
+    "binding_guard": 404620279021568,
+    "msis_bound_a": 202310139510784,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -2472,20 +2472,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 212992,
-     "estimator_columns": 3807,
-     "bound": 184717953466368,
-     "trivial_bits": 115.44584247269798,
-     "lattice_bits": 120.68262218864697,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3807 of 212992 columns (beta = 310; 31 widths evaluated)"
+     "estimator_columns": 3791,
+     "bound": 202310139510784,
+     "trivial_bits": 118.1988934951635,
+     "lattice_bits": 120.39315736102132,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 212992 columns (beta = 309; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 3418112,
-     "estimator_columns": 2688,
+     "estimator_columns": 2693,
      "bound": 30,
-     "trivial_bits": 10884.595232124351,
-     "lattice_bits": 549.9711810008417,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2688 of 3418112 columns (beta = 1849; 43 widths evaluated)"
+     "trivial_bits": 10918.537964021392,
+     "lattice_bits": 551.418546400151,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2693 of 3418112 columns (beta = 1854; 42 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -2494,7 +2494,7 @@
       -8,
       7
      ],
-     "bits": 132.8523207754844,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2504,7 +2504,7 @@
       -8,
       7
      ],
-     "bits": 132.8523207754844,
+     "bits": 132.42518449021122,
      "attack": "bdd"
     }
    }
@@ -2530,40 +2530,40 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 274744508417461
+      "Fixed": 293142149592181
      }
     },
-    "omega": 15,
-    "q": 274744508417461,
+    "omega": 16,
+    "q": 293142149592181,
     "d": 1024,
     "k": 4,
-    "delta": 12,
+    "delta": 13,
     "log_n": 3,
     "ell_prime": 11,
     "r": 6,
     "m": 5,
-    "beta1": 960,
-    "big_n": 393216,
-    "gamma": 6039797760,
-    "rejection_m": 1.0644944641997536,
-    "log2_rejection_m": 0.09016844721404023,
-    "beta": 48318382080,
+    "beta1": 1024,
+    "big_n": 425984,
+    "gamma": 6979321856,
+    "rejection_m": 1.0644944637937717,
+    "log2_rejection_m": 0.09016844666381851,
+    "beta": 55834574848,
     "tau": 10,
     "beta_bar": 2199023255552,
-    "omega_bar": 30,
+    "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 39314,
+    "mu": 42586,
     "n_prime": 6,
     "ell_dprime": 27,
     "d0": 39,
     "d1": 3,
-    "nu": 40264710,
-    "width_a": 384,
-    "width_b": 1560,
-    "width_d": 33912,
-    "binding_guard": 263882790666240,
-    "msis_bound_a": 131941395333120,
+    "nu": 43615238,
+    "width_a": 416,
+    "width_b": 1688,
+    "width_d": 36736,
+    "binding_guard": 281474976710656,
+    "msis_bound_a": 140737488355328,
     "msis_bound_b": 30,
     "j_inv_capacity": 513105426295
    },
@@ -2571,19 +2571,19 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 393216,
-     "estimator_columns": 3677,
-     "bound": 131941395333120,
-     "trivial_bits": 119.18003762161052,
-     "lattice_bits": 121.94194690271091,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3677 of 393216 columns (beta = 315; 34 widths evaluated)"
+     "columns": 425984,
+     "estimator_columns": 3697,
+     "bound": 140737488355328,
+     "trivial_bits": 120.00000000228157,
+     "lattice_bits": 121.66094976147455,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3697 of 425984 columns (beta = 314; 34 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 1597440,
+     "columns": 1728512,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 43043.170955049536,
+     "trivial_bits": 43138.92496633675,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -2594,7 +2594,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2604,7 +2604,7 @@
       -8,
       7
      ],
-     "bits": 181.55676353501806,
+     "bits": 181.13260634439922,
      "attack": "bdd"
     }
    }
@@ -2630,11 +2630,11 @@
      "m_u": 5,
      "m_v": 5,
      "q": {
-      "Fixed": 15395032342003157
+      "Fixed": 16790798540447021
      }
     },
-    "omega": 22,
-    "q": 15395032342003157,
+    "omega": 23,
+    "q": 16790798540447021,
     "d": 256,
     "k": 4,
     "delta": 14,
@@ -2642,15 +2642,15 @@
     "ell_prime": 17,
     "r": 9,
     "m": 8,
-    "beta1": 11264,
+    "beta1": 11776,
     "big_n": 917504,
-    "gamma": 165356240896,
-    "rejection_m": 1.0644944611836875,
-    "log2_rejection_m": 0.09016844312640647,
-    "beta": 1322849927168,
+    "gamma": 172872433664,
+    "rejection_m": 1.0644944611836962,
+    "log2_rejection_m": 0.09016844312641832,
+    "beta": 1382979469312,
     "tau": 11,
     "beta_bar": 35184372088832,
-    "omega_bar": 44,
+    "omega_bar": 46,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 219938,
@@ -2662,8 +2662,8 @@
     "width_a": 3584,
     "width_b": 57384,
     "width_d": 123128,
-    "binding_guard": 6192449487634432,
-    "msis_bound_a": 3096224743817216,
+    "binding_guard": 6473924464345088,
+    "msis_bound_a": 3236962232172544,
     "msis_bound_b": 30,
     "j_inv_capacity": 8209686820727
    },
@@ -2672,20 +2672,20 @@
     "msis_a": {
      "rank": 2048,
      "columns": 917504,
-     "estimator_columns": 3783,
-     "bound": 3096224743817216,
-     "trivial_bits": 2690.8319698356786,
-     "lattice_bits": 115.10227543378042,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3783 of 917504 columns (beta = 290; 32 widths evaluated)"
+     "estimator_columns": 3788,
+     "bound": 3236962232172544,
+     "trivial_bits": 2815.914815593848,
+     "lattice_bits": 115.1033597819468,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3788 of 917504 columns (beta = 290; 33 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 14690304,
-     "estimator_columns": 2929,
+     "estimator_columns": 2938,
      "bound": 30,
-     "trivial_bits": 12247.699732184508,
-     "lattice_bits": 612.5247223649486,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2929 of 14690304 columns (beta = 2071; 43 widths evaluated)"
+     "trivial_bits": 12279.752454283727,
+     "lattice_bits": 613.9741808818931,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2938 of 14690304 columns (beta = 2076; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1024,
@@ -2694,7 +2694,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.68743054211905,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -2704,7 +2704,7 @@
       -8,
       7
      ],
-     "bits": 117.04720302353627,
+     "bits": 116.68743054211905,
      "attack": "bdd"
     }
    }
@@ -2717,206 +2717,6 @@
      "n": 8,
      "t": 7,
      "ell": 20,
-     "alpha": 10,
-     "kappa": 2,
-     "b": 16,
-     "omega": "MinForTarget",
-     "challenge_set": "L1Ball",
-     "tau_rule": "Tight",
-     "rej_iterations": "Lambda",
-     "n_a": 3,
-     "n_b": 1,
-     "n_d": 1,
-     "m_u": 3,
-     "m_v": 3,
-     "q": {
-      "Fixed": 4334287545157813
-     }
-    },
-    "omega": 15,
-    "q": 4334287545157813,
-    "d": 1024,
-    "k": 4,
-    "delta": 13,
-    "log_n": 3,
-    "ell_prime": 15,
-    "r": 8,
-    "m": 7,
-    "beta1": 3840,
-    "big_n": 1703936,
-    "gamma": 104689827840,
-    "rejection_m": 1.0644944601377113,
-    "log2_rejection_m": 0.09016844170880894,
-    "beta": 837518622720,
-    "tau": 11,
-    "beta_bar": 35184372088832,
-    "omega_bar": 30,
-    "gamma_bar": 15,
-    "rej_iterations": 115,
-    "mu": 79506,
-    "n_prime": 7,
-    "ell_dprime": 28,
-    "d0": 40,
-    "d1": 3,
-    "nu": 81422343,
-    "width_a": 1664,
-    "width_b": 10008,
-    "width_d": 51192,
-    "binding_guard": 4222124650659840,
-    "msis_bound_a": 2111062325329920,
-    "msis_bound_b": 30,
-    "j_inv_capacity": 8209686820727
-   },
-   "security": {
-    "lambda": 115,
-    "msis_a": {
-     "rank": 3072,
-     "columns": 1703936,
-     "estimator_columns": 5632,
-     "bound": 2111062325329920,
-     "trivial_bits": 116.20053668080237,
-     "lattice_bits": 174.85351381309437,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5632 of 1703936 columns (beta = 503; 35 widths evaluated)"
-    },
-    "msis_b": {
-     "rank": 1024,
-     "columns": 10248192,
-     "estimator_columns": 65536,
-     "bound": 30,
-     "trivial_bits": 47118.31444846566,
-     "lattice_bits": null,
-     "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
-    },
-    "mlwe": {
-     "secret_dim": 2048,
-     "samples": 1024,
-     "digit_range": [
-      -8,
-      7
-     ],
-     "bits": 165.09969856761208,
-     "attack": "bdd"
-    },
-    "mlwe_u": {
-     "secret_dim": 2048,
-     "samples": 1024,
-     "digit_range": [
-      -8,
-      7
-     ],
-     "bits": 165.09969856761208,
-     "attack": "bdd"
-    }
-   }
-  },
-  {
-   "name": "secure-l22-n8-a8",
-   "params": {
-    "choices": {
-     "lambda": 115,
-     "n": 8,
-     "t": 7,
-     "ell": 22,
-     "alpha": 8,
-     "kappa": 2,
-     "b": 16,
-     "omega": "MinForTarget",
-     "challenge_set": "L1Ball",
-     "tau_rule": "Tight",
-     "rej_iterations": "Lambda",
-     "n_a": 8,
-     "n_b": 1,
-     "n_d": 1,
-     "m_u": 5,
-     "m_v": 5,
-     "q": {
-      "Fixed": 15395032342003157
-     }
-    },
-    "omega": 22,
-    "q": 15395032342003157,
-    "d": 256,
-    "k": 4,
-    "delta": 14,
-    "log_n": 3,
-    "ell_prime": 19,
-    "r": 10,
-    "m": 9,
-    "beta1": 22528,
-    "big_n": 1835008,
-    "gamma": 661424963584,
-    "rejection_m": 1.0644944600508237,
-    "log2_rejection_m": 0.09016844159105147,
-    "beta": 5291399708672,
-    "tau": 11,
-    "beta_bar": 35184372088832,
-    "omega_bar": 44,
-    "gamma_bar": 15,
-    "rej_iterations": 115,
-    "mu": 323874,
-    "n_prime": 12,
-    "ell_dprime": 28,
-    "d0": 45,
-    "d1": 3,
-    "nu": 82915084,
-    "width_a": 7168,
-    "width_b": 114728,
-    "width_d": 130296,
-    "binding_guard": 6192449487634432,
-    "msis_bound_a": 3096224743817216,
-    "msis_bound_b": 30,
-    "j_inv_capacity": 8209686820727
-   },
-   "security": {
-    "lambda": 115,
-    "msis_a": {
-     "rank": 2048,
-     "columns": 1835008,
-     "estimator_columns": 3783,
-     "bound": 3096224743817216,
-     "trivial_bits": 2690.8319698356786,
-     "lattice_bits": 115.10227543378042,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3783 of 1835008 columns (beta = 290; 32 widths evaluated)"
-    },
-    "msis_b": {
-     "rank": 256,
-     "columns": 29370368,
-     "estimator_columns": 2929,
-     "bound": 30,
-     "trivial_bits": 12247.699732184508,
-     "lattice_bits": 612.5247223649486,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2929 of 29370368 columns (beta = 2071; 43 widths evaluated)"
-    },
-    "mlwe": {
-     "secret_dim": 1024,
-     "samples": 256,
-     "digit_range": [
-      -8,
-      7
-     ],
-     "bits": 117.04720302353627,
-     "attack": "bdd"
-    },
-    "mlwe_u": {
-     "secret_dim": 1024,
-     "samples": 256,
-     "digit_range": [
-      -8,
-      7
-     ],
-     "bits": 117.04720302353627,
-     "attack": "bdd"
-    }
-   }
-  },
-  {
-   "name": "secure-l22-n8-a10",
-   "params": {
-    "choices": {
-     "lambda": 115,
-     "n": 8,
-     "t": 7,
-     "ell": 22,
      "alpha": 10,
      "kappa": 2,
      "b": 16,
@@ -2939,29 +2739,29 @@
     "k": 4,
     "delta": 14,
     "log_n": 3,
-    "ell_prime": 17,
-    "r": 9,
-    "m": 8,
-    "beta1": 8192,
-    "big_n": 3670016,
-    "gamma": 481036337152,
-    "rejection_m": 1.0644944594842976,
-    "log2_rejection_m": 0.0901684408232462,
-    "beta": 3848290697216,
+    "ell_prime": 15,
+    "r": 8,
+    "m": 7,
+    "beta1": 4096,
+    "big_n": 1835008,
+    "gamma": 120259084288,
+    "rejection_m": 1.0644944600505974,
+    "log2_rejection_m": 0.09016844159074473,
+    "beta": 962072674304,
     "tau": 11,
     "beta_bar": 35184372088832,
     "omega_bar": 32,
     "gamma_bar": 15,
     "rej_iterations": 115,
-    "mu": 99618,
+    "mu": 69154,
     "n_prime": 6,
     "ell_dprime": 28,
     "d0": 39,
     "d1": 3,
-    "nu": 102016006,
-    "width_a": 3584,
-    "width_b": 14360,
-    "width_d": 45832,
+    "nu": 70820870,
+    "width_a": 1792,
+    "width_b": 7192,
+    "width_d": 42248,
     "binding_guard": 4503599627370496,
     "msis_bound_a": 2251799813685248,
     "msis_bound_b": 30,
@@ -2971,16 +2771,16 @@
     "lambda": 115,
     "msis_a": {
      "rank": 2048,
-     "columns": 3670016,
+     "columns": 1835008,
      "estimator_columns": 3751,
      "bound": 2251799813685248,
      "trivial_bits": 1816.0000000000218,
      "lattice_bits": 115.09531623909136,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3751 of 3670016 columns (beta = 290; 35 widths evaluated)"
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3751 of 1835008 columns (beta = 290; 35 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
-     "columns": 14704640,
+     "columns": 7364608,
      "estimator_columns": 65536,
      "bound": 30,
      "trivial_bits": 48082.92496633562,
@@ -3010,6 +2810,206 @@
    }
   },
   {
+   "name": "secure-l22-n8-a8",
+   "params": {
+    "choices": {
+     "lambda": 115,
+     "n": 8,
+     "t": 7,
+     "ell": 22,
+     "alpha": 8,
+     "kappa": 2,
+     "b": 16,
+     "omega": "MinForTarget",
+     "challenge_set": "L1Ball",
+     "tau_rule": "Tight",
+     "rej_iterations": "Lambda",
+     "n_a": 8,
+     "n_b": 1,
+     "n_d": 1,
+     "m_u": 5,
+     "m_v": 5,
+     "q": {
+      "Fixed": 18211211930825437
+     }
+    },
+    "omega": 24,
+    "q": 18211211930825437,
+    "d": 256,
+    "k": 4,
+    "delta": 14,
+    "log_n": 3,
+    "ell_prime": 19,
+    "r": 10,
+    "m": 9,
+    "beta1": 24576,
+    "big_n": 1835008,
+    "gamma": 721554505728,
+    "rejection_m": 1.064494460050828,
+    "log2_rejection_m": 0.09016844159105715,
+    "beta": 5772436045824,
+    "tau": 11,
+    "beta_bar": 35184372088832,
+    "omega_bar": 48,
+    "gamma_bar": 15,
+    "rej_iterations": 115,
+    "mu": 323874,
+    "n_prime": 12,
+    "ell_dprime": 28,
+    "d0": 45,
+    "d1": 3,
+    "nu": 82915084,
+    "width_a": 7168,
+    "width_b": 114728,
+    "width_d": 130296,
+    "binding_guard": 6755399441055744,
+    "msis_bound_a": 3377699720527872,
+    "msis_bound_b": 30,
+    "j_inv_capacity": 8209686820727
+   },
+   "security": {
+    "lambda": 115,
+    "msis_a": {
+     "rank": 2048,
+     "columns": 1835008,
+     "estimator_columns": 3791,
+     "bound": 3377699720527872,
+     "trivial_bits": 2930.1021743812958,
+     "lattice_bits": 115.10400999985731,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3791 of 1835008 columns (beta = 290; 33 widths evaluated)"
+    },
+    "msis_b": {
+     "rank": 256,
+     "columns": 29370368,
+     "estimator_columns": 2932,
+     "bound": 30,
+     "trivial_bits": 12309.744413566179,
+     "lattice_bits": 615.4124254164441,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 2932 of 29370368 columns (beta = 2081; 42 widths evaluated)"
+    },
+    "mlwe": {
+     "secret_dim": 1024,
+     "samples": 256,
+     "digit_range": [
+      -8,
+      7
+     ],
+     "bits": 116.4115867643251,
+     "attack": "bdd"
+    },
+    "mlwe_u": {
+     "secret_dim": 1024,
+     "samples": 256,
+     "digit_range": [
+      -8,
+      7
+     ],
+     "bits": 116.4115867643251,
+     "attack": "bdd"
+    }
+   }
+  },
+  {
+   "name": "secure-l22-n8-a10",
+   "params": {
+    "choices": {
+     "lambda": 115,
+     "n": 8,
+     "t": 7,
+     "ell": 22,
+     "alpha": 10,
+     "kappa": 2,
+     "b": 16,
+     "omega": "MinForTarget",
+     "challenge_set": "L1Ball",
+     "tau_rule": "Tight",
+     "rej_iterations": "Lambda",
+     "n_a": 2,
+     "n_b": 1,
+     "n_d": 1,
+     "m_u": 3,
+     "m_v": 3,
+     "q": {
+      "Fixed": 9351599833054789
+     }
+    },
+    "omega": 17,
+    "q": 9351599833054789,
+    "d": 1024,
+    "k": 4,
+    "delta": 14,
+    "log_n": 3,
+    "ell_prime": 17,
+    "r": 9,
+    "m": 8,
+    "beta1": 8704,
+    "big_n": 3670016,
+    "gamma": 511101108224,
+    "rejection_m": 1.0644944594843015,
+    "log2_rejection_m": 0.0901684408232517,
+    "beta": 4088808865792,
+    "tau": 11,
+    "beta_bar": 35184372088832,
+    "omega_bar": 34,
+    "gamma_bar": 15,
+    "rej_iterations": 115,
+    "mu": 99618,
+    "n_prime": 6,
+    "ell_dprime": 28,
+    "d0": 39,
+    "d1": 3,
+    "nu": 102016006,
+    "width_a": 3584,
+    "width_b": 14360,
+    "width_d": 45832,
+    "binding_guard": 4785074604081152,
+    "msis_bound_a": 2392537302040576,
+    "msis_bound_b": 30,
+    "j_inv_capacity": 8209686820727
+   },
+   "security": {
+    "lambda": 115,
+    "msis_a": {
+     "rank": 2048,
+     "columns": 3670016,
+     "estimator_columns": 3757,
+     "bound": 2392537302040576,
+     "trivial_bits": 1979.743802327467,
+     "lattice_bits": 115.09662364770897,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3757 of 3670016 columns (beta = 290; 33 widths evaluated)"
+    },
+    "msis_b": {
+     "rank": 1024,
+     "columns": 14704640,
+     "estimator_columns": 65536,
+     "bound": 30,
+     "trivial_bits": 48254.35881693968,
+     "lattice_bits": null,
+     "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
+    },
+    "mlwe": {
+     "secret_dim": 2048,
+     "samples": 1024,
+     "digit_range": [
+      -8,
+      7
+     ],
+     "bits": 160.98820480276336,
+     "attack": "bdd"
+    },
+    "mlwe_u": {
+     "secret_dim": 2048,
+     "samples": 1024,
+     "digit_range": [
+      -8,
+      7
+     ],
+     "bits": 160.98820480276336,
+     "attack": "bdd"
+    }
+   }
+  },
+  {
    "name": "secure-l24-n8-a8",
    "params": {
     "choices": {
@@ -3030,11 +3030,11 @@
      "m_u": 6,
      "m_v": 6,
      "q": {
-      "Fixed": 102705810279674029
+      "Fixed": 111899985626772997
      }
     },
-    "omega": 22,
-    "q": 102705810279674029,
+    "omega": 24,
+    "q": 111899985626772997,
     "d": 256,
     "k": 4,
     "delta": 15,
@@ -3042,15 +3042,15 @@
     "ell_prime": 21,
     "r": 11,
     "m": 10,
-    "beta1": 45056,
+    "beta1": 49152,
     "big_n": 3932160,
-    "gamma": 2834678415360,
-    "rejection_m": 1.0644944594465877,
-    "log2_rejection_m": 0.09016844077213869,
-    "beta": 22677427322880,
+    "gamma": 3092376453120,
+    "rejection_m": 1.0644944594465888,
+    "log2_rejection_m": 0.09016844077214002,
+    "beta": 24739011624960,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 44,
+    "omega_bar": 48,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 629618,
@@ -3062,8 +3062,8 @@
     "width_a": 15360,
     "width_b": 276528,
     "width_d": 168768,
-    "binding_guard": 99079191802150912,
-    "msis_bound_a": 49539595901075456,
+    "binding_guard": 108086391056891904,
+    "msis_bound_a": 54043195528445952,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -3072,20 +3072,20 @@
     "msis_a": {
      "rank": 2304,
      "columns": 3932160,
-     "estimator_columns": 4211,
-     "bound": 49539595901075456,
-     "trivial_bits": 119.49418287098959,
-     "lattice_bits": 118.61933427475961,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4211 of 3932160 columns (beta = 302; 36 widths evaluated)"
+     "estimator_columns": 4225,
+     "bound": 54043195528445952,
+     "trivial_bits": 115.2575156006769,
+     "lattice_bits": 118.33601011064954,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 4225 of 3932160 columns (beta = 301; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 256,
      "columns": 70791168,
-     "estimator_columns": 3073,
+     "estimator_columns": 3079,
      "bound": 30,
-     "trivial_bits": 12948.622867385158,
-     "lattice_bits": 644.7713057539007,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3073 of 70791168 columns (beta = 2185; 44 widths evaluated)"
+     "trivial_bits": 12980.288032390814,
+     "lattice_bits": 646.2193451554655,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 3079 of 70791168 columns (beta = 2190; 44 widths evaluated)"
     },
     "mlwe": {
      "secret_dim": 1280,
@@ -3094,7 +3094,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -3104,7 +3104,7 @@
       -8,
       7
      ],
-     "bits": 165.7194364597658,
+     "bits": 165.2574995873346,
      "attack": "bdd"
     }
    }
@@ -3130,11 +3130,11 @@
      "m_u": 3,
      "m_v": 3,
      "q": {
-      "Fixed": 74035283097514237
+      "Fixed": 78615930945368149
      }
     },
-    "omega": 16,
-    "q": 74035283097514237,
+    "omega": 17,
+    "q": 78615930945368149,
     "d": 1024,
     "k": 4,
     "delta": 15,
@@ -3142,15 +3142,15 @@
     "ell_prime": 19,
     "r": 10,
     "m": 9,
-    "beta1": 16384,
+    "beta1": 17408,
     "big_n": 7864320,
-    "gamma": 2061584302080,
-    "rejection_m": 1.0644944591822134,
-    "log2_rejection_m": 0.09016844041383554,
-    "beta": 16492674416640,
+    "gamma": 2190433320960,
+    "rejection_m": 1.0644944591822143,
+    "log2_rejection_m": 0.09016844041383683,
+    "beta": 17523466567680,
     "tau": 12,
     "beta_bar": 562949953421312,
-    "omega_bar": 32,
+    "omega_bar": 34,
     "gamma_bar": 15,
     "rej_iterations": 115,
     "mu": 208850,
@@ -3162,8 +3162,8 @@
     "width_a": 7680,
     "width_b": 46104,
     "width_d": 70584,
-    "binding_guard": 72057594037927936,
-    "msis_bound_a": 36028797018963968,
+    "binding_guard": 76561193665298432,
+    "msis_bound_a": 38280596832649216,
     "msis_bound_b": 30,
     "j_inv_capacity": 131354989131639
    },
@@ -3172,18 +3172,18 @@
     "msis_a": {
      "rank": 3072,
      "columns": 7864320,
-     "estimator_columns": 5624,
-     "bound": 36028797018963968,
-     "trivial_bits": 120.00000000004812,
-     "lattice_bits": 162.52215516571215,
-     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5624 of 7864320 columns (beta = 459; 35 widths evaluated)"
+     "estimator_columns": 5641,
+     "bound": 38280596832649216,
+     "trivial_bits": 117.37611476250726,
+     "lattice_bits": 162.2384559862093,
+     "method": "SIS.lattice, infinity norm, zeta = 0, cheapest on 5641 of 7864320 columns (beta = 458; 36 widths evaluated)"
     },
     "msis_b": {
      "rank": 1024,
      "columns": 47210496,
      "estimator_columns": 65536,
      "bound": 30,
-     "trivial_bits": 51310.92496633562,
+     "trivial_bits": 51399.61228736345,
      "lattice_bits": null,
      "method": "SIS.lattice: no finite cost on up to 65536 columns (overflow or infinite)"
     },
@@ -3194,7 +3194,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     },
     "mlwe_u": {
@@ -3204,7 +3204,7 @@
       -8,
       7
      ],
-     "bits": 150.94053656093385,
+     "bits": 150.6630841006097,
      "attack": "bdd"
     }
    }

@@ -273,17 +273,19 @@ pub fn derive(choices: &Choices) -> Result<(Params, Report)> {
     let c = choices;
     validate(c)?;
     let s = Structure::new(c)?;
+    let rej_iterations = match c.rej_iterations {
+        RejIterations::Lambda => u64::from(c.lambda),
+        RejIterations::Fixed(l) => u64::from(l),
+    };
     let omega = match c.omega {
         Omega::Fixed(w) => w,
-        Omega::MinForTarget => rules::min_omega(c.challenge_set, s.d, s.r, c.lambda)?,
+        Omega::MinForTarget => {
+            rules::min_omega(c.challenge_set, s.d, s.r, c.lambda, rej_iterations)?
+        }
     };
     let (q, delta) = match c.q {
         QChoice::Fixed(q) => (q, rules::ceil_log(u128::from(c.b), u128::from(q))?),
         QChoice::Smallest => smallest_q(c, &s, omega)?,
-    };
-    let rej_iterations = match c.rej_iterations {
-        RejIterations::Lambda => u64::from(c.lambda),
-        RejIterations::Fixed(l) => u64::from(l),
     };
     let dd = DeltaDependent::new(c, &s, omega, delta)?;
 

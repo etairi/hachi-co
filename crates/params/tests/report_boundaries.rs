@@ -23,11 +23,12 @@ fn with_q(c: Choices, q: u64) -> Choices {
     }
 }
 
-/// The toy preset n = 1 with a target its challenge set meets (2^3/545 <= 2^-6) and the draft's
-/// L = lambda, so that its report is clean and each test below flips exactly one condition.
+/// The toy preset n = 1 with a target its challenge set meets (2 L 2^r/|C| = 2 * 4 * 2^2/545 <=
+/// 2^-4) and the draft's L = lambda, so that its report is clean and each test below flips exactly
+/// one condition.
 fn clean_toy() -> Choices {
     Choices {
-        lambda: 6,
+        lambda: 4,
         rej_iterations: RejIterations::Lambda,
         ..toy_choices(1)
     }
@@ -383,17 +384,18 @@ fn j_inv_representable() {
 
 #[test]
 fn knowledge_error() {
-    // |C| = 545 for d = 16, omega = 2 and r = 2: 2^(3 + 6) = 512 <= 545 < 1024 = 2^(3 + 7).
-    let at = report(&Choices {
-        lambda: 6,
+    // |C| = 545 for d = 16, omega = 2 and r = 2, and the bound 2 L 2^(r + lambda): with L = 4 it is
+    // 512 <= 545 at lambda = 4 and 1024 > 545 at lambda = 5, and L = 5 gives 640 > 545 at lambda = 4.
+    let with = |lambda, l| Choices {
+        lambda,
+        rej_iterations: RejIterations::Fixed(l),
         ..toy_choices(1)
-    });
-    let beyond = report(&Choices {
-        lambda: 7,
-        ..toy_choices(1)
-    });
+    };
+    let at = report(&with(4, 4));
+    let beyond = report(&with(5, 4));
     assert!(at.holds(ConstraintId::KnowledgeError));
     assert!(!beyond.holds(ConstraintId::KnowledgeError));
+    assert!(!report(&with(4, 5)).holds(ConstraintId::KnowledgeError));
     assert_eq!(
         beyond.get(ConstraintId::KnowledgeError).severity,
         Severity::Warning

@@ -282,8 +282,12 @@ if RUN_SINGLE_PROVER:
 #       1096ea2 (it never fixed q at a preset). Since the bounds depend on p only through delta, the candidates
 #       with a given delta form the band b^(delta-1) < p <= b^delta with fixed bounds; scanning the bands
 #       upwards gives the smallest admissible prime exactly.
-#   omega ("MinForTarget"): the smallest radius with 2^(r+1)/|C| <= 2^-lambda, C the l1 ball
+#   omega ("MinForTarget"): the smallest radius with 2 L 2^r/|C| <= 2^-lambda, C the l1 ball
 #       {c : ||c||_1 <= omega} of 5_Building_Blocks.tex:134, |C| = sum_i 2^i binom(d, i) binom(omega, i).
+#       2 L 2^r/|C| bounds the abort of the extractor of Pi_B (thm:pi-B-knowledge-soundness) with the
+#       forking capped at |C| attempts, the authors' choice of 2026-11-16: at most 2L expected attempts
+#       per coordinate, Markov's inequality and a union bound over the 2^r coordinates. Before, the rule
+#       was 2^(r+1)/|C| <= 2^-lambda (Hachi's Lemma 4).
 #   L ("Lambda", the draft's rule): L = lambda; {"Fixed": L} for the insecure toy, development and
 #       benchmark presets (crates/params, TOY_REJ_ITERATIONS = 16).
 #
@@ -406,10 +410,15 @@ def hco_challenge_set_size(cs, d, omega):
     return binomial(d, omega) * 2^omega if omega <= d else 0
 
 
-def hco_min_omega(cs, d, r, lam):
+def hco_knowledge_error_holds(size, r, lam, L):
+    """2 L 2^r/|C| <= 2^-lambda."""
+    return size >= 2 * L * 2^(r + lam)
+
+
+def hco_min_omega(cs, d, r, lam, L):
     cap = 2^16 if cs == "L1Ball" else d
     for omega in range(1, cap + 1):
-        if hco_challenge_set_size(cs, d, omega) >= 2^(r + 1 + lam):
+        if hco_knowledge_error_holds(hco_challenge_set_size(cs, d, omega), r, lam, L):
             return omega
     raise ValueError("no omega")
 
@@ -468,7 +477,9 @@ def hco_rej_iterations_of(ch):
 
 
 def hco_omega_of(ch, st):
-    return ch["omega"]["Fixed"] if isinstance(ch["omega"], dict) else hco_min_omega(ch["challenge_set"], st["d"], st["r"], ch["lambda"])
+    if isinstance(ch["omega"], dict):
+        return ch["omega"]["Fixed"]
+    return hco_min_omega(ch["challenge_set"], st["d"], st["r"], ch["lambda"], hco_rej_iterations_of(ch))
 
 
 def hco_derive(ch):
@@ -515,7 +526,7 @@ def hco_derive(ch):
         "QBelow2Pow63": q < 2^63,
         "RejectionConstant": bool(ln_m <= R(1) / n),
         "JInvRepresentable": P["j_inv_capacity"] >= dd["beta"],
-        "KnowledgeError": size >= 2^(r + 1 + ch["lambda"]),
+        "KnowledgeError": hco_knowledge_error_holds(size, r, ch["lambda"], L),
         "RejIterationsLambda": L == ch["lambda"],
     }
     return P, rep
@@ -1034,7 +1045,7 @@ if RUN_COLLABORATIVE:
         "- Command: `%s` (run from the repository root; %s, started %s)." % (_cmd.strip(), _sage_version, _hco_started.strftime("%Y-%m-%d %H:%M")),
         "- Lattice estimator: %s, revision `%s` (%s)." % (ESTIMATOR_REPO, _estimator_rev, "cloned into a temporary directory and removed at exit" if _estimator_tmp is not None else "an existing checkout given by LATTICE_ESTIMATOR_DIR"),
         "- Cascade: `6_Collaborative_Hachi.tex:267-285` of the draft at commit `8834c9f`, with beta_1 = 2^(r - ceil(log n)) omega floor(b/2) as the draft's commit `2ee6507` revises line 279 (the bound of `5_Building_Blocks.tex`:141), gamma_bar = b - 1 as the draft's commit `28721d6` sets it, the least tau whose balanced digits represent beta (the Setup's rule since 2026-11-10), the L = lambda masks per prover in mu and in the width of D and no bound 1 + 2^(l+3) n omega^2 b on q (the parameter table of the draft's commit `1096ea2`), and the rules of `docs/m0-spec.md`.",
-        "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2^(r+1)/|C| <= 2^-lambda, L = lambda, n_D = %d, t = n - 1." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
+        "- Fixed choices: lambda = %d, k = %d (kappa = %d), b = %d, tight tau, the l1-ball challenge set with the smallest omega such that 2 L 2^r/|C| <= 2^-lambda, L = lambda, n_D = %d, t = n - 1." % (HCO_LAMBDA, 2^HCO_KAPPA, HCO_KAPPA, HCO_B, HCO_ND),
         "- n_A and q: MSIS for A (rank n_A d, width delta 2^m, infinity bound 2 omega_bar beta_bar = 8 omega b^tau, 6_Collaborative_Hachi.tex:581) in the lowest delta-band (b^(delta-1) < q <= b^delta) of admissible q < 2^63 that admits a secure n_A: the smallest secure n_A in that band, and the smallest prime = 5 mod 8 of the band above the Setup bounds with that MSIS margin (bisection on log2 q to 1/%d bit, the final prime checked again). The last column lists the higher bands where fewer rows of A would do; each band adds a digit to delta, which costs more in mu and N. n_B: the smallest height with MSIS for B secure (bound 2 gamma_bar = 2(b - 1)); m_v and m_u: the smallest values with MLWE_{q, d, n_D, m_v - n_D, b} and MLWE_{q, d, n_B, m_u - n_B, b} secure (t-hiding.tex:20-26, 5_Building_Blocks.tex:207)." % HCO_Q_STEPS,
         "- MSIS: first the trivial linear-algebra attack, rank log2(q/(2B + 1)) >= lambda, then `SIS.lattice` (infinity norm) with zeta = 0 on m' columns, minimised over m' (a grid of 1.25 to 64 times the rank, refined by ternary search), because the estimator's own search over ignored columns misses interior optima and returns infinite costs for wide matrices. MLWE: `LWE.estimate` without arora-gb and bkw (only n_D d samples per secret), and also without dual_hybrid when n d < (m - n) d, because its MATZOV cost model assumes n samples and uses m only to cap the block size; secret and error uniform on [-8, 7].",
         "- Bits are log2 of the estimated cost; 'inf' means that no number of columns gave a finite cost (every evaluation infinite or beyond 2^1000). Estimates, not proofs; see the notes in `parameters.sage`.",
