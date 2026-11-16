@@ -445,7 +445,8 @@ impl Plan {
     /// value at most $\lfloor q/2 \rfloor$ (and the norm of `m` when it has fewer primes). The
     /// pieces cover the vector in order, at most [`NADDS`] entries each. Each piece is transformed
     /// into a scratch buffer (as the transforms of [`Plan::mat_vec_prepared`], [`LANES`] entries at
-    /// a time), its
+    /// a time; a coefficient is its own residue modulo every prime above that bound, which then
+    /// takes it without a reduction), its
     /// products by the columns of `m` are summed in the NTT form and brought back by the CRT, and
     /// the pieces' sums are added modulo $q$: every piece's sum is exact, so the result is that of
     /// [`Plan::mat_vec_prepared`] on the same vector. Sequential, for callers that run many vectors
@@ -472,6 +473,7 @@ impl Plan {
         }
         let (n, primes) = (self.n, m.primes);
         let short = primes < self.plans.len();
+        let bound = if short { m.norm } else { self.half_q };
         let mut out = vec![vec![0u64; n]; m.rows.len()];
         let mut centered = vec![0i64; NADDS * n];
         // Entry k of a piece, prime p, at (k primes + p) n.
@@ -489,7 +491,6 @@ impl Plan {
             }
             let values = &mut centered[..count * n];
             fill(piece.clone(), values)?;
-            let bound = if short { m.norm } else { self.half_q };
             if values.iter().any(|c| c.unsigned_abs() > bound) {
                 return Err(Error::Overflow);
             }
@@ -497,7 +498,9 @@ impl Plan {
                 let lanes = batch.len() / n;
                 let buffer = &mut lanes_buffer[..lanes * n];
                 for (p, plan) in self.plans[..primes].iter().enumerate() {
-                    let direct = self.half_q < plan.modulus();
+                    // The values are at most `bound` in absolute value: below the prime, each is its
+                    // own residue.
+                    let direct = bound < plan.modulus();
                     for (lane, entry) in batch.chunks_exact(n).enumerate() {
                         for (slot, c) in buffer[lane..].iter_mut().step_by(lanes).zip(entry) {
                             *slot = if direct { *c as f64 } else { plan.lift(*c) };
@@ -556,6 +559,7 @@ impl Plan {
         }
         let (n, primes) = (self.n, m.primes);
         let short = primes < self.plans.len();
+        let bound = if short { m.norm } else { self.half_q };
         let mut out = vec![vec![vec![0u64; n]; m.rows.len()]; vectors];
         let mut centered = vec![0i64; NADDS * n];
         // Vector v, entry k of a piece, prime p, at ((v NADDS + k) primes + p) n.
@@ -576,7 +580,6 @@ impl Plan {
             for v in 0..vectors {
                 let values = &mut centered[..count * n];
                 fill(v, piece.clone(), values)?;
-                let bound = if short { m.norm } else { self.half_q };
                 if values.iter().any(|c| c.unsigned_abs() > bound) {
                     return Err(Error::Overflow);
                 }
@@ -584,7 +587,8 @@ impl Plan {
                     let lanes = batch.len() / n;
                     let buffer = &mut lanes_buffer[..lanes * n];
                     for (p, plan) in self.plans[..primes].iter().enumerate() {
-                        let direct = self.half_q < plan.modulus();
+                        // As in `mat_vec_prepared_pieces`: the values are at most `bound`.
+                        let direct = bound < plan.modulus();
                         for (lane, entry) in batch.chunks_exact(n).enumerate() {
                             for (slot, c) in buffer[lane..].iter_mut().step_by(lanes).zip(entry) {
                                 *slot = if direct { *c as f64 } else { plan.lift(*c) };
@@ -959,6 +963,94 @@ mod tests {
                         bad(vec![0..NADDS + 1, NADDS + 1..len]),
                         "a piece above NADDS"
                     );
+                }
+            }
+        }
+    }
+
+    /// [`Plan::mat_vec_prepared_pieces_many`] against [`Plan::mat_vec_prepared`] for each vector:
+    /// three vectors in one call, full-range and short (at the largest norm of each smaller prime
+    /// count, worst-case entries in the first vector), for a modulus below the primes and two
+    /// above them, where the coefficients of a short vector convert without a reduction while
+    /// [`Plan::mat_vec_prepared`] reduces them; pieces of 1, [`LANES`] + 1 and [`NADDS`] entries.
+    #[test]
+    fn many_vectors_give_the_prepared_products() {
+        let mut rng = SplitMix(11);
+        let centered = |q: u64, x: u64| -> i64 {
+            let v = x % q;
+            if v > q / 2 {
+                v as i64 - q as i64
+            } else {
+                v as i64
+            }
+        };
+        let largest_norm = |plan: &Plan, primes: usize| -> u64 {
+            let (mut low, mut high) = (0, plan.half_q);
+            while high - low > 1 {
+                let middle = low + (high - low) / 2;
+                if plan.primes_for(middle) <= primes {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            low.max(1)
+        };
+        for q in [384156492036173u64, 18211211930825437, 9223372036854775549] {
+            for (n, len) in [(64usize, NADDS + 3), (256, 40)] {
+                let plan = Plan::new(q, n).unwrap();
+                let m: Vec<Vec<Vec<u64>>> = (0..3)
+                    .map(|_| {
+                        (0..len)
+                            .map(|_| (0..n).map(|_| rng.next() % q).collect())
+                            .collect()
+                    })
+                    .collect();
+                let mut cases = vec![(plan.prepare(&m).unwrap(), None)];
+                for primes in 1..plan.plans.len() {
+                    if plan.primes_for(1) <= primes {
+                        let norm = largest_norm(&plan, primes);
+                        cases.push((plan.prepare_short(&m, norm).unwrap(), Some(norm)));
+                    }
+                }
+                for (prepared, norm) in &cases {
+                    let vectors: Vec<Vec<Vec<u64>>> = (0..3)
+                        .map(|v| {
+                            (0..len)
+                                .map(|_| match norm {
+                                    None => (0..n).map(|_| rng.next() % q).collect(),
+                                    Some(norm) if v == 0 => extreme(q, n, *norm),
+                                    Some(norm) => (0..n)
+                                        .map(|_| (rng.next() % (2 * norm + 1) + q - norm) % q)
+                                        .collect(),
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    let want: Vec<_> = vectors
+                        .iter()
+                        .map(|v| plan.mat_vec_prepared(prepared, v).unwrap())
+                        .collect();
+                    for size in [1, LANES + 1, NADDS] {
+                        let cover = (0..len).step_by(size).map(|s| s..(s + size).min(len));
+                        let got = plan
+                            .mat_vec_prepared_pieces_many(
+                                prepared,
+                                vectors.len(),
+                                cover,
+                                |v, piece, out| {
+                                    for (k, entry) in vectors[v][piece].iter().enumerate() {
+                                        for (o, x) in out[k * n..(k + 1) * n].iter_mut().zip(entry)
+                                        {
+                                            *o = centered(q, *x);
+                                        }
+                                    }
+                                    Ok(())
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(got, want, "q {q} n {n} norm {norm:?} pieces of {size}");
+                    }
                 }
             }
         }

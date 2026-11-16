@@ -33,7 +33,7 @@
 //! [`vector_instructions`] tells what a build has.
 
 use crate::{
-    arith::{Reducer, pow_mod},
+    arith::pow_mod,
     error::{Error, Result},
     ntt::root_of_unity,
 };
@@ -42,7 +42,8 @@ use crate::{
 /// unity, as [`crate::ntt::NTT_PRIMES`]: the three largest primes below $2^{50}$ with
 /// $p \equiv 1 \pmod{2^{13}}$, from `crates/math/tools/ntt_primes.sage` (SageMath 10.9). Their
 /// product exceeds $2^{149.99}$, so three suffice for every $q \lt 2^{63}$ and degree at most
-/// 4096 ([`crate::rns`]).
+/// 4096 ([`crate::rns`]). Each is $2^{50} - g$ with $g \lt 2^{19}$ (16383, 212991 and 417791),
+/// which `FmaPlan::lift` uses.
 pub const FMA_PRIMES: [(u64, u64); 3] = [
     (1125899906826241, 990116967873799),
     (1125899906629633, 702736788773885),
@@ -103,9 +104,12 @@ pub(crate) struct FmaPlan {
     inverse_twiddles: Vec<(f64, f64)>,
     /// $d^{-1}$, centered, with its ratio to $p$.
     scale: (f64, f64),
-    /// Reduction of integers modulo $p$.
-    reducer: Reducer,
+    /// $g = 2^{50} - p$, below $2^{19}$.
+    gap: u64,
 }
+
+/// The bits below $2^{50}$.
+const LOW_50: u64 = (1 << 50) - 1;
 
 impl FmaPlan {
     /// The plan of prime `index` of [`FMA_PRIMES`] and a power of two $2 \le d \le$
@@ -117,6 +121,12 @@ impl FmaPlan {
         let (prime, root) = *FMA_PRIMES
             .get(index)
             .ok_or(Error::Parameter("FMA prime index"))?;
+        let gap = (1u64 << 50)
+            .checked_sub(prime)
+            .filter(|g| *g < 1 << 19)
+            .ok_or(Error::Parameter(
+                "an FMA prime is 2^50 less a number below 2^19",
+            ))?;
         let psi = root_of_unity(prime, root, d);
         let psi_inverse = pow_mod(psi, prime - 2, prime);
         let p = prime as f64;
@@ -145,7 +155,7 @@ impl FmaPlan {
             forward_twiddles: twiddles(psi),
             inverse_twiddles: twiddles(psi_inverse),
             scale: centered(pow_mod(d as u64, prime - 2, prime)),
-            reducer: Reducer::new(prime),
+            gap,
         })
     }
 
@@ -154,10 +164,16 @@ impl FmaPlan {
         self.prime
     }
 
-    /// The double of absolute value below $p$ that is congruent to the integer $c$.
+    /// The double of absolute value below $p$ that is congruent to the integer $c$: the sign of $c$
+    /// times $|c| \bmod p$. With $|c| = h 2^{50} + l$, $l \lt 2^{50}$ and $h \le 2^{13}$, and $2^{50} = p +
+    /// g$, $|c| \equiv l + h g \pmod p$, which is below $2^{50} + 2^{32} \lt 2p$, so one subtraction
+    /// of $p$ at most gives $|c| \bmod p$, without a division.
     #[inline(always)]
     pub(crate) fn lift(&self, c: i64) -> f64 {
-        let r = self.reducer.reduce_below(u128::from(c.unsigned_abs())) as f64;
+        let x = c.unsigned_abs();
+        let r = (x & LOW_50) + (x >> 50) * self.gap;
+        let r =
+            core::hint::select_unpredictable(r >= self.prime, r.wrapping_sub(self.prime), r) as f64;
         core::hint::select_unpredictable(c < 0, -r, r)
     }
 
@@ -338,6 +354,50 @@ mod tests {
     }
 
     /// The table against its definition.
+    /// [`FmaPlan::lift`] against the residue computed in `i128`, for every prime of the table: at
+    /// 0, the multiples of $p$ and of $2^{50}$ and their neighbours, the ends of `i64`, and random
+    /// values of every size, of both signs.
+    #[test]
+    fn the_lift_is_the_signed_residue_at_the_ends_of_its_range() {
+        let mut rng = SplitMix(23);
+        for index in 0..FMA_PRIMES.len() {
+            let plan = FmaPlan::new(index, 8).unwrap();
+            let p = plan.prime as i64;
+            let mut values = vec![
+                0i64,
+                1,
+                p - 1,
+                p,
+                p + 1,
+                2 * p - 1,
+                2 * p,
+                (1 << 50) - 1,
+                1 << 50,
+            ];
+            values.extend([
+                (1 << 50) + 1,
+                1 << 51,
+                i64::MAX,
+                i64::MAX - 1,
+                i64::MAX / p * p,
+            ]);
+            values.extend([i64::MAX / p * p - 1, (i64::MAX >> 50) << 50]);
+            for bits in 1..64 {
+                values.push((rng.next() >> (64 - bits)) as i64);
+            }
+            let negated: Vec<i64> = values.iter().map(|v| -v).collect();
+            values.extend(negated);
+            values.extend([i64::MIN, i64::MIN + 1]);
+            for c in values {
+                let r = (i128::from(c).unsigned_abs() % u128::from(plan.prime)) as i64;
+                let want = if c < 0 { -r } else { r };
+                let got = plan.lift(c);
+                assert_eq!(got, want as f64, "prime {index}, c = {c}");
+                assert!(got.abs() < plan.p, "prime {index}, c = {c}");
+            }
+        }
+    }
+
     #[test]
     fn the_table_holds_primes_with_roots_of_order_two_to_the_thirteen() {
         for (p, root) in FMA_PRIMES {
