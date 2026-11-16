@@ -150,7 +150,14 @@ has been run with them yet.
 - **`scripts/gcp.py`** creates one Google Cloud instance per party, builds `hachi-co-party` on each from a tarball of
   the working tree, writes the hosts file and an ssh configuration for `cluster.py`, optionally emulates a fixed RTT
   with `tc netem`, and deletes everything afterwards. It only prints the gcloud commands unless given `--execute`.
-  `scripts/gcp.example.json` is a configuration to copy.
+  `scripts/gcp.example.json` is a configuration to copy. An optional `boot_disk_type` (for example `pd-balanced`, or
+  `hyperdisk-balanced` for the series that take only Hyperdisk) is passed to gcloud as the boot disk's type.
+- **`scripts/local_grid.py`** runs the local plans on one machine, every party over the loopback with its blocks of f'
+  on disk: `smoke` (the toy presets), `calibration` (l = 20 and n = 2 at 1 and 4 threads per party, l = 24 and n = 8
+  at 1 thread) and `phase1` (l = 16, 20, 24 and n = 2, 4, 8 at 1 thread per party, n = 2 at 4 threads, n = 2 without
+  hiding in the base PCS, and the single prover at 1 and 8 threads, three repetitions each). Each cell is one call of
+  `cluster.py` with local parties (or `run_parties.py --single`), its lines are appended to `--out` with the plan and
+  the cell's name, and a rerun skips the repetitions already recorded. `--list` prints the cells.
 - **`scripts/bench_table.py --medians`** prints the lines of `cluster.py` as a table of medians, one row per preset,
   number of parties, setting and threads per party.
 - **`scripts/wan_grid.py`** runs a grid: for each network setting it switches the emulation of the hosts (`docker`

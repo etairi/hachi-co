@@ -87,12 +87,15 @@ def execute(commands, really, parallel=False):
 
 def create(cfg, args):
     commands = []
+    # The disk type, when the config gives one ("boot_disk_type", for example pd-balanced or hyperdisk-balanced):
+    # some machine series take only some types, and gcloud's default need not be one of them.
+    disk_type = ["--boot-disk-type", cfg["boot_disk_type"]] if cfg.get("boot_disk_type") else []
     for inst in cfg["instances"]:
         commands.append(gcloud(cfg, "compute", "instances", "create", inst["name"], "--zone", inst["zone"],
                                "--machine-type", inst.get("machine_type", cfg["machine_type"]),
                                "--image-family", cfg["image_family"], "--image-project", cfg["image_project"],
-                               "--boot-disk-size", f"{cfg['boot_disk_gb']}GB", "--network", cfg["network"],
-                               "--tags", cfg["tag"]))
+                               "--boot-disk-size", f"{cfg['boot_disk_gb']}GB", *disk_type, "--network",
+                               cfg["network"], "--tags", cfg["tag"]))
     n = len(cfg["instances"])
     commands.append(gcloud(cfg, "compute", "firewall-rules", "create", f"{cfg['tag']}-parties",
                            "--network", cfg["network"], "--direction", "INGRESS",
