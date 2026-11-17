@@ -9,6 +9,7 @@ eight parties fit in the memory of one machine.
     python3 scripts/local_grid.py --plan calibration --out runs/local/calibration.jsonl --work runs/local/work
     python3 scripts/local_grid.py --plan phase1 --out runs/local/phase1.jsonl --work runs/local/work
     python3 scripts/local_grid.py --plan phase1 --list      # the cells and their repetitions, nothing is run
+    python3 scripts/local_grid.py --plan greyhound --out runs/local/greyhound.jsonl --work runs/local/work-gh
 
 Plans (presets secure-l{l}-n{n}-a8, 115 bits; the 100-bit comparison with PPP26 runs across machines instead):
 - smoke: the toy presets at n = 2 and 4 and the single prover, one repetition each, to check the machine.
@@ -17,6 +18,8 @@ Plans (presets secure-l{l}-n{n}-a8, 115 bits; the 100-bit comparison with PPP26 
 - phase1: l = 20, 22, 24 and n = 2, 4, 8 at 1 thread per party; n = 2 at 4 threads per party; the same instance
   without hiding in the base PCS (-nonhiding) at n = 2, 4 and 8 and 1 thread; the single prover at 1 and 8
   threads. One repetition each, in increasing size within each part.
+- greyhound: the instances of phase1 with the Greyhound tail (-greyhound, one tail proof per prover) at l = 20, 22, 24
+  and n = 2, 4, 8 and 1 thread per party, one repetition each.
 """
 import argparse
 import json
@@ -51,6 +54,9 @@ def plan_cells(name):
                   for ell in ELLS for n in (4, 8)]
         cells += [(f"l{ell}-single-t{t}", "single", preset(ell, 2), 1, t, REPS) for ell in ELLS for t in (1, 8)]
         return cells
+    if name == "greyhound":
+        return [(f"l{ell}-n{n}-t1-greyhound", "parties", preset(ell, n, "-greyhound"), n, 1, REPS)
+                for ell in ELLS for n in (2, 4, 8)]
     raise SystemExit(f"unknown plan {name}")
 
 
@@ -111,7 +117,7 @@ def run_cell(args, cell, kind, name, n, threads, first, reps):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--plan", required=True, choices=["smoke", "calibration", "phase1"])
+    ap.add_argument("--plan", required=True, choices=["smoke", "calibration", "phase1", "greyhound"])
     ap.add_argument("--out", type=Path)
     ap.add_argument("--work", type=Path, help="working directories of the parties and the outputs of each cell")
     ap.add_argument("--port", type=int, default=7400)
