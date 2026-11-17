@@ -51,14 +51,14 @@
 //! of its values, so its proof length varies too. In the samples of 17 November 2026
 //! (hco-dev1, lambda 100 and 115, q of 48.4, 53.3 and 56.4 bits, single tables of $2^{24}$ and
 //! $2^{28}$ digits and batches of $2^{27}$ or $2^{28}$, $2^{20}$ and $2^{18}$, five digit
-//! distributions, 20 contexts each), the norm stayed within 0.5% of its mean for independent
-//! digits and spread from 0.6 to 1.33 times the joint norm for equal columns: 2 of 117 first
-//! attempts with equal columns at $(2^{28}, 2^{20}, 2^{18})$ failed the binding checks, and none
-//! with independent digits. jali's proofs took at most 1.038 times the prediction, against the
-//! reserve's 1.08 plus 2 KiB. The cost of restarts: a prover may choose among 64 sets of
-//! amortization challenges, so the soundness error of the amortization step grows by at most a
-//! factor 64 (6 bits). [`TailParams::prove`] fails with [`Error::Parameter`] when all 64
-//! attempts do.
+//! distributions, 20 contexts each), the squared norm stayed within 0.5% of its mean for
+//! independent digits and spread from 0.38 to 1.33 times the joint one for equal columns. None
+//! of 600 proofs on independent digits restarted, and 8 of 380 on equal columns did, at most
+//! twice. jali's proofs took at most 1.038 times the prediction, against the reserve's 1.08
+//! plus 2 KiB, and no attempt exceeded it. The cost of restarts: a prover may choose among 64
+//! sets of amortization challenges, so the soundness error of the amortization step grows by
+//! at most a factor 64 (6 bits). [`TailParams::prove`] fails with [`Error::Parameter`] when all
+//! 64 attempts do.
 //!
 //! **Security** (not knowledge soundness, which is out of scope here): Greyhound's rule of
 //! [`crate::params`] with jali's slack $\sqrt{337/30}$ and $\delta = \delta_0(b)$ for the BKZ
