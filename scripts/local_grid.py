@@ -15,8 +15,8 @@ Plans (presets secure-l{l}-n{n}-a8, 115 bits; the 100-bit comparison with PPP26 
 - calibration: l = 20 and n = 2 at 1 and 4 threads per party, and l = 24 and n = 8 at 1 thread (the memory of eight
   parties), one repetition each.
 - phase1: l = 20, 22, 24 and n = 2, 4, 8 at 1 thread per party; n = 2 at 4 threads per party; the same instance
-  without hiding in the base PCS (-nonhiding) at n = 2 and 1 thread; the single prover at 1 and 8 threads. Two
-  repetitions each, in increasing size within each part.
+  without hiding in the base PCS (-nonhiding) at n = 2, 4 and 8 and 1 thread; the single prover at 1 and 8
+  threads. One repetition each, in increasing size within each part.
 """
 import argparse
 import json
@@ -27,7 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 ELLS = (20, 22, 24)
-REPS = 2
+REPS = 1
 
 
 def preset(ell, n, suffix=""):
@@ -47,6 +47,8 @@ def plan_cells(name):
         cells = [(f"l{ell}-n{n}-t1", "parties", preset(ell, n), n, 1, REPS) for ell in ELLS for n in (2, 4, 8)]
         cells += [(f"l{ell}-n2-t4", "parties", preset(ell, 2), 2, 4, REPS) for ell in ELLS]
         cells += [(f"l{ell}-n2-t1-nonhiding", "parties", preset(ell, 2, "-nonhiding"), 2, 1, REPS) for ell in ELLS]
+        cells += [(f"l{ell}-n{n}-t1-nonhiding", "parties", preset(ell, n, "-nonhiding"), n, 1, REPS)
+                  for ell in ELLS for n in (4, 8)]
         cells += [(f"l{ell}-single-t{t}", "single", preset(ell, 2), 1, t, REPS) for ell in ELLS for t in (1, 8)]
         return cells
     raise SystemExit(f"unknown plan {name}")
