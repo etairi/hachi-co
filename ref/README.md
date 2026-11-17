@@ -2,7 +2,7 @@
 
 A SageMath/numpy reference implementation of the Hachi-Co protocol at the toy presets of `docs/m0-spec.md`, for
 n ∈ {1, 2, 3}, extended to n ∈ {4, 8} (see "Party counts 4 and 8" below). It is a test oracle and fixture generator for the Rust code. It is not secure and not optimized.
-Everything follows the draft at `/Users/etairi/research/collaborative-hatchi` (commit `8834c9f`). Changes since:
+Everything follows the paper draft at its commit `8834c9f`. Changes since:
 - Setup's $\beta_1 = 2^{r - \lceil \log n \rceil} \omega \lfloor b/2 \rfloor$ (6_CH:279 as the draft's commit `2ee6507` revises it, the bound of
   5_BB:141), in place of $\omega b$, so $\gamma$ and $\beta$ halve and `toy-n3` moves to $q = 33554501$.
 - $\bar\gamma = b - 1$ (the draft's commit `28721d6`), in place of $b$.
