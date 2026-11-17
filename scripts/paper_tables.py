@@ -18,8 +18,10 @@ Definitions, as the section states them:
   rank) plus the preparation of their masks (`mask_commit_s`, every prover's encoding and commitment of its masks),
   which their timer leaves out while our per-prover time includes the corresponding work of ours; their dealer
   (`dealer_setup_s`, which shares the polynomial, as our provers are given their shares) is left out;
-- communication per prover: the payload bytes the busiest prover sends (`sent_bytes_per_party`), and for PPP26 the
-  payload bytes of its timed part counted by our MPI shim;
+- communication per prover: the payload bytes the busiest prover sends (`sent_bytes_per_party`). For PPP26, the
+  share of the polynomial that each prover receives from their dealer before the protocol (the dealer's payload,
+  `sent_bytes_setup_per_prover` of rank 0, over the n - 1 others), plus the payload its busiest prover sends in the
+  timed part, both counted by our MPI shim (`ppp26_sent`);
 - peak memory per prover: the largest resident set of a prover (`/usr/bin/time`);
 - sizes in decimal units, 1 MB = 10^6 bytes and 1 GB = 10^9 bytes;
 - repetitions averaged (mean), with their relative spread printed.
@@ -56,6 +58,13 @@ def spread(xs):
 
 def per_prover_time(d):
     return d["commit_s"] + d["eval_s"]
+
+
+def ppp26_sent(d):
+    """PPP26's communication per prover in bytes: the share that each prover receives from the dealer (rank 0)
+    before the protocol, and the payload of its busiest prover in the timed part."""
+    share = (d.get("sent_bytes_setup_per_prover") or [0])[0] / max(d["n"] - 1, 1)
+    return share + max(x for x in d["sent_bytes_per_prover"] if x is not None)
 
 
 def fmt(x, digits=1):
@@ -273,10 +282,15 @@ def main():
         rs = [d for d in rs or [] if d.get("total_s") is not None]
         if not rs:
             return None
+        return theirs_summary(rs)
+
+    def theirs_summary(rs):
+        if not rs:
+            return None
         peaks = [max(d["peak_bytes_per_prover"]) for d in rs if d.get("peak_bytes_per_prover")]
         return {"time": mean([d["total_s"] + d["mask_commit_s"] for d in rs]), "proof": mean([d["proof_kb"] for d in rs]) / 1e3,
                 "verify": mean([d["verify_s_reported"] for d in rs if d.get("verify_s_reported") is not None]),
-                "sent": mean([max(x for x in d["sent_bytes_per_prover"] if x is not None) for d in rs]) / 1e6,
+                "sent": mean([ppp26_sent(d) for d in rs]) / 1e6,
                 "peak": mean(peaks) / 1e9 if peaks else float("nan")}
 
     def show(name, r):
