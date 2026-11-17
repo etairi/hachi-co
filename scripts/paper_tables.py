@@ -8,8 +8,8 @@ loopback) and the grid of PPP26's network settings (`scripts/wan_grid.py`, one p
         benchmarks/gcp-2026-11-17-ppp26-k1.jsonl --inmemory benchmarks/gcp-2026-11-17-inmemory.jsonl \\
         --reverify benchmarks/gcp-2026-11-17-reverify.jsonl
 
-The grid records of PPP26's settings may come in several files: ours (presets secure100-*), ours with the Greyhound
-tail (the same presets with the suffix -greyhound, one tail proof per prover), and PPP26 at their default packing
+The grid records of PPP26's settings may come in several files: ours (presets secure100-*), ours composed with
+Greyhound (the same presets with the suffix -greyhound, one Greyhound proof per prover), and PPP26 at their default packing
 factor k = N/4 and at k = 1 (records with "packing": 1, their highest corruption threshold t <= N/2).
 
 Definitions, as the section states them:
@@ -186,13 +186,15 @@ def main():
     ours = defaultdict(list)
     theirs = defaultdict(list)
     theirs_k = defaultdict(list)
+    theirs8, theirs8_k = defaultdict(list), defaultdict(list)   # their code with OpenMP (ppp26.py --openmp)
     for d in wan:
         g = d.get("setting", {}).get("grid_setting")
         if d.get("scheme") == "ppp26":
+            default, by_k = (theirs8, theirs8_k) if d.get("openmp") else (theirs, theirs_k)
             if d.get("packing") in (None, d["n"] // 4):
-                theirs[(g, d["n"], d["log_m"])].append(d)
+                default[(g, d["n"], d["log_m"])].append(d)
             else:
-                theirs_k[(g, d["n"], d["log_m"], d["packing"])].append(d)
+                by_k[(g, d["n"], d["log_m"], d["packing"])].append(d)
         elif d.get("accepted", True):
             threads = max(d.get("threads_per_party", [1]))
             ours[(g, d["preset"], threads)].append(d)
@@ -257,10 +259,10 @@ def main():
     print(f"\\addplot[mark=square*] coordinates {{{coords(lan_m, 0)}}};  % LAN, 8 threads, MB")
 
 
-    # 6. Three ways in PPP26's settings at 100 bits and 1 thread per prover: ours with Hachi, ours with the Greyhound
-    # tail (one tail proof per prover), and PPP26 at k = N/4 and at k = 1, with their masks counted.
-    def ours_row(g, preset):
-        rs = ours.get((g, preset, 1))
+    # 6. Three ways in PPP26's settings at 100 bits and 1 thread per prover: ours with Hachi, ours composed with
+    # Greyhound (one Greyhound proof per prover), and PPP26 at k = N/4 and at k = 1, with their masks counted.
+    def ours_row(g, preset, threads=1):
+        rs = ours.get((g, preset, threads))
         if not rs:
             return None
         return {"time": mean([per_prover_time(d) for d in rs]), "proof": mean([d["proof_bytes"] for d in rs]) / 1e6,
@@ -283,7 +285,7 @@ def main():
         return (f"{name} {fmt(r['time'])} s, {fmt(r['proof'], 2)} MB, verify {fmt(r['verify'], 3)} s, sent "
                 f"{fmt(r['sent'], 1)} MB, peak {fmt(r['peak'], 2)} GB")
 
-    print("\n% 6. Three ways, 100 bits, 1 thread per prover: ours (Hachi) | ours (Hachi + Greyhound tail) | "
+    print("\n% 6. Three ways, 100 bits, 1 thread per prover: ours (Hachi) | ours (Hachi + Greyhound) | "
           "PPP26 k = N/4 | PPP26 k = 1 (time with their masks)")
     rows = {}
     for g in settings:
@@ -297,20 +299,41 @@ def main():
                     print(f"% {g} n{n} l{ell}: " + " | ".join(show(k, v) for k, v in r.items()))
                     gh, pp = r["greyhound"], r["ppp26"]
                     if gh and pp:
-                        print(f"%   Greyhound tail against PPP26 k = N/4: time x{fmt(gh['time'] / pp['time'])}, proof "
+                        print(f"%   Hachi + Greyhound against PPP26 k = N/4: time x{fmt(gh['time'] / pp['time'])}, proof "
                               f"x{fmt(gh['proof'] / pp['proof'], 2)}, verify x{fmt(gh['verify'] / pp['verify'], 0)}, peak "
                               f"x{fmt(gh['peak'] / pp['peak'], 2)}")
                     if gh and r["hachi"]:
                         h = r["hachi"]
-                        print(f"%   Greyhound tail against Hachi only: time x{fmt(gh['time'] / h['time'], 3)}, proof "
+                        print(f"%   Hachi + Greyhound against Hachi only: time x{fmt(gh['time'] / h['time'], 3)}, proof "
                               f"x{fmt(gh['proof'] / h['proof'], 3)}, verify x{fmt(gh['verify'] / h['verify'], 2)}")
     for n in (4, 8):
-        for key, label in (("hachi", "ours, Hachi"), ("greyhound", "ours, Hachi + Greyhound tail"),
+        for key, label in (("hachi", "ours, Hachi"), ("greyhound", "ours, Hachi + Greyhound"),
                            ("ppp26", "PPP26, k = N/4"), ("ppp26k1", "PPP26, k = 1")):
             pts = [(ell, rows[("lan", n, ell)][key]["proof"]) for ell in ELLS
                    if ("lan", n, ell) in rows and rows[("lan", n, ell)][key]]
             if pts:
                 print(f"\\addplot coordinates {{{coords(pts, 2)}}};  % proof MB, {label}, n = {n}")
+
+    # 9. The same at 8 threads per prover: ours, and their code with OpenMP (scripts/ppp26/openmp.patch).
+    print("\n% 9. Three ways, 100 bits, 8 threads per prover: ours (Hachi) | ours (Hachi + Greyhound) | "
+          "PPP26 with OpenMP k = N/4 | k = 1 (time with their masks)")
+    for g in settings:
+        for n in (4, 8):
+            for ell in ELLS:
+                r = {"hachi": ours_row(g, f"secure100-l{ell}-n{n}-a8", 8),
+                     "greyhound": ours_row(g, f"secure100-l{ell}-n{n}-a8-greyhound", 8),
+                     "ppp26": theirs_row(theirs8.get((g, n, ell))), "ppp26k1": theirs_row(theirs8_k.get((g, n, ell, 1)))}
+                if any(r.values()):
+                    print(f"% {g} n{n} l{ell}: " + " | ".join(show(k, v) for k, v in r.items()))
+                    one = theirs_row(theirs.get((g, n, ell)))
+                    for key in ("hachi", "greyhound"):
+                        if r[key] and r["ppp26"]:
+                            print(f"%   {key} against PPP26 with OpenMP: time x{fmt(r[key]['time'] / r['ppp26']['time'])}")
+                    if one and r["ppp26"]:
+                        print(f"%   PPP26 with OpenMP at 8 threads against 1 thread: time x{fmt(r['ppp26']['time'] / one['time'], 3)}")
+                    h1 = ours_row(g, f"secure100-l{ell}-n{n}-a8")
+                    if h1 and r["hachi"]:
+                        print(f"%   ours at 8 threads against 1 thread: time x{fmt(r['hachi']['time'] / h1['time'], 3)}")
 
     # 7. Memory with every share in memory, and the verifier that reads M by rows.
     for d in lines(args.inmemory):
@@ -320,7 +343,8 @@ def main():
     if rv:
         print("\n% 8. verifier on the same proofs: phase 1 build (M whole) | M by rows: seconds, peak GiB")
         for d in rv:
-            old, new = d.get("e668433", {}), d.get("d86a4fd", {})
+            builds = [k for k, v in d.items() if isinstance(v, dict) and "verify_s" in v]
+            old, new = (d.get(builds[0], {}), d.get(builds[1], {})) if len(builds) == 2 else ({}, {})
             name = "/".join(Path(d["dir"]).parts[-3:-1])
             print(f"% {name}: {old.get('verify_s')} s, {fmt(old.get('max_rss_gib') or float('nan'), 2)} GiB | "
                   f"{new.get('verify_s')} s, {fmt(new.get('max_rss_gib') or float('nan'), 2)} GiB "
