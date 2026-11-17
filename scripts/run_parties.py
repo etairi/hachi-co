@@ -37,8 +37,12 @@ def seed(tag, *parts):
 
 
 def instance_name(preset):
-    """The name the seeds are drawn from: the preset without -nonhiding, which changes only the base PCS."""
-    return preset.removesuffix("-nonhiding")
+    """The name the seeds are drawn from: the preset without the suffixes -nonhiding and -greyhound (in either order),
+    which change only the base PCS, so that a variant proves the same instance as its preset."""
+    name = preset
+    while name.endswith(("-nonhiding", "-greyhound")):
+        name = name.removesuffix("-nonhiding").removesuffix("-greyhound")
+    return name
 
 
 def time_command():

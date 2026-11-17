@@ -4,7 +4,13 @@ benchmark records: the local grid (`scripts/local_grid.py --plan phase1`, every 
 loopback) and the grid of PPP26's network settings (`scripts/wan_grid.py`, one prover per instance).
 
     python3 scripts/paper_tables.py --local benchmarks/gcp-2026-11-17-local.jsonl \\
-        --wan benchmarks/gcp-2026-11-17-wan.jsonl
+        --wan benchmarks/gcp-2026-11-17-wan.jsonl benchmarks/gcp-2026-11-17-greyhound.jsonl \\
+        benchmarks/gcp-2026-11-17-ppp26-k1.jsonl --inmemory benchmarks/gcp-2026-11-17-inmemory.jsonl \\
+        --reverify benchmarks/gcp-2026-11-17-reverify.jsonl
+
+The grid records of PPP26's settings may come in several files: ours (presets secure100-*), ours with the Greyhound
+tail (the same presets with the suffix -greyhound, one tail proof per prover), and PPP26 at their default packing
+factor k = N/4 and at k = 1 (records with "packing": 1, their highest corruption threshold t <= N/2).
 
 Definitions, as the section states them:
 - per-prover time: Commit plus Eval of the slowest prover (`cluster.py` records the slowest of each), and for PPP26
@@ -63,9 +69,13 @@ def coords(points, digits=1):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--local", help="the records of the local grid (JSON lines)")
-    ap.add_argument("--wan", help="the records of the grid of PPP26's settings (JSON lines)")
+    ap.add_argument("--wan", nargs="*", default=[],
+                    help="the records of the grids of PPP26's settings (JSON lines, one or more files)")
+    ap.add_argument("--inmemory", help="the records of the runs with every share in memory (no --spill)")
+    ap.add_argument("--reverify", help="the verifier of the phase 1 build against the verifier that reads M by rows, "
+                                       "on the same saved proofs (reverify177.jsonl)")
     args = ap.parse_args()
-    local, wan = lines(args.local), lines(args.wan)
+    local, wan = lines(args.local), [d for path in args.wan for d in lines(path)]
 
     # The local grid, by cell.
     cells = defaultdict(list)
@@ -175,10 +185,14 @@ def main():
     # 4. PPP26's settings: ours at 100 bits and PPP26, 1 thread per prover; ours at 115 bits and 8 threads in LAN.
     ours = defaultdict(list)
     theirs = defaultdict(list)
+    theirs_k = defaultdict(list)
     for d in wan:
         g = d.get("setting", {}).get("grid_setting")
         if d.get("scheme") == "ppp26":
-            theirs[(g, d["n"], d["log_m"])].append(d)
+            if d.get("packing") in (None, d["n"] // 4):
+                theirs[(g, d["n"], d["log_m"])].append(d)
+            else:
+                theirs_k[(g, d["n"], d["log_m"], d["packing"])].append(d)
         elif d.get("accepted", True):
             threads = max(d.get("threads_per_party", [1]))
             ours[(g, d["preset"], threads)].append(d)
@@ -241,6 +255,76 @@ def main():
     print(f"\\addplot[mark=square*] coordinates {{{coords(lan_t)}}};  % LAN, 8 threads")
     print(f"\\addplot[mark=*] coordinates {{{coords(loc_m, 0)}}};  % local, 1 thread, MB")
     print(f"\\addplot[mark=square*] coordinates {{{coords(lan_m, 0)}}};  % LAN, 8 threads, MB")
+
+
+    # 6. Three ways in PPP26's settings at 100 bits and 1 thread per prover: ours with Hachi, ours with the Greyhound
+    # tail (one tail proof per prover), and PPP26 at k = N/4 and at k = 1, with their masks counted.
+    def ours_row(g, preset):
+        rs = ours.get((g, preset, 1))
+        if not rs:
+            return None
+        return {"time": mean([per_prover_time(d) for d in rs]), "proof": mean([d["proof_bytes"] for d in rs]) / 1e6,
+                "verify": mean([d["verify_s"] for d in rs]), "sent": mean([max(d["sent_bytes_per_party"]) for d in rs]) / 1e6,
+                "peak": mean([max(d["peak_bytes_per_party"]) for d in rs]) / 1e9}
+
+    def theirs_row(rs):
+        rs = [d for d in rs or [] if d.get("total_s") is not None]
+        if not rs:
+            return None
+        peaks = [max(d["peak_bytes_per_prover"]) for d in rs if d.get("peak_bytes_per_prover")]
+        return {"time": mean([d["total_s"] + d["mask_commit_s"] for d in rs]), "proof": mean([d["proof_kb"] for d in rs]) / 1e3,
+                "verify": mean([d["verify_s_reported"] for d in rs if d.get("verify_s_reported") is not None]),
+                "sent": mean([max(x for x in d["sent_bytes_per_prover"] if x is not None) for d in rs]) / 1e6,
+                "peak": mean(peaks) / 1e9 if peaks else float("nan")}
+
+    def show(name, r):
+        if r is None:
+            return f"{name} -"
+        return (f"{name} {fmt(r['time'])} s, {fmt(r['proof'], 2)} MB, verify {fmt(r['verify'], 3)} s, sent "
+                f"{fmt(r['sent'], 1)} MB, peak {fmt(r['peak'], 2)} GB")
+
+    print("\n% 6. Three ways, 100 bits, 1 thread per prover: ours (Hachi) | ours (Hachi + Greyhound tail) | "
+          "PPP26 k = N/4 | PPP26 k = 1 (time with their masks)")
+    rows = {}
+    for g in settings:
+        for n in (4, 8):
+            for ell in ELLS:
+                r = {"hachi": ours_row(g, f"secure100-l{ell}-n{n}-a8"),
+                     "greyhound": ours_row(g, f"secure100-l{ell}-n{n}-a8-greyhound"),
+                     "ppp26": theirs_row(theirs.get((g, n, ell))), "ppp26k1": theirs_row(theirs_k.get((g, n, ell, 1)))}
+                if any(r.values()):
+                    rows[(g, n, ell)] = r
+                    print(f"% {g} n{n} l{ell}: " + " | ".join(show(k, v) for k, v in r.items()))
+                    gh, pp = r["greyhound"], r["ppp26"]
+                    if gh and pp:
+                        print(f"%   Greyhound tail against PPP26 k = N/4: time x{fmt(gh['time'] / pp['time'])}, proof "
+                              f"x{fmt(gh['proof'] / pp['proof'], 2)}, verify x{fmt(gh['verify'] / pp['verify'], 0)}, peak "
+                              f"x{fmt(gh['peak'] / pp['peak'], 2)}")
+                    if gh and r["hachi"]:
+                        h = r["hachi"]
+                        print(f"%   Greyhound tail against Hachi only: time x{fmt(gh['time'] / h['time'], 3)}, proof "
+                              f"x{fmt(gh['proof'] / h['proof'], 3)}, verify x{fmt(gh['verify'] / h['verify'], 2)}")
+    for n in (4, 8):
+        for key, label in (("hachi", "ours, Hachi"), ("greyhound", "ours, Hachi + Greyhound tail"),
+                           ("ppp26", "PPP26, k = N/4"), ("ppp26k1", "PPP26, k = 1")):
+            pts = [(ell, rows[("lan", n, ell)][key]["proof"]) for ell in ELLS
+                   if ("lan", n, ell) in rows and rows[("lan", n, ell)][key]]
+            if pts:
+                print(f"\\addplot coordinates {{{coords(pts, 2)}}};  % proof MB, {label}, n = {n}")
+
+    # 7. Memory with every share in memory, and the verifier that reads M by rows.
+    for d in lines(args.inmemory):
+        print(f"\n% 7. in memory: {d.get('preset')} {d.get('setting', {}).get('grid_setting')}: per-prover time "
+              f"{fmt(per_prover_time(d))} s, peak {fmt(max(d['peak_bytes_per_party']) / 1e9, 2)} GB per prover")
+    rv = lines(args.reverify)
+    if rv:
+        print("\n% 8. verifier on the same proofs: phase 1 build (M whole) | M by rows: seconds, peak GiB")
+        for d in rv:
+            old, new = d.get("e668433", {}), d.get("d86a4fd", {})
+            name = "/".join(Path(d["dir"]).parts[-3:-1])
+            print(f"% {name}: {old.get('verify_s')} s, {fmt(old.get('max_rss_gib') or float('nan'), 2)} GiB | "
+                  f"{new.get('verify_s')} s, {fmt(new.get('max_rss_gib') or float('nan'), 2)} GiB "
+                  f"(accepted {old.get('accepted')}/{new.get('accepted')})")
 
 
 if __name__ == "__main__":
