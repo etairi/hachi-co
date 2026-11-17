@@ -1,71 +1,75 @@
 # Hachi-Co
 
-A Rust implementation, in progress, of **Hachi-Co**, the collaborative lattice-based polynomial commitment
-scheme of the draft "Collaborative Polynomial Commitments from Lattices". Several provers hold additive shares
-of a multilinear polynomial and jointly commit to it and prove its evaluations. The repository started from
-the single-prover **Hachi** prototype, which was ported onto the workspace's arithmetic and completed; it is the
-base PCS of Hachi-Co.
+Hachi-Co is a collaborative polynomial commitment scheme (PCS) from lattices. Several provers hold
+additive shares of a multilinear polynomial. Together they commit to it and prove its evaluations at
+public points, and any n − 1 of them learn nothing about the polynomial beyond their own shares. The
+scheme is plausibly post-quantum secure.
 
-## Workspace
+This repository contains the Rust implementation of the scheme and the scripts of the paper's
+benchmarks. Each prover opens its share with a hiding variant of [Hachi](https://eprint.iacr.org/2026/156),
+a lattice-based PCS. As an option, the openings can be composed with Greyhound, which makes the proof
+about 12 times smaller for 8 provers.
 
-| Crate | Package | Contents |
+| Presets | Security | Used for |
 |---|---|---|
-| `crates/hachi` | `hachi` | Hachi, the base PCS: inner-outer commitments to multilinear polynomials over $\mathbb Z_q$ and $\mathbb F_{q^k}$ and to vectors over $\mathbb F_{q^k}$, openings at points in $\mathbb F_{q^k}$ (multilinear evaluations and inner products with public weights; a multilinear opening binds its partial evaluations to the committed polynomial by a ring-switching sumcheck, a deviation from the paper's Section 3.2), the recursive iterations of the paper (every iteration but the last commits its next witness as Section 3.1 commits a polynomial over $\mathbb F_{q^k}$ and reduces its claim by Theorem 2, without partial evaluations, as Appendix A of the draft specifies, a deviation from Section 4.5, and every range check uses the $b$ balanced digits, a deviation from the paper's set $\{-b+1, \dots, b-1\}$) with the final witness in the clear (as many as give the smallest proof), Fiat–Shamir, and packed encodings ($\lceil \log_2 q \rceil$ bits per residue, $\lceil \log_2 b \rceil$ per digit of the final witness). Optionally masked, for multilinear polynomials over $\mathbb F_{q^k}$ and for vectors: randomized commitments ($\mathbf t_i = \mathbf A \mathbf s_i + \mathbf A' \boldsymbol\varrho_i$ with uniform digits), a masking row per chunk, and a first iteration masked by discrete Gaussians with rejection sampling. A masked commitment opens once. One masked opening of each kind, with its secrets and challenges, is checked against the equations of the draft's Appendix A.2 in Sage (`crates/hachi/tests/fixtures`). With masks, an optional merged commitment holds a polynomial and two vectors and opens them with one proof (not in the paper). The toy choices are not secure. |
-| `crates/math` | `hachi-co-math` | Arithmetic for a modulus chosen at run time: $\mathbb Z_q$, exact products in $\mathbf R_q = \mathbb Z_q[X]/(X^d+1)$, gadget decompositions, $\mathbb F_{q^k}$ in Hachi's subfield basis, $\mathbf R_q^H$, the trace, $\psi$ and $E$. |
-| `crates/sampling` | `hachi-co-sampling` | SHAKE-based PRG, exact uniform and short samplers, $\ell_1$-ball challenges, matrices from seeds, uniform rejection sampling, and discrete Gaussians $D_{\mathbb Z,\sigma}$ ($\sigma = 1, 2, 4, 8, 16$ from certified 192-bit tables, multiples of 16 from the last table with an exact Bernoulli step). |
-| `crates/transcript` | `hachi-co-transcript` | Framed, domain-separated Fiat–Shamir transcript with an attempt counter. |
-| `crates/params` | `hachi-co-params` | The draft's Setup cascade, a constraint report, toy and secure presets (`secure-*` at 115 bits, `secure100-*` at 100 bits for the comparison with PPP26). |
-| `crates/mpc` | `hachi-co-mpc` | The communication interface of the party code (F_AH, gather, abort agreement, pairwise exchange, all-gather) and its implementations: a loopback for one party, and an n-party endpoint over any point-to-point transport, which realizes F_AH as a masked broadcast (pseudorandom zero sharings from pairwise seeds, or fresh uniform ones), checks the framing, injects failures and counts bytes per call. An in-memory transport runs the parties on threads. A TCP transport runs them as separate processes or on separate machines: one connection per pair of parties, a handshake that checks the session id, n and the party indices, a documented frame format with bounded lengths, and a writer and a reader thread per connection. It is neither encrypted nor authenticated. |
-| `crates/core` | `hachi-co-core` | The shared protocol context: parameters and public matrices, the layout of the witness z′, the matrix M of the linear relation, the data passed between the building blocks, and the sources of randomness and Fiat–Shamir coins (with replay of the Sage fixtures for tests). The interface to the base PCS (`BasePcs`), with the conversion of hypercube values to monomial coefficients, and `ClearPcs`, a reference base PCS for the tests that opens by revealing the polynomial. |
-| `crates/commit` | `hachi-co-commit` | Commit (PConv of each party's input share, inner Ajtai commitments, F_AH(B)) and Open. |
-| `crates/conv` | `hachi-co-conv` | Πconv (Π_A in the draft), the reduction from F_{q^k} to R_q, and the verifier's step that reads the value y from E(u). |
-| `crates/r2l` | `hachi-co-r2l` | The ring-to-linear step: the $L$ masks of every prover, rejection sampling with each, the sets of accepted iterations and the selected one, and the shares of the linear relation. |
-| `crates/sumcheck` | `hachi-co-sumcheck` | The collaborative sumcheck and its verifier. Each prover commits to its share polynomial and its two blinders with the base PCS before the coins and opens them at the sumcheck's point; the verifier checks the 3n openings against the final values. |
-| `crates/hachico` | `hachi-co` | The PCS: Setup, Commit, Eval and Verify with Fiat–Shamir, with Hachi as the base PCS (`HachiBase`, whose public matrices come from the setup seed), the proof format and its size. Its tests run Commit and Eval with 1 to 8 provers, one thread each, with Hachi and with `ClearPcs`. The program `hachi-co-party` (module `harness`) runs one party per process over TCP, from a JSON configuration, and verifies the proof that it writes; a test runs 2 and 3 parties as processes and compares their proof with that of the in-memory run. With the default masks, each prover's three base-PCS commitments and openings are masked as Appendix A.2 of the draft specifies. The suffix `-merged` on a preset name selects one commitment and one opening per prover instead, an option that is not in the draft. The parameters are insecure test choices, except the estimates of the secure presets. |
-| `ref/` | — | A SageMath reference implementation of the building blocks, used as a test oracle and fixture generator. |
+| `secure-l<l>-n<n>-a8` | 115 bits | the main benchmarks |
+| `secure100-l<l>-n<n>-a8` | 100 bits | the comparison with PPP26 |
+| `toy-n<n>`, `bench-l<l>-n<n>` | none | tests and quick runs |
 
-`parameters.sage` computes parameters and security estimates. It clones the lattice estimator into a
-temporary directory and removes it at exit. `scripts/hachi-parameters/` chooses Hachi's parameters for the secure
-presets.
+Here `l` is the number of variables of the polynomial (2^l coefficients) and `n` the number of
+provers. A suffix changes how a preset runs on the same instance:
 
-## Build and test
+- `-greyhound` composes the openings with Greyhound.
+- `-nonhiding` runs the base PCS without its hiding choices, to measure what hiding costs. The
+  result is not hiding.
+- `-merged` gives each prover one commitment and one opening instead of three, an option that is
+  not in the paper.
 
-```text
+## Requirements
+
+- Rust 1.95 or newer.
+- A C compiler, for the mimalloc allocator of the party binary. Build with
+  `--no-default-features` to use the system allocator instead.
+- Python 3, for the scripts in `scripts/`.
+- Linux or macOS.
+
+On x86-64, `.cargo/config.toml` builds for the CPU of the building machine, so a binary runs only on
+machines with the same instructions. Build on the machine that you measure on.
+
+Optional:
+
+- SageMath, for the reference implementation in `ref/` and for recomputing parameters.
+- Docker, to emulate a wide-area network on one machine.
+- The Google Cloud SDK, to run the provers on separate cloud instances.
+- CMake and MPI, to build and run PPP26.
+
+## Quick start
+
+```sh
 cargo build --release
 cargo test --workspace --release
+python3 scripts/run_parties.py --preset bench-l16-n2 --n 2 --out /tmp/hachi-co-run
 ```
 
-On x86-64, `.cargo/config.toml` builds for the CPU of the building machine. The exact products of `hachi-co-math` use
-fused floating-point operations (`crates/math/src/fma.rs`), which are otherwise a library call each; they are exact
-either way, and the crates stay free of `unsafe`. A binary then runs only on machines with the instructions of the
-one that built it.
+The last command starts two provers as separate processes on this machine. They run Commit and Eval
+over TCP, the verifier checks the proof, and the script prints one JSON object with the timings, the
+peak memory of each prover, the bytes sent and the proof size. The seeds are derived from a tag, so
+the command line reproduces the run.
 
-Hachi's command-line program:
+To try a secure instance, replace the preset by, for example, `secure-l20-n2-a8`. With one thread per
+prover it takes a few minutes. Other useful options:
 
-```text
-cargo run --release -p hachi -- <l> [d] [iterations]
-```
+- `--threads <k>` gives each prover k threads.
+- `--spill <directory>` keeps each prover's large blocks on disk, so that big instances fit in memory.
+- `--single` runs the single-prover baseline: one prover commits to the whole polynomial with Hachi.
 
-It commits to a random multilinear polynomial in $\ell$ variables over $\mathbb F_{q^4}$, $q = 2^{32} - 99$, as
-Appendix A and Hachi's Section 3.1 commit level 0, proves and verifies its evaluation at a random point of
-$\mathbb F_{q^4}$, and prints the timings and the proof size.
-`d` is the ring degree (default 64) and `iterations` fixes the number of iterations (default: the number whose
-proof is smallest). The parameters are insecure test choices.
+## Running the provers on several machines
 
-## Running the parties as processes
+`hachi-co-party` runs one prover as its own process, from a JSON configuration. Write one
+configuration per prover, start the provers in any order, then verify the proof. For three provers
+on one machine:
 
-`hachi-co-party` runs one party of Hachi-Co (Commit, then Eval, with Hachi as the base PCS) as its own process,
-over TCP, from a JSON configuration file, and `hachi-co-party --verify` checks what a party wrote. It is a test
-and benchmark harness, not a deployment: the parties derive the instance and their shares from a shared seed, the
-connections are neither encrypted nor authenticated, and the parameters are insecure.
-
-Build it, write one configuration per party (here the three parties of `toy-n3` on one machine), start the
-parties (in any order) and verify the proof. The binary uses mimalloc as its allocator, which needs a C compiler to
-build (`--no-default-features` builds it with the system's allocator instead). For runs short of memory,
-`MIMALLOC_PURGE_DELAY=3` returns freed memory sooner: at secure-l24-n2-a8 it lowered the resident peak from 3.1 to
-3.5 GiB to 2.9 GiB per party, for about 5% more Eval time:
-
-```text
+```sh
 cargo build --release -p hachi-co --bin hachi-co-party
 for p in 1 2 3; do
 cat > party-$p.json <<EOF
@@ -87,62 +91,120 @@ cat party-1.log
 target/release/hachi-co-party --verify out/party-1
 ```
 
-Each party prints its timings and the bytes that it sent and received, per label, and writes `proof.bin` (the
-canonical encoding of the proof) and `statement.json` (the preset, n, the setup seed, the commitment u, the point x
-and the claim y) into its output directory; all parties write the same two files. `--verify` needs only that
-directory. On several machines, list the address at which each party can be reached (each party binds its own
-entry), and use a fresh `session` for every run. The optional fields `connect_timeout_ms` (default 30000) and
-`recv_timeout_ms` (default 60000) set the timeouts. The exit status is 0 on success, 1 if the run or the
-verification failed, 2 for a usage or configuration error, and 3 if the party's address is in use.
+Each prover prints its timings and the bytes it sent and received. It writes the proof
+(`proof.bin`) and the statement (`statement.json`) into its output directory, and
+`hachi-co-party --verify` needs only that directory.
 
-`scripts/run_parties.py` does all of this for one instance on one machine: it writes the configurations (the seeds
-are SHA-256 of a tag), starts the parties as local processes, verifies the proof and prints one JSON object with
-the times, each party's peak memory, the bytes sent and the proof's size:
+On several machines, list the address at which each prover can be reached and use a fresh `session`
+for every run. The optional fields `connect_timeout_ms` (default 30000) and `recv_timeout_ms`
+(default 60000) set the timeouts. The exit status is 0 on success, 1 if the run or the verification
+failed, 2 for a usage or configuration error, and 3 if the prover's address is in use.
 
-```text
-python3 scripts/run_parties.py --preset bench-l16-n2 --n 2 --out /tmp/run
+## Reproducing the benchmarks
+
+The results and notes on earlier runs are in `benchmarks/README.md`.
+
+**All provers on one machine.** `scripts/local_grid.py` runs a plan of instances over the loopback and
+appends one JSON line per run. An interrupted plan resumes where it stopped.
+
+```sh
+cargo build --release --locked -p hachi-co --bin hachi-co-party
+python3 scripts/local_grid.py --plan phase1 --list        # what the plan runs
+python3 scripts/local_grid.py --plan phase1 --out runs/local/phase1.jsonl --work runs/local/work
+python3 scripts/local_grid.py --plan greyhound --out runs/local/greyhound.jsonl --work runs/local/work-gh
 ```
 
-The presets `bench-l<l>-n<n>` are the insecure choices of `toy-n<n>` with l variables. For large l, `--spill
-<directory>` (the configuration's `spill_dir`) keeps each party's blocks of f′ in a file there, in the clear, and
-recomputes their digits when they are needed. The commitment and the proof are the same. Each party gets its share of
-the cores, or `--threads` of them, and the output records this and the vector instructions of the build.
-`scripts/bench_grid.py` runs a grid of such instances; `benchmarks/README.md` has the results.
+The plans are `smoke` (a quick check of the machine), `calibration`, `phase1` (l = 20, 22, 24 and
+n = 2, 4, 8, with the baselines) and `greyhound` (the same instances composed with Greyhound).
 
-To measure what hiding costs, two variants run on the same instance as a preset (the scripts draw their seeds from
-the name without the suffix):
+**One prover per cloud instance.** `scripts/gcp.py` creates one Google Cloud instance per prover,
+builds the code on each, writes the hosts file and can emulate a network with `tc netem`. It only
+prints the `gcloud` commands unless you pass `--execute`. `scripts/wan_grid.py` then runs the presets
+in PPP26's three network settings: a LAN (10 Gbps, 2 ms round trip) and two wide-area networks
+(200 Mbps, 50 and 100 ms).
 
-- the suffix `-nonhiding` (for example `secure-l24-n2-a8-nonhiding`) runs Hachi, the base PCS, without its hiding
-  choices, as the published scheme. Everything else is unchanged, including the collaborative layer's pads and
-  blinders, so this measures the hiding of the base PCS only, and the result is not hiding;
-- `--single` (`hachi-co-party --single <config.json>`) runs the single-prover baseline: one prover commits to the
-  whole polynomial over 𝔽_{q^k} with Hachi (its Section 3.1, as Hachi-Co commits each share polynomial) and the
-  preset's base-PCS choices, opens it at the instance's point and verifies the proof. It gets the threads of one
-  party. With a `-nonhiding` name it runs without hiding.
-
-```text
-python3 scripts/run_parties.py --preset secure-l16-n2-a8-nonhiding --n 2 --out /tmp/run
-python3 scripts/run_parties.py --preset secure-l16-n2-a8 --n 2 --out /tmp/run --single
-python3 scripts/bench_grid.py --out /tmp/grid.jsonl --scratch /tmp/grid --nonhiding --single
+```sh
+cp scripts/gcp.example.json runs/gcp.json           # set the project, zones and machine type
+python3 scripts/gcp.py --config runs/gcp.json create --execute
+python3 scripts/gcp.py --config runs/gcp.json build --execute
+python3 scripts/gcp.py --config runs/gcp.json hosts --execute --out runs/gcp/hosts.json
+python3 scripts/wan_grid.py --hosts runs/gcp/hosts.json --switch gcp --gcp-config runs/gcp.json \
+    --settings lan wan50 wan100 --presets secure100-l20-n4-a8 --threads 1 --reps 1 --spill \
+    --out runs/gcp-grid.jsonl
+python3 scripts/gcp.py --config runs/gcp.json delete --execute
 ```
 
-## Documentation
+To emulate the network on one machine instead, start one Docker container per prover with
+`scripts/wan_docker.py up` and pass `--switch docker` to `scripts/wan_grid.py`.
 
-- `cargo docs` builds the documentation of every workspace crate, including private items, into
-  `target/doc/`; `cargo docs-open` also opens it. Both are aliases in `.cargo/config.toml`.
-- Equations are written in LaTeX and rendered by KaTeX, which `katex-header.html` loads from a CDN.
-- The implementation plan and design notes live in `docs/`, which is not tracked by git.
+**PPP26.** `scripts/ppp26.py` fetches the implementation of PPP26 at a fixed commit, applies a small
+patch that adds timers, and builds and runs it on the same cloud instances (`fetch`, `gcp-build`,
+`gcp-mpi`, `gcp-run`).
 
-## Attribution
+**Tables and figures.** `scripts/paper_tables.py` reads the JSON lines of the runs and prints the
+numbers and plot coordinates of the paper:
 
-This repository started from the public Hachi prototype by the authors of the Hachi paper,
-[georgeorourke/hachi-pcs](https://github.com/georgeorourke/hachi-pcs) (Ngoc Khanh Nguyen, George O'Rourke
-and Jiapeng Zhang, "Hachi: Efficient Lattice-Based Multilinear Polynomial Commitments over Extension Fields",
-Cryptology ePrint Archive 2026/156). `crates/hachi` started from that code.
+```sh
+python3 scripts/paper_tables.py --local runs/local/phase1.jsonl --wan runs/gcp-grid.jsonl
+```
 
-Parts of the NTT, CRT, samplers and transcript are adapted from the MIT-licensed library jali.
+## Parameters
 
-## License
+The secure presets are in `crates/params/presets/`, each with a README that lists every parameter
+and its security estimate. They were computed with `parameters.sage`, which uses SageMath and the
+lattice estimator (it clones the estimator into a temporary directory and removes it at the end).
+`scripts/hachi-parameters/` chooses the parameters of Hachi for these presets. The security levels
+are estimates, not proofs.
 
-The upstream repository does not include a license file, so no license is inherited from it. The MIT license
-in `LICENSE` covers the contributions made in this repository.
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `crates/hachico` | The PCS: Setup, Commit, Eval and Verify, the proof format, and the `hachi-co-party` program |
+| `crates/hachi` | Hachi, the base PCS, with its hiding variant |
+| `crates/greyhound` | Greyhound with LaBRADOR, for the optional composition |
+| `crates/commit` | Commit and Open |
+| `crates/conv` | The conversion from F_{q^k} to R_q |
+| `crates/r2l` | The ring-to-linear step with rejection sampling |
+| `crates/sumcheck` | The collaborative sumcheck and its verifier |
+| `crates/core` | The protocol context shared by the steps, and the interface to the base PCS |
+| `crates/mpc` | Communication between the provers: in memory or over TCP |
+| `crates/params` | The Setup, the presets and their constraint checks |
+| `crates/math` | Arithmetic modulo q, in R_q and in F_{q^k} |
+| `crates/sampling` | Samplers, including discrete Gaussians |
+| `crates/transcript` | The Fiat–Shamir transcript |
+| `ref/` | A SageMath reference implementation, used as a test oracle |
+| `scripts/` | Benchmark, cluster and table scripts |
+| `benchmarks/` | Results of earlier runs |
+
+`cargo docs` builds the documentation of every crate, including private items, into `target/doc/`.
+`cargo docs-open` also opens it. The equations are rendered by KaTeX, which `katex-header.html`
+loads from a CDN.
+
+## Differences from the Hachi paper
+
+- A multilinear opening binds its partial evaluations to the committed polynomial with a
+  ring-switching sumcheck (Hachi, Section 3.2).
+- Every iteration except the last commits its next witness as Section 3.1 commits a polynomial and
+  reduces its claim by Theorem 2, without partial evaluations (Section 4.5).
+- Range checks use the b balanced digits instead of the set {−b + 1, …, b − 1}.
+- The last iteration sends its witness in the clear, after as many iterations as give the smallest
+  proof, unless the openings are composed with Greyhound.
+
+## Caveats
+
+This is research code. It has not been audited and does not run in constant time. The TCP transport
+is neither encrypted nor authenticated. In the benchmark harness, the provers derive the instance and
+their shares from shared seeds, so it is not a deployment. The `toy` and `bench` presets are
+insecure.
+
+## Attribution and license
+
+`crates/hachi` started from the public Hachi prototype of its authors,
+[georgeorourke/hachi-pcs](https://github.com/georgeorourke/hachi-pcs) (Ngoc Khanh Nguyen, George
+O'Rourke and Jiapeng Zhang, "Hachi: Efficient Lattice-Based Multilinear Polynomial Commitments over
+Extension Fields", Cryptology ePrint Archive 2026/156). Parts of the NTT, CRT, samplers and transcript
+are adapted from the MIT-licensed library jali, whose LaBRADOR the Greyhound composition uses.
+
+The upstream prototype has no license file, so no license is inherited from it. The MIT license in
+`LICENSE` covers the contributions of this repository.
