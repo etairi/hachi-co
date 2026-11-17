@@ -8,11 +8,13 @@ use crate::error::{Error, Result, check_len};
 use crate::prover::{Base, PartyProver};
 use crate::quotient::{check_matrix, quotient_rows};
 use crate::tables::{
-    BaseTable, CompactCoeffs, CompactTable, EqSplit, MStarParts, put_pad_residues, w_table_rows,
+    BaseTable, CompactCoeffs, CompactTable, EqSplit, MStarParts, put_pad_residues, table_size,
+    w_table_rows,
 };
 use crate::transcript::{
     ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
 };
+use core::sync::atomic::{AtomicUsize, Ordering};
 use hachi_co_core::base_pcs::{LiftedCoeffs, PartedCoeffs, mobius, mobius_ext};
 use hachi_co_core::wire::{flatten_exts, join_words, split_words, unflatten_exts};
 use hachi_co_core::{
@@ -259,10 +261,9 @@ pub fn prove_rebuilding<
 /// [`prove_rebuilding`] for a caller that only needs the transcript (Eval's proof,
 /// `hachi_co::eval_lean`): the share, held sparsely ([`SparseShare`], as
 /// `hachi_co_r2l::run_sparse` forms it), is taken over and dropped once the table of step 2 is
-/// formed (its last reader), the context's public matrices are released after the quotient of step 1 and
-/// again once the column weights of $M^\ast$ are formed in step 5
-/// ([`Context::release_public_params`]; step 5 forms them again from the seed, and so would any
-/// later reader), and the private output's table is not formed again at the end:
+/// formed (its last reader), the context's public matrices are released once the column weights
+/// of $M^\ast$ are formed in step 5 ([`Context::release_public_params`]; they are formed again if
+/// read later), and the private output's table is not formed again at the end:
 /// [`SumcheckPrivate::w_table`] is empty. The same transcript.
 ///
 /// # Errors
@@ -296,6 +297,24 @@ pub fn prove_rebuilding_lean<
         Share::Sparse(share),
         true,
     )
+}
+
+/// The tables of at least this many entries ([`set_compact_from`]) are formed compactly
+/// (`CompactTable`) and committed and opened a part at a time (`CompactCoeffs`), so that neither
+/// the table nor its coefficients are held whole; smaller ones as [`w_table`](crate::w_table)
+/// forms them, whose coefficients are formed in place once for the commitment and once for the
+/// opening. Both give the same transcript. The default, $2^{28}$, keeps the faster dense path where
+/// its memory is small: at secure-l24-n2-a8 ($2^{27}$ entries) the path in parts took 6.9% more
+/// time in Eval on the shared instance (2026-11-17), at secure-l24-n8-a8 ($2^{29}$) the same time
+/// and a quarter of the memory.
+static COMPACT_FROM: AtomicUsize = AtomicUsize::new(1 << 28);
+
+/// Sets the number of entries from which the sumcheck's table is formed compactly and committed in
+/// parts (default $2^{28}$; 0 for every table, `usize::MAX` for none), for every prover in this
+/// process from its next call: for tests and measurements, as both paths give the same
+/// transcript.
+pub fn set_compact_from(entries: usize) {
+    COMPACT_FROM.store(entries, Ordering::Relaxed);
 }
 
 /// The share of [`prove_with`]: borrowed, or held sparsely and taken over by
@@ -369,18 +388,16 @@ fn prove_with<
     if party == 0 || party > n {
         return Err(Error::InvalidParty { party, n });
     }
-    // Steps 1-2. With the pad in the field and separate commitments, the table is formed compactly
-    // from the share (`CompactTable::from_share`), and the commitment reads its coefficients a
-    // part at a time (step 3), so that neither is held whole; otherwise as `w_table` forms it.
+    // Steps 1-2. With the pad in the field, separate commitments and a table of at least
+    // `COMPACT_FROM` entries, the table is formed compactly from the share
+    // (`CompactTable::from_share`), and the commitment reads its coefficients a part at a time
+    // (step 3), so that neither is held whole; otherwise as `w_table` forms it.
     share.validate(l)?;
     let quotient = with_rows!(&share, |z, y| quotient_rows(ctx, &mut rows, z, y))?;
-    if lean {
-        // The rows of M are read next in step 5: a lean run releases the public matrices through
-        // the commitments, and step 5's first row forms them again from the seed
-        // (`Context::pp`), the same matrices.
-        ctx.release_public_params();
-    }
-    let compact = if l.pad_rule == PadRule::Field && !pcs.merges() {
+    let compact = if l.pad_rule == PadRule::Field
+        && !pcs.merges()
+        && table_size(l)? >= COMPACT_FROM.load(Ordering::Relaxed)
+    {
         with_rows!(&share, |z, _y| CompactTable::from_rows(ctx, z, &quotient))?
     } else {
         None

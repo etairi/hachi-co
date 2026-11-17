@@ -104,11 +104,10 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 
 /// [`eval`] for a caller that keeps only the proof, as the benchmark harness does: each large
 /// value is freed after its last use. The context's $\mathbf A$ in the NTT form after the
-/// ring-to-linear step ([`Context::release_a_prepared`]), its public matrices after the quotient of
-/// the sumcheck's step 1 (its step 5 forms them again) and after the last row of $\mathbf M$
-/// ([`Context::release_public_params`]), all formed again if the context is read again, and the
-/// share $\mathbf z'$, held without its zero rows ([`hachi_co_r2l::run_sparse`]), after the
-/// sumcheck's table, whose private copy is not formed
+/// ring-to-linear step ([`Context::release_a_prepared`]), its public matrices after the last row of
+/// $\mathbf M$ ([`Context::release_public_params`]), both formed again if the context is read
+/// again, and the share $\mathbf z'$, held without its zero rows ([`hachi_co_r2l::run_sparse`]),
+/// after the sumcheck's table, whose private copy is not formed
 /// ([`hachi_co_sumcheck::prove_rebuilding_lean`]). The same proof as [`eval`].
 ///
 /// # Errors

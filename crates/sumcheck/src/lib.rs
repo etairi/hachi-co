@@ -78,7 +78,7 @@ pub use driver::{
     ALL_GATHER_COMMITMENTS, ALL_GATHER_FINAL, ALL_GATHER_OPENINGS, ALL_GATHER_SUMS, FAH_ROUND,
     LABEL_COMMIT_G0, LABEL_COMMIT_G1, LABEL_COMMIT_W, LABEL_FINAL_G0, LABEL_FINAL_G1,
     LABEL_FINAL_W, LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1, opening_label, prove, prove_rebuilding,
-    prove_rebuilding_lean,
+    prove_rebuilding_lean, set_compact_from,
 };
 pub use eq::{bind_top, eq_eval, eq_point, eq_table, mle_eval, msb_bits};
 pub use error::{Error, Result, VerifyError};
