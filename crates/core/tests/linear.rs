@@ -4,8 +4,8 @@
 #![cfg(feature = "fixtures")]
 
 use hachi_co_core::{
-    Context, Error, Fixture, LinearShare, Matrix, Poly, PublicVectors, build_m, build_y,
-    sha256_residues,
+    Context, Error, Fixture, LinearShare, Matrix, Poly, PublicVectors, SparseRows, SparseShare,
+    build_m, build_y, sha256_residues,
 };
 
 const K: usize = 4;
@@ -147,6 +147,29 @@ fn the_shares_of_the_layout_add_up_to_the_witness() {
                 share,
                 "{name} p = {p}"
             );
+            // The share held sparsely, its rows of S_p and of <u>_p: the same share, and the
+            // shapes of the dense one.
+            let mut sparse = SparseShare {
+                z_prime: SparseRows::new(l.len_z, l.d),
+                y: share.y.clone(),
+            };
+            for r in l.s_ranges(p) {
+                sparse.z_prime.put(r.clone(), &z_prime[r]);
+            }
+            sparse.z_prime.set(l.u, u_shares[p - 1].clone());
+            sparse.validate(l).unwrap();
+            for (j, z) in share.z_prime.iter().enumerate() {
+                assert_eq!(sparse.z_prime[j], *z, "{name} p = {p}, row {j}");
+            }
+            assert_eq!(sparse.clone().into_dense(), share, "{name} p = {p}, sparse");
+            let mut bad = sparse.clone();
+            bad.z_prime.set(l.u, Poly(vec![0; 3]));
+            assert!(matches!(bad.validate(l), Err(Error::Shape { .. })));
+            let short = SparseShare {
+                z_prime: SparseRows::new(l.len_z - 1, l.d),
+                y: share.y.clone(),
+            };
+            assert!(matches!(short.validate(l), Err(Error::Shape { .. })));
             for (s, x) in sum.z_prime.iter_mut().zip(&share.z_prime) {
                 *s = ring.add(s, x).unwrap();
             }

@@ -2,6 +2,7 @@
 //! `sumcheck.quotient_shares`).
 
 use crate::error::{Error, Result, check_len};
+use crate::tables::ZRows;
 use hachi_co_core::{Context, LinearShare, Poly};
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -67,22 +68,37 @@ pub fn quotient_share<const K: usize>(
 /// As [`quotient_share`], for a row of the wrong shape when it is read, and those of `rows`.
 pub fn quotient_share_rows<'m, const K: usize>(
     ctx: &Context<K>,
-    mut rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+    rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
     share: &LinearShare,
+) -> Result<Vec<Poly>> {
+    share.validate(&ctx.layout)?;
+    quotient_rows(ctx, rows, &share.z_prime[..], &share.y)
+}
+
+/// [`quotient_share_rows`] on a share of the shape [`LinearShare::validate`] checks, with
+/// $\langle \mathbf z' \rangle\_p$ as [`ZRows`] (the rows not held are zero, and skipped as
+/// the zero rows are) and $\lbrace \mathbf y \rbrace\_p$ as `y_share`: the same quotient.
+///
+/// # Errors
+/// As [`quotient_share_rows`], but for the share's shape, which the caller checks.
+pub(crate) fn quotient_rows<'m, const K: usize, Z: ZRows + ?Sized>(
+    ctx: &Context<K>,
+    mut rows: impl FnMut(usize) -> Result<Cow<'m, [Poly]>>,
+    z_share: &Z,
+    y_share: &[Poly],
 ) -> Result<Vec<Poly>> {
     let l = &ctx.layout;
     let (d, q) = (l.d, ctx.q());
     let two_d = 2 * d;
-    share.validate(l)?;
     let zq = ctx.ring.zq();
     let inv2 = zq
         .inv(2)
         .ok_or_else(|| Error::Parameter("q must be odd".into()))?;
     let nonzero: Vec<usize> = (0..l.len_z)
-        .filter(|j| !is_zero(&share.z_prime[*j], q))
+        .filter(|j| z_share.held(*j) && !is_zero(z_share.row(*j), q))
         .collect();
     let mut out = Vec::with_capacity(l.n_prime);
-    for (i, y) in share.y.iter().enumerate() {
+    for (i, y) in y_share.iter().enumerate() {
         let row = rows(i)?;
         check_row(&row, l.len_z, d)?;
         // The columns in order, filtered in parallel.
@@ -97,10 +113,7 @@ pub fn quotient_share_rows<'m, const K: usize>(
             .par_chunks(CHUNK)
             .map(|chunk| {
                 let a: Vec<Poly> = chunk.iter().map(|j| pad(&row[*j], two_d)).collect();
-                let b: Vec<Poly> = chunk
-                    .iter()
-                    .map(|j| pad(&share.z_prime[*j], two_d))
-                    .collect();
+                let b: Vec<Poly> = chunk.iter().map(|j| pad(z_share.row(*j), two_d)).collect();
                 Ok(ctx.ring2.inner(&a, &b)?)
             })
             .collect::<Result<Vec<Poly>>>()?;

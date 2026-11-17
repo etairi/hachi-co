@@ -13,7 +13,9 @@ use crate::ct::{lift_polys, wipe_polys};
 use crate::{Error, Result};
 use core::ops::Range;
 use hachi_co_core::short::center_poly;
-use hachi_co_core::{BlockState, Context, PartyId, PartyRandomness, PartyState, PublicVectors};
+use hachi_co_core::{
+    BlockState, Context, PartyId, PartyRandomness, PartyState, PublicVectors, SparseRows,
+};
 use hachi_co_math::{Poly, decompose};
 use hachi_co_sampling::{l1ball, rej};
 use rayon::prelude::*;
@@ -434,16 +436,16 @@ pub fn sample_masks<const K: usize, R: PartyRandomness<K>>(
 /// \boldsymbol\rho^v)$ into `out` $= \mathbf z'\[0, t)$ (positions of [`hachi_co_core::Layout`]):
 /// its blocks of $\hat{\mathbf w}$, its own $\hat{\mathbf w}\_{0,p}^j$ and $\hat{\mathbf t}\_{0,p}^j$
 /// of every iteration $j \lt L$, and $\boldsymbol\rho^v\_p$; other entries are left untouched.
-pub(crate) fn fill_first_message_part<const K: usize>(
+pub(crate) fn fill_first_message_part<const K: usize, O: FirstPart + ?Sized>(
     ctx: &Context<K>,
     party: PartyId,
     w: &[BlockW],
     secrets: &MaskSecrets,
-    out: &mut [Poly],
+    out: &mut O,
 ) -> Result<()> {
     let l = &ctx.layout;
     check_party(ctx, party)?;
-    check_len("z'[0, t)", l.t, out.len())?;
+    check_len("z'[0, t)", l.t, out.entries())?;
     let owned = l.blocks_of(party);
     check_len("w of the owned blocks", owned.len(), w.len())?;
     for (bw, i) in w.iter().zip(owned) {
@@ -455,7 +457,7 @@ pub(crate) fn fill_first_message_part<const K: usize>(
             });
         }
         check_polys("w_hat_i", &bw.w_hat, l.delta, l.d, ctx.q())?;
-        out[l.w_hat_range(i)].clone_from_slice(&bw.w_hat);
+        out.put(l.w_hat_range(i), &bw.w_hat);
     }
     check_len(
         "the images of the masks (one per iteration)",
@@ -464,12 +466,49 @@ pub(crate) fn fill_first_message_part<const K: usize>(
     )?;
     for (j, images) in secrets.images.iter().enumerate() {
         images.validate(ctx)?;
-        out[l.w0_hat_range(party, j)].clone_from_slice(&images.w0_hat);
-        out[l.t0_hat_range(party, j)].clone_from_slice(&images.t0_hat);
+        out.put(l.w0_hat_range(party, j), &images.w0_hat);
+        out.put(l.t0_hat_range(party, j), &images.t0_hat);
     }
     let rho = secrets.rho_polys(ctx)?;
-    out[l.rho_v_range(party)].clone_from_slice(&rho);
+    out.put(l.rho_v_range(party), &rho);
     Ok(())
+}
+
+/// Where [`fill_first_message_part`] writes $\mathbf z'\[0, t)$: a slice of its $t$ entries
+/// ([`d_slice`]), or the first $t$ rows of a share held sparsely ([`SparsePrefix`],
+/// [`crate::z_prime_share`]).
+pub(crate) trait FirstPart {
+    /// The entries it takes, $t$.
+    fn entries(&self) -> usize;
+    /// The entries of `range` set to copies of `values`, of the same length.
+    fn put(&mut self, range: Range<usize>, values: &[Poly]);
+}
+
+impl FirstPart for [Poly] {
+    fn entries(&self) -> usize {
+        self.len()
+    }
+
+    fn put(&mut self, range: Range<usize>, values: &[Poly]) {
+        self[range].clone_from_slice(values);
+    }
+}
+
+/// The first `len` rows of a share held sparsely, as a [`FirstPart`] of `len` entries.
+pub(crate) struct SparsePrefix<'a> {
+    pub(crate) rows: &'a mut SparseRows,
+    pub(crate) len: usize,
+}
+
+impl FirstPart for SparsePrefix<'_> {
+    fn entries(&self) -> usize {
+        self.len
+    }
+
+    fn put(&mut self, range: Range<usize>, values: &[Poly]) {
+        assert!(range.end <= self.len, "an entry of z'[0, t)");
+        self.rows.put(range, values);
+    }
 }
 
 /// Prover $p$'s slice $\lbrace (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0,
@@ -490,7 +529,7 @@ pub fn d_slice<const K: usize>(
     secrets: &MaskSecrets,
 ) -> Result<Vec<Poly>> {
     let mut slice = vec![ctx.ring.zero(); ctx.layout.t];
-    fill_first_message_part(ctx, party, w, secrets, &mut slice)?;
+    fill_first_message_part(ctx, party, w, secrets, &mut slice[..])?;
     Ok(slice)
 }
 

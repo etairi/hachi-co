@@ -78,7 +78,8 @@ pub use challenger::{
 };
 pub use context::{Context, PublicParams, SETUP_DOMAIN_A, SETUP_DOMAIN_B, SETUP_DOMAIN_D};
 pub use data::{
-    Blinder, BlinderKind, BlockState, LinearShare, Matrix, PartyState, PublicVectors, SumcheckCoins,
+    Blinder, BlinderKind, BlockState, LinearShare, Matrix, PartyState, PublicVectors, SparseRows,
+    SparseShare, SumcheckCoins,
 };
 pub use error::{Error, Result};
 pub use layout::{Layout, NamedBlock};

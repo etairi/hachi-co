@@ -14,7 +14,7 @@ use crate::eq::eq_table;
 use crate::error::{Error, Result, check_len, pow2};
 use crate::quotient::{check_matrix, check_row};
 use core::ops::Range;
-use hachi_co_core::{Context, Layout, Poly};
+use hachi_co_core::{Context, Layout, Poly, SparseRows};
 use hachi_co_math::{Ext, Fqk, Zq};
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -43,17 +43,76 @@ pub fn w_table<const K: usize>(
     z_share: &[Poly],
     r_share: &[Poly],
 ) -> Result<Vec<u64>> {
+    w_table_rows(ctx, z_share, r_share)
+}
+
+/// The polynomials of a party's share $\langle \mathbf z' \rangle\_p$ as the sumcheck reads
+/// them: a dense list, or [`SparseRows`], whose rows not held are zero.
+pub(crate) trait ZRows: Sync {
+    /// The number of polynomials.
+    fn count(&self) -> usize;
+    /// Polynomial `j`, the zero polynomial if it is not held.
+    fn row(&self, j: usize) -> &Poly;
+    /// Whether polynomial `j` is held: one not held is zero.
+    fn held(&self, j: usize) -> bool;
+}
+
+impl ZRows for [Poly] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn row(&self, j: usize) -> &Poly {
+        &self[j]
+    }
+
+    fn held(&self, _: usize) -> bool {
+        true
+    }
+}
+
+impl ZRows for SparseRows {
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn row(&self, j: usize) -> &Poly {
+        self.get(j)
+    }
+
+    fn held(&self, j: usize) -> bool {
+        self.is_held(j)
+    }
+}
+
+/// The shapes [`w_table`] checks: $\mu - 1$ polynomials of $d$ coefficients in `z_share` and
+/// $n'$ of $2d$ in `r_share`.
+fn check_shares<Z: ZRows + ?Sized>(l: &Layout, z_share: &Z, r_share: &[Poly]) -> Result<()> {
+    check_len("<z'>_p", l.len_z, z_share.count())?;
+    check_len("<r>_p", l.n_prime, r_share.len())?;
+    for j in 0..z_share.count() {
+        check_len("<z'>_p (coefficients)", l.d, z_share.row(j).0.len())?;
+    }
+    for p in r_share {
+        check_len("<r>_p (coefficients)", 2 * l.d, p.0.len())?;
+    }
+    Ok(())
+}
+
+/// [`w_table`] on a share of $\mathbf z'$ as [`ZRows`]: the same table, the rows not held left
+/// zero.
+///
+/// # Errors
+/// As [`w_table`].
+pub(crate) fn w_table_rows<const K: usize, Z: ZRows + ?Sized>(
+    ctx: &Context<K>,
+    z_share: &Z,
+    r_share: &[Poly],
+) -> Result<Vec<u64>> {
     let l = &ctx.layout;
     let q = ctx.q();
     let two_d = 2 * l.d;
-    check_len("<z'>_p", l.len_z, z_share.len())?;
-    check_len("<r>_p", l.n_prime, r_share.len())?;
-    for p in z_share {
-        check_len("<z'>_p (coefficients)", l.d, p.0.len())?;
-    }
-    for p in r_share {
-        check_len("<r>_p (coefficients)", two_d, p.0.len())?;
-    }
+    check_shares(l, z_share, r_share)?;
     let mut table = vec![0u64; table_size(l)?];
     if l.len_z > l.mu || (l.mu + l.n_prime) * two_d > table.len() {
         return Err(Error::Shape {
@@ -62,13 +121,15 @@ pub fn w_table<const K: usize>(
             actual: l.mu + l.n_prime,
         });
     }
-    // The rows of z' and of r, each written in parallel (disjoint rows).
+    // The rows of z' (those held) and of r, each written in parallel (disjoint rows).
     let (z_rows, rest) = table.split_at_mut(l.mu * two_d);
     z_rows
         .par_chunks_mut(two_d)
-        .zip(z_share.par_iter())
-        .for_each(|(row, p)| {
-            for (t, c) in row.iter_mut().zip(&p.0) {
+        .take(z_share.count())
+        .enumerate()
+        .filter(|(u, _)| z_share.held(*u))
+        .for_each(|(u, row)| {
+            for (t, c) in row.iter_mut().zip(&z_share.row(u).0) {
                 *t = c % q;
             }
         });
@@ -184,16 +245,22 @@ impl CompactTable {
         z_share: &[Poly],
         r_share: &[Poly],
     ) -> Result<Option<Self>> {
+        Self::from_rows(ctx, z_share, r_share)
+    }
+
+    /// [`CompactTable::from_share`] on a share of $\mathbf z'$ as [`ZRows`]: the same table, the
+    /// rows not held left zero.
+    ///
+    /// # Errors
+    /// As [`CompactTable::from_share`].
+    pub(crate) fn from_rows<const K: usize, Z: ZRows + ?Sized>(
+        ctx: &Context<K>,
+        z_share: &Z,
+        r_share: &[Poly],
+    ) -> Result<Option<Self>> {
         let l = &ctx.layout;
         let (q, zq, two_d) = (ctx.q(), *ctx.field().zq(), 2 * l.d);
-        check_len("<z'>_p", l.len_z, z_share.len())?;
-        check_len("<r>_p", l.n_prime, r_share.len())?;
-        for p in z_share {
-            check_len("<z'>_p (coefficients)", l.d, p.0.len())?;
-        }
-        for p in r_share {
-            check_len("<r>_p (coefficients)", two_d, p.0.len())?;
-        }
+        check_shares(l, z_share, r_share)?;
         let size = table_size(l)?;
         if l.len_z > l.mu || (l.mu + l.n_prime) * two_d > size {
             return Err(Error::Shape {
@@ -207,7 +274,7 @@ impl CompactTable {
         // The entries of w_table at row u, column c (reduced), as it writes them.
         let entry = |u: usize, c: usize| -> u64 {
             if u < l.len_z {
-                if c < l.d { z_share[u].0[c] % q } else { 0 }
+                if c < l.d { z_share.row(u).0[c] % q } else { 0 }
             } else if u >= l.mu && u < l.mu + l.n_prime {
                 r_share[u - l.mu].0[c] % q
             } else {
@@ -220,7 +287,9 @@ impl CompactTable {
             .enumerate()
             .take(l.mu + l.n_prime)
             .all(|(u, row)| {
+                // A row of z' not held is zero, as `small` is.
                 rows.contains(&u)
+                    || (u < l.len_z && !z_share.held(u))
                     || row.iter_mut().enumerate().all(|(c, s)| {
                         match i8::try_from(zq.to_centered(entry(u, c))) {
                             Ok(v) => {
@@ -1097,12 +1166,31 @@ mod tests {
                 let from_share = CompactTable::from_share(&ctx, &z, &r).unwrap().unwrap();
                 assert_eq!(from_share.to_dense(), dense, "n = {n}, p = {p}");
                 assert_eq!(from_share.to_dense(), from_dense.to_dense());
+                // The share held sparsely, its rows of the slice and of ind_rows: the same tables.
+                let mut sparse = SparseRows::new(l.len_z, l.d);
+                for u in (0..l.len_z).filter(|u| slice[*u] == 1 || rows.contains(u)) {
+                    sparse.set(u, z[u].clone());
+                }
+                assert!(
+                    l.n == 1 || sparse.held() < l.len_z,
+                    "n = {n}, p = {p}: rows not held"
+                );
+                assert_eq!(w_table_rows(&ctx, &sparse, &r).unwrap(), dense);
+                let from_rows = CompactTable::from_rows(&ctx, &sparse, &r).unwrap().unwrap();
+                assert_eq!(from_rows.to_dense(), dense, "n = {n}, p = {p}, sparse");
+                assert_eq!(from_rows.digest(), from_share.digest());
                 // An entry of the slice that is not a byte: neither form is compact.
                 if let Some(u) = (0..l.len_z).find(|u| slice[*u] == 1 && !rows.contains(u)) {
                     z[u].0[0] = 1000;
                     let dense = w_table(&ctx, &z, &r).unwrap();
                     assert!(CompactTable::from_dense(zq, &dense, large).is_none());
                     assert!(CompactTable::from_share(&ctx, &z, &r).unwrap().is_none());
+                    sparse.set(u, z[u].clone());
+                    assert!(
+                        CompactTable::from_rows(&ctx, &sparse, &r)
+                            .unwrap()
+                            .is_none()
+                    );
                 }
             }
         }
@@ -1239,6 +1327,23 @@ mod tests {
                 crate::quotient_share_rows(&ctx, built, &share).unwrap(),
                 quotient,
                 "n = {n}"
+            );
+            // Every third row held sparsely, the others zero in the dense share: the same
+            // quotient.
+            let mut dense = share.clone();
+            let mut sparse = SparseRows::new(l.len_z, d);
+            for (j, z) in dense.z_prime.iter_mut().enumerate() {
+                if j % 3 == 0 {
+                    sparse.set(j, z.clone());
+                } else {
+                    z.0.fill(0);
+                }
+            }
+            let built = |i: usize| Ok(Cow::Owned(rows.row(i)?));
+            assert_eq!(
+                crate::quotient::quotient_rows(&ctx, built, &sparse, &dense.y).unwrap(),
+                crate::quotient_share(&ctx, &m, &dense).unwrap(),
+                "n = {n}, sparse"
             );
         }
     }

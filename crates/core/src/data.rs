@@ -6,6 +6,7 @@
 //! coefficients of every polynomial) against a [`Layout`]; it does not check values.
 
 use crate::{Context, Error, Layout, Result, SpillFile};
+use core::ops::Range;
 use hachi_co_math::{Ext, Poly, decompose};
 use hachi_co_mpc::PartyId;
 use rayon::prelude::*;
@@ -361,6 +362,149 @@ impl LinearShare {
     pub fn validate(&self, layout: &Layout) -> Result<()> {
         check_polys("<z'>_p", &self.z_prime, layout.len_z, layout.d)?;
         check_polys("{y}_p", &self.y, layout.n_prime, layout.d)
+    }
+}
+
+/// A list of polynomials of $d$ coefficients held as a party holds its share
+/// $\langle \mathbf z' \rangle\_p$: the rows it holds (its slices $S\_p$, $\hat{\mathbf z}$ at
+/// prover 1, and $\langle u \rangle\_p$) are stored, and every other row is the zero polynomial
+/// and is not stored. [`SparseRows::into_dense`] gives the list of [`LinearShare::z_prime`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SparseRows {
+    /// Row `j` where it is held, `None` where it is zero.
+    rows: Vec<Option<Poly>>,
+    /// The zero polynomial of $d$ coefficients, read for the rows not held.
+    zero: Poly,
+}
+
+impl SparseRows {
+    /// `len` zero rows of `d` coefficients, none held.
+    pub fn new(len: usize, d: usize) -> Self {
+        Self {
+            rows: vec![None; len],
+            zero: Poly(vec![0; d]),
+        }
+    }
+
+    /// The number of rows.
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether there are no rows.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// The coefficients of a row not held, $d$.
+    pub fn coeffs(&self) -> usize {
+        self.zero.0.len()
+    }
+
+    /// Whether row `j` is held: a row not held is zero.
+    ///
+    /// # Panics
+    /// For `j` out of range, as an index of the dense list.
+    pub fn is_held(&self, j: usize) -> bool {
+        self.rows[j].is_some()
+    }
+
+    /// Row `j`: the polynomial held, or the zero polynomial.
+    ///
+    /// # Panics
+    /// For `j` out of range, as an index of the dense list.
+    pub fn get(&self, j: usize) -> &Poly {
+        self.rows[j].as_ref().unwrap_or(&self.zero)
+    }
+
+    /// Holds `value` as row `j`.
+    ///
+    /// # Panics
+    /// For `j` out of range.
+    pub fn set(&mut self, j: usize, value: Poly) {
+        self.rows[j] = Some(value);
+    }
+
+    /// Holds copies of `values` as the rows of `range`, as `clone_from_slice` writes them into
+    /// the dense list.
+    ///
+    /// # Panics
+    /// Unless `range` is in range and has the length of `values`.
+    pub fn put(&mut self, range: Range<usize>, values: &[Poly]) {
+        assert_eq!(range.len(), values.len(), "rows and values of one length");
+        self.rows[range]
+            .par_iter_mut()
+            .zip(values.par_iter())
+            .for_each(|(row, value)| *row = Some(value.clone()));
+    }
+
+    /// Holds `values` as the rows of `range`, moved rather than copied.
+    ///
+    /// # Panics
+    /// Unless `range` is in range and has the length of `values`.
+    pub fn put_owned(&mut self, range: Range<usize>, values: Vec<Poly>) {
+        assert_eq!(range.len(), values.len(), "rows and values of one length");
+        for (row, value) in self.rows[range].iter_mut().zip(values) {
+            *row = Some(value);
+        }
+    }
+
+    /// The rows held.
+    pub fn held(&self) -> usize {
+        self.rows.iter().filter(|row| row.is_some()).count()
+    }
+
+    /// The dense list: the rows held, and the zero polynomial of $d$ coefficients elsewhere.
+    pub fn into_dense(self) -> Vec<Poly> {
+        let zero = self.zero;
+        self.rows
+            .into_par_iter()
+            .map(|row| row.unwrap_or_else(|| zero.clone()))
+            .collect()
+    }
+}
+
+impl core::ops::Index<usize> for SparseRows {
+    type Output = Poly;
+
+    /// Row `j`, as [`SparseRows::get`].
+    fn index(&self, j: usize) -> &Poly {
+        self.get(j)
+    }
+}
+
+/// [`LinearShare`] with $\langle \mathbf z' \rangle\_p$ held as [`SparseRows`]: the same share
+/// ([`SparseShare::into_dense`]) without its zero rows, as the ring-to-linear step forms it for a
+/// caller that holds it until the sumcheck (`hachi_co_r2l::run_sparse`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SparseShare {
+    /// $\langle \mathbf z' \rangle\_p$, as [`LinearShare::z_prime`].
+    pub z_prime: SparseRows,
+    /// $\lbrace \mathbf y \rbrace\_p$, as [`LinearShare::y`].
+    pub y: Vec<Poly>,
+}
+
+impl SparseShare {
+    /// Checks the shape of [`LinearShare::validate`]: $\mu - 1$ rows of $d$ coefficients (those
+    /// held, and the zero rows) and $n'$ polynomials of $d$ coefficients.
+    ///
+    /// # Errors
+    /// [`Error::Shape`].
+    pub fn validate(&self, layout: &Layout) -> Result<()> {
+        check_len("<z'>_p", layout.len_z, self.z_prime.len())?;
+        check_len("<z'>_p", layout.d, self.z_prime.coeffs())?;
+        for row in self.z_prime.rows.iter().flatten() {
+            check_len("<z'>_p", layout.d, row.0.len())?;
+        }
+        check_polys("{y}_p", &self.y, layout.n_prime, layout.d)
+    }
+
+    /// The dense share: [`SparseRows::into_dense`] of $\langle \mathbf z' \rangle\_p$.
+    pub fn into_dense(self) -> LinearShare {
+        LinearShare {
+            z_prime: self.z_prime.into_dense(),
+            y: self.y,
+        }
     }
 }
 

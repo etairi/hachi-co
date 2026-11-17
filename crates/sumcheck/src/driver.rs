@@ -6,9 +6,9 @@
 use crate::blinder::{blinder_coefficients, blinder_weights};
 use crate::error::{Error, Result, check_len};
 use crate::prover::{Base, PartyProver};
-use crate::quotient::{check_matrix, quotient_share_rows};
+use crate::quotient::{check_matrix, quotient_rows};
 use crate::tables::{
-    BaseTable, CompactCoeffs, CompactTable, EqSplit, MStarParts, put_pad_residues, w_table,
+    BaseTable, CompactCoeffs, CompactTable, EqSplit, MStarParts, put_pad_residues, w_table_rows,
 };
 use crate::transcript::{
     ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
@@ -16,7 +16,7 @@ use crate::transcript::{
 use hachi_co_core::base_pcs::{LiftedCoeffs, PartedCoeffs, mobius, mobius_ext};
 use hachi_co_core::wire::{flatten_exts, join_words, split_words, unflatten_exts};
 use hachi_co_core::{
-    BasePcs, BlinderKind, Challenger, Context, LinearShare, PartyRandomness, Poly,
+    BasePcs, BlinderKind, Challenger, Context, LinearShare, PartyRandomness, Poly, SparseShare,
 };
 use hachi_co_math::Ext;
 use hachi_co_mpc::{Comm, PartyId};
@@ -143,9 +143,10 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///
 /// **Steps** (each party; the coins come from `ch`; the blinders and the base PCS's six seeds,
 /// [`PartyRandomness::base_pcs`] at [`ClaimedPoly::seed_index`], from `rng`):
-/// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share_rows`], one row of $\mathbf M$ at a time) and the table of
-///    $\langle \widetilde w \rangle\_p$ ([`w_table`]), with the pad $\rho^w\_p$
-///    ([`PartyRandomness::rho_w`]), lines 227-259;
+/// 1. $\langle \mathbf r \rangle\_p$ ([`quotient_share_rows`](crate::quotient_share_rows), one
+///    row of $\mathbf M$ at a time) and the table of $\langle \widetilde w \rangle\_p$
+///    ([`w_table`](crate::w_table)), with the pad $\rho^w\_p$ ([`PartyRandomness::rho_w`]),
+///    lines 227-259;
 /// 2. $g\_{0,p}, g\_{1,p}$ from [`PartyRandomness::blinder`] ($\ell'' \times d\_0$ and
 ///    $\ell'' \times d\_1$) and their hypercube sums, lines 238-248;
 /// 3. the commitments (lines 249-250, 260): $\langle \widetilde w \rangle\_p$ by its monomial
@@ -256,10 +257,12 @@ pub fn prove_rebuilding<
 }
 
 /// [`prove_rebuilding`] for a caller that only needs the transcript (Eval's proof,
-/// `hachi_co::eval_lean`): the share is taken over and dropped once the table of step 2 is formed
-/// (its last reader), the context's public matrices are released once the column weights of
-/// $M^\ast$ are formed in step 5 ([`Context::release_public_params`]; they are formed again if read
-/// later), and the private output's table is not formed again at the end:
+/// `hachi_co::eval_lean`): the share, held sparsely ([`SparseShare`], as
+/// `hachi_co_r2l::run_sparse` forms it), is taken over and dropped once the table of step 2 is
+/// formed (its last reader), the context's public matrices are released after the quotient of step 1 and
+/// again once the column weights of $M^\ast$ are formed in step 5
+/// ([`Context::release_public_params`]; step 5 forms them again from the seed, and so would any
+/// later reader), and the private output's table is not formed again at the end:
 /// [`SumcheckPrivate::w_table`] is empty. The same transcript.
 ///
 /// # Errors
@@ -280,7 +283,7 @@ pub fn prove_rebuilding_lean<
     ch: &mut H,
     mut row: B,
     e_matrix: &[Vec<u64>],
-    share: LinearShare,
+    share: SparseShare,
 ) -> Result<(SumcheckTranscript<K>, SumcheckPrivate<K>)> {
     prove_with(
         ctx,
@@ -290,24 +293,44 @@ pub fn prove_rebuilding_lean<
         ch,
         |i| row(i).map(Cow::Owned),
         e_matrix,
-        Share::Owned(share),
+        Share::Sparse(share),
         true,
     )
 }
 
-/// The share of [`prove_with`]: borrowed, or taken over by [`prove_rebuilding_lean`].
+/// The share of [`prove_with`]: borrowed, or held sparsely and taken over by
+/// [`prove_rebuilding_lean`].
 enum Share<'a> {
     Borrowed(&'a LinearShare),
-    Owned(LinearShare),
+    Sparse(SparseShare),
 }
 
 impl Share<'_> {
-    fn get(&self) -> &LinearShare {
+    /// The shape of [`LinearShare::validate`].
+    fn validate(&self, l: &hachi_co_core::Layout) -> Result<()> {
         match self {
-            Self::Borrowed(share) => share,
-            Self::Owned(share) => share,
+            Self::Borrowed(share) => share.validate(l)?,
+            Self::Sparse(share) => share.validate(l)?,
         }
+        Ok(())
     }
+}
+
+/// `$body` with `$z` the polynomials of a [`Share`]'s $\langle \mathbf z' \rangle\_p$ (as
+/// `ZRows`, dense or sparse) and `$y` those of its $\lbrace \mathbf y \rbrace\_p$.
+macro_rules! with_rows {
+    ($share:expr, |$z:ident, $y:ident| $body:expr) => {
+        match $share {
+            Share::Borrowed(share) => {
+                let ($z, $y) = (&share.z_prime[..], &share.y[..]);
+                $body
+            }
+            Share::Sparse(share) => {
+                let ($z, $y) = (&share.z_prime, &share.y[..]);
+                $body
+            }
+        }
+    };
 }
 
 /// [`prove`], reading the rows of $\mathbf M$ from `rows` at steps 1 and 5; `lean` as in
@@ -349,15 +372,22 @@ fn prove_with<
     // Steps 1-2. With the pad in the field and separate commitments, the table is formed compactly
     // from the share (`CompactTable::from_share`), and the commitment reads its coefficients a
     // part at a time (step 3), so that neither is held whole; otherwise as `w_table` forms it.
-    let quotient = quotient_share_rows(ctx, &mut rows, share.get())?;
+    share.validate(l)?;
+    let quotient = with_rows!(&share, |z, y| quotient_rows(ctx, &mut rows, z, y))?;
+    if lean {
+        // The rows of M are read next in step 5: a lean run releases the public matrices through
+        // the commitments, and step 5's first row forms them again from the seed
+        // (`Context::pp`), the same matrices.
+        ctx.release_public_params();
+    }
     let compact = if l.pad_rule == PadRule::Field && !pcs.merges() {
-        CompactTable::from_share(ctx, &share.get().z_prime, &quotient)?
+        with_rows!(&share, |z, _y| CompactTable::from_rows(ctx, z, &quotient))?
     } else {
         None
     };
     let mut table = match compact {
         Some(_) => Vec::new(),
-        None => w_table(ctx, &share.get().z_prime, &quotient)?,
+        None => with_rows!(&share, |z, _y| w_table_rows(ctx, z, &quotient))?,
     };
     // A lean run drops the share here, after its last reader.
     let share = if lean {
@@ -671,7 +701,7 @@ fn prove_with<
     // its table, so this is the same table); a lean run leaves it empty.
     let w_table = match &share {
         Some(share) => {
-            let mut table = w_table(ctx, &share.get().z_prime, &quotient)?;
+            let mut table = with_rows!(share, |z, _y| w_table_rows(ctx, z, &quotient))?;
             if let Some(residues) = &pad_residues {
                 put_pad_residues(l, &mut table, residues)?;
             }

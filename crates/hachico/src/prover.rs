@@ -104,9 +104,11 @@ pub fn eval<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>>(
 
 /// [`eval`] for a caller that keeps only the proof, as the benchmark harness does: each large
 /// value is freed after its last use. The context's $\mathbf A$ in the NTT form after the
-/// ring-to-linear step ([`Context::release_a_prepared`]), its public matrices after the last row of
-/// $\mathbf M$ ([`Context::release_public_params`]), both formed again if the context is read
-/// again, and the share $\mathbf z'$ after the sumcheck's table, whose private copy is not formed
+/// ring-to-linear step ([`Context::release_a_prepared`]), its public matrices after the quotient of
+/// the sumcheck's step 1 (its step 5 forms them again) and after the last row of $\mathbf M$
+/// ([`Context::release_public_params`]), all formed again if the context is read again, and the
+/// share $\mathbf z'$, held without its zero rows ([`hachi_co_r2l::run_sparse`]), after the
+/// sumcheck's table, whose private copy is not formed
 /// ([`hachi_co_sumcheck::prove_rebuilding_lean`]). The same proof as [`eval`].
 ///
 /// # Errors
@@ -211,11 +213,16 @@ fn eval_inner<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: 
     absorb_statement(ch, ctx, &pcs.params_digest(), u, x);
     let conv = pi_conv(ctx, comm, state, x)?;
     ch.absorb_polys(LABEL_E_U, core::slice::from_ref(&conv.e_u));
-    let mut r2l = hachi_co_r2l::run(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
+    let mut r2l =
+        hachi_co_r2l::run_sparse(ctx, comm, rng, ch, state, &conv.public, &conv.u_share, u)?;
     if lean {
         // The ring-to-linear step was the last to multiply by A in the NTT form.
         ctx.release_a_prepared();
     }
+    // A lean run takes the share over, held sparsely, for the driver, which drops it after its
+    // last reader; otherwise the output keeps the dense share.
+    let lean_share = lean.then(|| core::mem::take(&mut r2l.share));
+    let r2l = r2l.into_dense();
     let (transcript, private) = {
         // The checks of `linear_relation`; M itself is read by rows below.
         check_relation(ctx, &conv.public, &r2l.v, &r2l.c, u)?;
@@ -225,9 +232,7 @@ fn eval_inner<const K: usize, P: BasePcs<K>, C: Comm, R: PartyRandomness<K>, H: 
         // values), so that M is never held whole.
         let pv = &conv.public;
         let rows = MRows::new(ctx, &pv.b_ring, &pv.a_ring, &r2l.c, r2l.j_star)?;
-        if lean {
-            // The driver takes the share over and drops it after its last reader.
-            let share = core::mem::take(&mut r2l.share);
+        if let Some(share) = lean_share {
             hachi_co_sumcheck::prove_rebuilding_lean(
                 ctx,
                 pcs,

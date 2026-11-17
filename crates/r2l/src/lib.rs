@@ -92,7 +92,7 @@ mod share;
 mod verifier;
 
 pub use accept::{accept_set_len, accepts, check_accept_set, encode_accept_set, select_iteration};
-pub use driver::{R2lOutput, run};
+pub use driver::{R2lOutput, run, run_sparse};
 pub use error::{Error, Result};
 pub use local::{
     BlockW, MaskImages, MaskSecrets, a_times_g, block_w, check_challenges, d_slice, fah_d_input,
@@ -103,7 +103,7 @@ pub use relation::{
     R3Conditions, RowBlockChecks, UnpackedWitness, r3_conditions, relation_holds, residual,
     row_block_checks, sum_shares,
 };
-pub use share::{y_share, z_prime_share};
+pub use share::{y_share, z_prime_share, z_prime_share_sparse};
 pub use verifier::{
     LinearRelation, check_relation, linear_relation, verifier_challenges, verifier_iteration,
 };

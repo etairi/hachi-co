@@ -15,7 +15,7 @@ use hachi_co_r2l::{
     BlockW, Error, MaskSecrets, UnpackedWitness, check_challenges, d_slice, encode_accept_set,
     fah_d_input, fold, linear_relation, norm_check, owned_w, relation_holds, residual, respond,
     response_len, row_block_checks, sample_masks, select_iteration, sum_shares, y_share, z_hat,
-    z_of_sum, z_prime_share,
+    z_of_sum, z_prime_share, z_prime_share_sparse,
 };
 
 /// Everything a test needs from one run, recomputed by this crate.
@@ -214,6 +214,28 @@ fn replay_and_compare(name: &str) -> Run {
                 assert!(z.0.iter().all(|x| *x == 0), "{name} p={p}");
             }
         }
+        // Held sparsely: the rows of S_p and that of <u>_p only, the same share.
+        let sparse = z_prime_share_sparse(
+            &ctx,
+            &states[p - 1],
+            &ws[p - 1],
+            &secrets[p - 1],
+            (p == 1).then(|| zh.clone()),
+            &u_share(&fx, p),
+        )
+        .unwrap();
+        for pos in 0..l.len_z {
+            assert_eq!(
+                sparse.is_held(pos),
+                pos == l.u || l.in_s(p, pos),
+                "{name}: row {pos} held at p = {p}"
+            );
+        }
+        assert_eq!(
+            sparse.into_dense(),
+            share.z_prime,
+            "{name}: sparse at p = {p}"
+        );
     }
 
     let w0 = secrets

@@ -2,11 +2,11 @@
 //! $\lbrace \mathbf y \rbrace\_p$ (`5_Building_Blocks.tex`:147, 167-193; `ref/README.md`,
 //! "Shares").
 
-use crate::local::{BlockW, check_len, check_polys, fill_first_message_part};
+use crate::local::{BlockW, SparsePrefix, check_len, check_polys, fill_first_message_part};
 use crate::{Error, MaskSecrets, Result};
-use hachi_co_core::{Context, PartyId, PartyState, build_y};
+use hachi_co_core::{Context, PartyId, PartyState, SparseRows, build_y};
 use hachi_co_math::Poly;
-use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// Prover $p$'s share $\langle \mathbf z' \rangle\_p \in \mathcal R\_q^{\mu - 1}$ of
 /// $\mathbf z' = (\hat{\mathbf w}, \hat{\mathbf w}\_0, \hat{\mathbf t}\_0, \boldsymbol\rho^v,
@@ -36,30 +36,67 @@ pub fn z_prime_share<const K: usize>(
     z_hat: Option<&[Poly]>,
     u_share: &Poly,
 ) -> Result<Vec<Poly>> {
+    share_rows(ctx, state, w, secrets, z_hat.map(Cow::Borrowed), u_share)
+        .map(SparseRows::into_dense)
+}
+
+/// [`z_prime_share`] held sparsely ([`SparseRows`]): the rows prover $p$ holds, the others zero
+/// and not stored, and $\hat{\mathbf z}$ (at prover 1) moved into its rows rather than copied.
+/// The same share: [`SparseRows::into_dense`] of it is [`z_prime_share`].
+///
+/// # Errors
+/// As [`z_prime_share`].
+pub fn z_prime_share_sparse<const K: usize>(
+    ctx: &Context<K>,
+    state: &PartyState<K>,
+    w: &[BlockW],
+    secrets: &MaskSecrets,
+    z_hat: Option<Vec<Poly>>,
+    u_share: &Poly,
+) -> Result<SparseRows> {
+    share_rows(ctx, state, w, secrets, z_hat.map(Cow::Owned), u_share)
+}
+
+/// The share of [`z_prime_share`] as [`SparseRows`], with `z_hat` copied if borrowed and moved
+/// if owned.
+fn share_rows<const K: usize>(
+    ctx: &Context<K>,
+    state: &PartyState<K>,
+    w: &[BlockW],
+    secrets: &MaskSecrets,
+    z_hat: Option<Cow<'_, [Poly]>>,
+    u_share: &Poly,
+) -> Result<SparseRows> {
     let l = &ctx.layout;
     let q = ctx.q();
     state.validate(l)?;
     let p = state.party;
-    // The zeros and the copies of t-hat and z-hat in parallel (z' has len_z ring elements); the
-    // checks in order, so that the first wrong entry is the one reported.
-    let mut share: Vec<Poly> = (0..l.len_z)
-        .into_par_iter()
-        .map(|_| ctx.ring.zero())
-        .collect();
-    fill_first_message_part(ctx, p, w, secrets, &mut share[..l.t])?;
+    // The rows p holds (the copies of t-hat and z-hat in parallel); the checks in order, so that
+    // the first wrong entry is the one reported.
+    let mut share = SparseRows::new(l.len_z, l.d);
+    fill_first_message_part(
+        ctx,
+        p,
+        w,
+        secrets,
+        &mut SparsePrefix {
+            rows: &mut share,
+            len: l.t,
+        },
+    )?;
     for block in &state.blocks {
         check_polys("t_hat_i", &block.t_hat, l.n_a * l.delta, l.d, q)?;
-        share[l.t_hat_range(block.index)].clone_from_slice(&block.t_hat);
+        share.put(l.t_hat_range(block.index), &block.t_hat);
     }
     check_polys("rho^u_p", &state.rho_u, l.m_u, l.d, q)?;
-    share[l.rho_u_range(p)].clone_from_slice(&state.rho_u);
+    share.put(l.rho_u_range(p), &state.rho_u);
     match (p, z_hat) {
         (1, Some(z_hat)) => {
-            check_polys("z_hat", z_hat, l.width_a * l.tau, l.d, q)?;
-            share[l.z_hat_range()]
-                .par_iter_mut()
-                .zip(z_hat.par_iter())
-                .for_each(|(out, z)| out.clone_from(z));
+            check_polys("z_hat", &z_hat, l.width_a * l.tau, l.d, q)?;
+            match z_hat {
+                Cow::Borrowed(z_hat) => share.put(l.z_hat_range(), z_hat),
+                Cow::Owned(z_hat) => share.put_owned(l.z_hat_range(), z_hat),
+            }
         }
         (1, None) => {
             return Err(Error::Shape {
@@ -78,7 +115,7 @@ pub fn z_prime_share<const K: usize>(
         }
     }
     check_polys("<u>_p", core::slice::from_ref(u_share), 1, l.d, q)?;
-    share[l.u] = u_share.clone();
+    share.set(l.u, u_share.clone());
     Ok(share)
 }
 

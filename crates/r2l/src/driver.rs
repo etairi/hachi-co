@@ -8,11 +8,11 @@ use crate::local::{
     respond, response_len, sample_mask_images,
 };
 use crate::prover1::{norm_check, z_hat, z_of_sum};
-use crate::share::{y_share, z_prime_share};
+use crate::share::{y_share, z_prime_share_sparse};
 use crate::{COMM_ACCEPT, COMM_FAH_D, COMM_FAH_Z, Error, LABEL_ACCEPT, LABEL_V, Result};
 use hachi_co_core::wire::{flatten_polys, unflatten_polys};
 use hachi_co_core::{
-    Challenger, Context, LinearShare, PartyRandomness, PartyState, Poly, PublicVectors,
+    Challenger, Context, LinearShare, PartyRandomness, PartyState, Poly, PublicVectors, SparseShare,
 };
 use hachi_co_mpc::Comm;
 use rayon::prelude::*;
@@ -22,9 +22,10 @@ use rayon::prelude::*;
 ///
 /// The proof carries `v` and `accept_sets` (plan, finding F5: never $\mathbf z\_i$,
 /// $\hat{\mathbf z}$, $\mathbf r\_i^j$ or $\boldsymbol\rho^v\_i$); the verifier re-derives `c` and
-/// `j_star`. `share` is the party's private input to the sumcheck.
+/// `j_star`. `share` is the party's private input to the sumcheck: a [`LinearShare`] from [`run`],
+/// a [`SparseShare`] from [`run_sparse`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct R2lOutput {
+pub struct R2lOutput<S = LinearShare> {
     /// The first message $\mathbf v \in \mathcal R\_q^{n\_D}$, which commits to the images of
     /// all $L$ masks of every prover.
     pub v: Vec<Poly>,
@@ -39,7 +40,20 @@ pub struct R2lOutput {
     /// ([`crate::z_prime_share`], [`crate::y_share`]), with
     /// $\mathbf M \sum\_p \langle \mathbf z' \rangle\_p = \sum\_p \lbrace \mathbf y \rbrace\_p$
     /// for $\mathbf M$ of `c` and `j_star` ([`crate::linear_relation`]).
-    pub share: LinearShare,
+    pub share: S,
+}
+
+impl R2lOutput<SparseShare> {
+    /// The output with the share dense ([`SparseShare::into_dense`]): the output of [`run`].
+    pub fn into_dense(self) -> R2lOutput {
+        R2lOutput {
+            v: self.v,
+            c: self.c,
+            accept_sets: self.accept_sets,
+            j_star: self.j_star,
+            share: self.share.into_dense(),
+        }
+    }
 }
 
 /// The ring-to-linear step (`5_Building_Blocks.tex`:114-196 and `fig:ring-to-linear`,
@@ -71,7 +85,7 @@ pub struct R2lOutput {
 ///    (`fig:ring-to-linear-2`, steps 8-10, where every prover checks since the draft's commit
 ///    `0337dfb`, and before it only prover 1 did). The check never fails for honest provers
 ///    (line 207);
-/// 8. every party assembles its [`LinearShare`] ([`z_prime_share`], [`y_share`],
+/// 8. every party assembles its [`LinearShare`] ([`crate::z_prime_share`], [`y_share`],
 ///    steps 10-14).
 ///
 /// **Choices** (the draft is silent): a received set that is malformed, or a party's own set
@@ -105,6 +119,28 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     u_share: &Poly,
     u_com: &[Poly],
 ) -> Result<R2lOutput> {
+    run_sparse(ctx, comm, rng, ch, state, pv, u_share, u_com).map(R2lOutput::into_dense)
+}
+
+/// [`run`] with the share of $\mathbf z'$ held sparsely ([`SparseShare`],
+/// [`crate::z_prime_share_sparse`]): the rows the party does not hold are not stored, and
+/// $\hat{\mathbf z}$ is moved into its rows at prover 1. The same output:
+/// [`R2lOutput::into_dense`] of it is that of [`run`]. For a caller that holds the share until
+/// the sumcheck (`hachi_co::eval_lean`).
+///
+/// # Errors
+/// As [`run`].
+#[allow(clippy::too_many_arguments)] // the arguments of run
+pub fn run_sparse<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
+    ctx: &Context<K>,
+    comm: &mut C,
+    rng: &mut R,
+    ch: &mut H,
+    state: &PartyState<K>,
+    pv: &PublicVectors<K>,
+    u_share: &Poly,
+    u_com: &[Poly],
+) -> Result<R2lOutput<SparseShare>> {
     let l = &ctx.layout;
     let q = ctx.q();
     let p = state.party;
@@ -229,14 +265,14 @@ pub fn run<const K: usize, C: Comm, R: PartyRandomness<K>, H: Challenger<K>>(
     crate::ct::wipe(&mut z_p);
     local.fill(0);
     let z_hat_digits = after_sum(ctx, p, &sum?)?;
-    let z_prime = z_prime_share(ctx, state, &w, &secrets, z_hat_digits.as_deref(), u_share)?;
+    let z_prime = z_prime_share_sparse(ctx, state, &w, &secrets, z_hat_digits, u_share)?;
     let y = y_share(ctx, p, &v, u_com)?;
     Ok(R2lOutput {
         v,
         c,
         accept_sets,
         j_star,
-        share: LinearShare { z_prime, y },
+        share: SparseShare { z_prime, y },
     })
 }
 
