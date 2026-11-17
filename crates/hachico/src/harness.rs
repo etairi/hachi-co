@@ -24,6 +24,12 @@
 //!   unchanged (its pads and blinders too), so the scheme is then not hiding: the option measures
 //!   what hiding costs in the base PCS. The statement records the name, so `--verify` checks such
 //!   a proof with the same scheme. [`run_single`] takes the suffix too.
+//! - The suffix `-greyhound` (for example `secure100-l20-n8-a8-greyhound`) gives Hachi the
+//!   Greyhound tail ([`HachiBase::with_tail`], feature `greyhound`): each prover's three openings
+//!   end with one Greyhound proof instead of their last tables in the clear, with tables of at
+//!   most $2^{28}$ digits ([`DEFAULT_TAIL_VARS`]), or $2^v$ with the suffix `-greyhound<v>`
+//!   (for example `-greyhound21`). Not the draft's protocol: an option, approved on 2026-11-17.
+//!   Without the feature the suffix is refused, and [`run_single`] does not take it.
 //!
 //! # Configuration
 //!
@@ -343,19 +349,24 @@ impl Setup {
     /// [`crate::setup`] on the preset's derived parameters, and [`HachiBase`] with
     /// [`HachiBase::preset_choices`] and the same seed. The suffixes `-merged` and `-nonhiding`,
     /// in either order, select [`HachiBase::merged`] and Hachi without its hiding choices
-    /// (`hiding: None`, the published scheme) on the preset without them.
+    /// (`hiding: None`, the published scheme) on the preset without them, and `-greyhound` or
+    /// `-greyhound<v>` the Greyhound tail (module documentation), made for this context at the
+    /// preset's $\lambda$ with a seed from the same setup seed.
     ///
     /// # Errors
-    /// [`HarnessError::Config`] for an unknown preset or an $n$ other than the preset's;
-    /// [`HarnessError::Protocol`] if the context or Hachi cannot be set up, for example merged
-    /// commitments without masks (so `-merged` with `-nonhiding`).
+    /// [`HarnessError::Config`] for an unknown preset or an $n$ other than the preset's, and for
+    /// `-greyhound` without the feature `greyhound`. [`HarnessError::Protocol`] if the context or
+    /// Hachi cannot be set up, for example merged commitments without masks (so `-merged` with
+    /// `-nonhiding`) or with a tail.
     pub fn new(preset: &str, n: usize, seed: &[u8; 32]) -> Result<Self, HarnessError> {
-        let (mut preset, mut merged, mut nonhiding) = (preset, false, false);
+        let (mut preset, mut merged, mut nonhiding, mut tail) = (preset, false, false, None);
         loop {
             if let Some(name) = preset.strip_suffix("-merged") {
                 (preset, merged) = (name, true);
             } else if let Some(name) = preset.strip_suffix("-nonhiding") {
                 (preset, nonhiding) = (name, true);
+            } else if let Some((name, vars)) = greyhound_suffix(preset) {
+                (preset, tail) = (name, Some(vars));
             } else {
                 break;
             }
@@ -378,8 +389,68 @@ impl Setup {
         if merged {
             pcs = pcs.merged()?;
         }
+        if let Some(max_vars) = tail {
+            pcs = with_greyhound(pcs, &ctx, max_vars, preset_choices.lambda, seed)?;
+        }
         Ok(Self { ctx, pcs })
     }
+}
+
+/// The largest table of the Greyhound tail for the suffix `-greyhound` without a number
+/// ([`Setup::new`]): $2^{28}$ digits, the coordinator's choice of 2026-11-17, at which the share
+/// polynomial's opening stops after its first iteration at the presets `secure100-l20` to `l24`
+/// with $n = 8$.
+pub const DEFAULT_TAIL_VARS: usize = 28;
+
+/// The name without its suffix `-greyhound` or `-greyhound<v>`, and $v$ (by default
+/// [`DEFAULT_TAIL_VARS`]), if it ends with one.
+fn greyhound_suffix(name: &str) -> Option<(&str, usize)> {
+    const SUFFIX: &str = "-greyhound";
+    let at = name.rfind(SUFFIX)?;
+    let (head, rest) = name.split_at(at);
+    let digits = &rest[SUFFIX.len()..];
+    if digits.is_empty() {
+        return Some((head, DEFAULT_TAIL_VARS));
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().map(|vars| (head, vars))
+}
+
+/// `pcs` with the Greyhound tail for the context `ctx`, tables of at most
+/// $2^{\mathtt{max\_vars}}$ digits, the preset's `lambda` and the setup seed `seed`.
+///
+/// # Errors
+/// [`HarnessError::Protocol`] if no schedule fits the tail or Greyhound refuses its parameters.
+#[cfg(feature = "greyhound")]
+fn with_greyhound(
+    pcs: HachiBase<K>,
+    ctx: &Context<K>,
+    max_vars: usize,
+    lambda: u32,
+    seed: &[u8; 32],
+) -> Result<HachiBase<K>, HarnessError> {
+    let tail =
+        crate::greyhound::GreyhoundTail::for_base(&pcs, &ctx.layout, max_vars, lambda, seed)?;
+    Ok(pcs.with_tail(std::sync::Arc::new(tail))?)
+}
+
+/// Without the feature `greyhound`: the suffix is refused.
+///
+/// # Errors
+/// [`HarnessError::Config`].
+#[cfg(not(feature = "greyhound"))]
+fn with_greyhound(
+    _pcs: HachiBase<K>,
+    _ctx: &Context<K>,
+    _max_vars: usize,
+    _lambda: u32,
+    _seed: &[u8; 32],
+) -> Result<HachiBase<K>, HarnessError> {
+    Err(HarnessError::Config(
+        "the suffix -greyhound needs hachi-co built with the feature greyhound".into(),
+    ))
 }
 
 /// The instance of a run: the polynomial $\mathbf f$ (its $2^\ell$ coefficients), the point
@@ -924,6 +995,13 @@ pub fn run_single(
     seed: &[u8; 32],
 ) -> Result<SingleReport, HarnessError> {
     use hachi_co_core::PartyRandomness;
+    if setup.pcs.tail().is_some() {
+        return Err(HarnessError::Config(
+            "the single-prover baseline does not take a tail: the Greyhound tail is made for a \
+             prover's three claims"
+                .into(),
+        ));
+    }
     let pcs = setup.pcs.pcs();
     let field = setup.ctx.field();
     let mut rng = PrgRandomness::new(*seed);

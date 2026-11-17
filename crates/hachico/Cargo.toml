@@ -12,6 +12,7 @@ hachi.workspace = true
 hachi-co-commit.workspace = true
 hachi-co-conv.workspace = true
 hachi-co-core.workspace = true
+hachi-co-greyhound = { workspace = true, optional = true }
 hachi-co-math.workspace = true
 hachi-co-mpc.workspace = true
 hachi-co-params.workspace = true
@@ -26,14 +27,17 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [features]
-default = ["alloc-mimalloc"]
+default = ["alloc-mimalloc", "greyhound"]
 # The binary hachi-co-party-profile: hachi-co-party under a counting allocator, for memory profiles.
 alloc-profile = []
 # hachi-co-party with mimalloc as its allocator, by default: glibc keeps freed memory in its arenas
 # and serializes some allocations, mimalloc returns the memory and allocates per thread (on the
 # shared instance at secure-l24-n2-a8, Eval about -7%, Commit about -22%, resident peaks about
-# -15%). `--no-default-features` builds it with the system's allocator.
+# -15%). `--no-default-features --features greyhound` builds it with the system's allocator.
 alloc-mimalloc = ["dep:mimalloc"]
+# The Greyhound tail of Hachi (`src/greyhound.rs`, the preset suffix `-greyhound`), by default.
+# Without it the suffix is refused.
+greyhound = ["dep:hachi-co-greyhound"]
 
 [[bin]]
 name = "hachi-co-party-profile"
@@ -42,6 +46,7 @@ required-features = ["alloc-profile"]
 
 # serde_json is a normal dependency of this crate, so the tests can use it without a dev-dependency.
 [dev-dependencies]
+hachi = { workspace = true, features = ["stub-tail"] }
 hachi-co-core = { workspace = true, features = ["fixtures"] }
 num-bigint.workspace = true
 rand_chacha.workspace = true

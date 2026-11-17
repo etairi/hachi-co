@@ -1,0 +1,23 @@
+[package]
+name = "hachi-co-greyhound"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Greyhound (Nguyen and Seiler, CRYPTO 2024): commitments to polynomials over Z_q, evaluation proofs reduced to LaBRADOR's principal relation, and the LaBRADOR proof of that relation by jali"
+publish = false
+
+[dependencies]
+hachi-co-math.workspace = true
+hachi-co-sampling.workspace = true
+hachi-co-transcript.workspace = true
+# jali 0.3.1, the vendored copy that the root Cargo.toml patches in for crates.io's jali (vendor/jali: 0.3.0 at
+# 1ee3448 with vendor/jali.patch).
+jali = { version = "0.3.1", features = ["parallel"] }
+rand.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# For the cross-check of the tail's value with Hachi's `table_eval`.
+hachi.workspace = true

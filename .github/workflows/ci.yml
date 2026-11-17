@@ -12,7 +12,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Every crate of the workspace, held to the formatting, lint and documentation gates below.
-  NEW_CRATES: -p hachi -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params -p hachi-co-mpc -p hachi-co-core -p hachi-co-commit -p hachi-co-conv -p hachi-co-r2l -p hachi-co-sumcheck -p hachi-co
+  NEW_CRATES: -p hachi -p hachi-co-math -p hachi-co-sampling -p hachi-co-transcript -p hachi-co-params -p hachi-co-mpc -p hachi-co-core -p hachi-co-commit -p hachi-co-conv -p hachi-co-r2l -p hachi-co-sumcheck -p hachi-co -p hachi-co-greyhound
 jobs:
   lint:
     runs-on: ubuntu-latest

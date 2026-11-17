@@ -41,6 +41,11 @@
 //! the trace of $p'$ is the value at $\mathbf a$ of the table that $\psi^{-1}$ gives, and the range
 //! check of the iteration puts every entry of that table in the digit set. After the last
 //! iteration there is no reduction: the prover sends $\tilde w$ in the clear (`pcs`, step 3).
+//!
+//! **With a tail** ([`crate::tail`]), the last iteration commits its table with the tail instead
+//! of step 3's commitment, and its transcript absorbs the tail's commitment where it absorbs
+//! $\mathbf u'$ otherwise, under its own label (`prove_next_tail`, [`verify_tail`]). The table
+//! is then not sent: the tail proves the claim $\tilde w(\mathbf a) = y'$ (`pcs`, "Tail").
 
 use crate::commit::{
     Committed, Ctx, Digits, ElementSource, block_columns, commit_table, packed_element_at,
@@ -52,6 +57,7 @@ use crate::params::{IterParams, Layout};
 use crate::relation::{Masked, Mat, Part, Public, mstar, next_table_parts, quotients};
 use crate::sumcheck::{self, RoundMessage, Tensor, range_poly};
 use crate::table::{DigitTable, ResidueTable};
+use crate::tail::{Tail, TailOpening, check_words};
 use crate::{Error, Result};
 use hachi_co_math::decompose::{digit_bound, digit_range, g_apply, g_inv, g_inv_rows, j_inv};
 use hachi_co_math::{Ext, Fqk, Poly, Ring, Sparse};
@@ -66,6 +72,9 @@ const LABEL_U_NEXT: &[u8] = b"hachi/iter/u-next";
 const LABEL_COINS: &[u8] = b"hachi/iter/coins";
 const LABEL_FINAL: &[u8] = b"hachi/iter/final";
 const LABEL_TARGET: &[u8] = b"hachi/iter/next-target";
+/// The label of the tail's commitment, absorbed in place of $\mathbf u'$ after the last iteration
+/// with a tail (module documentation, "With a tail").
+const LABEL_TAIL_COMMITMENT: &[u8] = b"hachi/iter/tail-commitment";
 
 /// The PRG domain of the masks of an attempt: the stream of ring element $e$ of attempt $j$ has
 /// index $2^{32} j + e$, so that the elements can be drawn in parallel.
@@ -125,7 +134,8 @@ pub struct IterationProof<const K: usize> {
     /// $\mathbf v = \mathbf D \hat{\mathbf w}$, or $\mathbf D (\hat{\mathbf w}, \hat w_0,
     /// \hat{\mathbf t}_0)$ at a masked level ($n_D$ ring elements).
     pub v: Vec<Poly>,
-    /// The commitment $\mathbf u'$ to the next witness ($n_B$ ring elements).
+    /// The commitment $\mathbf u'$ to the next witness ($n_B$ ring elements), and none after the
+    /// last iteration with a tail, which sends [`IterationProof::tail_commitment`] instead.
     pub next_commitment: Vec<Poly>,
     /// The sumcheck rounds ($L$).
     pub rounds: Vec<RoundMessage<K>>,
@@ -134,6 +144,9 @@ pub struct IterationProof<const K: usize> {
     /// $p'$, the next claim's value, and `None` after the last iteration, which has no reduction
     /// (module documentation).
     pub next_target: Option<Poly>,
+    /// After the last iteration with a tail: the tail's commitment to the next witness
+    /// ([`Tail::commitment_words`] words). `None` otherwise.
+    pub tail_commitment: Option<Vec<u64>>,
 }
 
 /// What an iteration leaves to the verifier.
@@ -1002,6 +1015,22 @@ pub(crate) struct Next {
     table: Option<DigitTable>,
 }
 
+/// What [`prove_next_tail`] leaves after an iteration: the next committed witness, or after the
+/// last iteration with a tail the table and the opening of the tail's commitment to it.
+pub(crate) enum After<const K: usize> {
+    /// The next committed witness ([`Next`]).
+    Next(Next),
+    /// After the last iteration with a tail.
+    Tail {
+        /// The table, which the final step does not send.
+        table: DigitTable,
+        /// The opening of the tail's commitment ([`Tail::commit`]).
+        opening: TailOpening,
+        /// The sumcheck's point $\mathbf a$, at which the table takes $y'$.
+        point: Vec<Ext<K>>,
+    },
+}
+
 impl Next {
     /// The table of the next witness, which the last iteration sends in the clear (`pcs`, step
     /// 3), and `None` if it was packed into the message.
@@ -1151,6 +1180,35 @@ pub(crate) fn prove_next<'w, const K: usize>(
     seed: &[u8; 32],
     last: bool,
 ) -> Result<(IterationProof<K>, Next, Option<Claim>)> {
+    match prove_next_tail(ctx, index, params, witness, claim, w, fs, seed, last, None)? {
+        (proof, After::Next(next), claim) => Ok((proof, next, claim)),
+        (_, After::Tail { .. }, _) => Err(Error::Protocol(
+            "an iteration without a tail commits its next witness".into(),
+        )),
+    }
+}
+
+/// [`prove_next`] with a tail if `tail` is given ([`crate::tail`]): the last iteration (`last`)
+/// then commits its table with [`Tail::commit`], absorbs that commitment in place of $\mathbf u'$,
+/// and leaves the table with the opening ([`After::Tail`]). Before the last iteration `tail` is
+/// not read, and without it this is [`prove_next`].
+///
+/// # Errors
+/// As [`prove_next`], those of [`Tail::commit`], and [`Error::Protocol`] for a commitment of
+/// another length than [`Tail::commitment_words`].
+#[allow(clippy::too_many_arguments)] // the inputs of prove_next and the tail
+pub(crate) fn prove_next_tail<'w, const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    witness: impl Into<Witness<'w>>,
+    claim: &Claim,
+    w: Option<Vec<Poly>>,
+    fs: &mut Fs,
+    seed: &[u8; 32],
+    last: bool,
+    tail: Option<&dyn Tail<K>>,
+) -> Result<(IterationProof<K>, After<K>, Option<Claim>)> {
     let (ring, field, d) = (&ctx.ring, ctx.field(), ctx.d());
     let (b, delta, tau, n_a) = (ctx.choices.b, params.delta, params.tau, params.n_a);
     let layout = &params.layout;
@@ -1308,9 +1366,25 @@ pub(crate) fn prove_next<'w, const K: usize>(
     drop((w, z));
     // The next message is the table under psi, element by element: the commitment packs the
     // elements of each block as it reads them, and the message is packed whole only after the
-    // reduction, the last reader of the table, so that the two are never held at once.
-    let next = commit_table(ctx, index + 1, params.next, &table)?;
-    fs.polys(LABEL_U_NEXT, &next.u);
+    // reduction, the last reader of the table, so that the two are never held at once. After the
+    // last iteration with a tail, the tail commits to the table instead, under its own label.
+    let (next, tail_commitment, tail_opening) = match tail.filter(|_| last) {
+        Some(tail) => {
+            let (words, opening) = tail.commit(params.table_vars, table.values())?;
+            check_words(
+                "commitment",
+                words.len(),
+                tail.commitment_words(params.table_vars),
+            )?;
+            fs.words(LABEL_TAIL_COMMITMENT, &words);
+            (None, Some(words), Some(opening))
+        }
+        None => {
+            let next = commit_table(ctx, index + 1, params.next, &table)?;
+            fs.polys(LABEL_U_NEXT, &next.u);
+            (Some(next), None, None)
+        }
+    };
     // Step 4.
     let lr = log_rows(params.rows);
     let coins = fs.field_coins::<K>(LABEL_COINS, ctx.q, 1 + params.table_vars + lr)?;
@@ -1350,19 +1424,29 @@ pub(crate) fn prove_next<'w, const K: usize>(
     };
     let proof = IterationProof {
         v,
-        next_commitment: next.u.clone(),
+        next_commitment: next.as_ref().map_or_else(Vec::new, |n| n.u.clone()),
         rounds,
         final_eval,
         next_target: claim.as_ref().map(|c| c.target.clone()),
+        tail_commitment,
     };
-    Ok((
-        proof,
-        Next {
-            committed: next,
+    let after = match (next, tail_opening) {
+        (Some(committed), None) => After::Next(Next {
+            committed,
             table: Some(table),
+        }),
+        (None, Some(opening)) => After::Tail {
+            table,
+            opening,
+            point,
         },
-        claim,
-    ))
+        _ => {
+            return Err(Error::Protocol(
+                "an iteration commits its table once".into(),
+            ));
+        }
+    };
+    Ok((proof, after, claim))
 }
 
 /// The reduction of the sumcheck's output to the next claim (`hachi-pcs.tex`, step 2(j) of
@@ -1453,13 +1537,50 @@ pub fn verify<const K: usize>(
     last: bool,
     fs: &mut Fs,
 ) -> core::result::Result<Reduced<K>, VerifyError> {
+    verify_tail(ctx, index, params, commitment, claim, proof, last, None, fs)
+}
+
+/// [`verify`] for an opening with a tail whose commitments have `tail_words` words
+/// ([`Tail::commitment_words`] at this iteration's $L$): the last iteration must then send the
+/// tail's commitment and no $\mathbf u'$, and every other iteration $\mathbf u'$ and no tail
+/// commitment, as without a tail (`None`).
+///
+/// # Errors
+/// As [`verify`].
+#[allow(clippy::too_many_arguments)] // the inputs of verify and the tail's commitment words
+pub fn verify_tail<const K: usize>(
+    ctx: &Ctx<K>,
+    index: usize,
+    params: &IterParams,
+    commitment: &[Poly],
+    claim: &Claim,
+    proof: &IterationProof<K>,
+    last: bool,
+    tail_words: Option<usize>,
+    fs: &mut Fs,
+) -> core::result::Result<Reduced<K>, VerifyError> {
     check_polys(ctx, "v", &proof.v, ctx.choices.n_d)?;
-    check_polys(
-        ctx,
-        "next commitment",
-        &proof.next_commitment,
-        ctx.choices.n_b,
-    )?;
+    match (&proof.tail_commitment, tail_words.filter(|_| last)) {
+        (Some(words), Some(expected)) => {
+            if !proof.next_commitment.is_empty() || words.len() != expected {
+                return Err(VerifyError::Malformed(format!(
+                    "the last iteration with a tail sends a tail commitment of {expected} words \
+                     and no next commitment"
+                )));
+            }
+        }
+        (None, None) => check_polys(
+            ctx,
+            "next commitment",
+            &proof.next_commitment,
+            ctx.choices.n_b,
+        )?,
+        _ => {
+            return Err(VerifyError::Malformed(
+                "only the last iteration with a tail sends a tail commitment".into(),
+            ));
+        }
+    }
     match (&proof.next_target, last) {
         (Some(target), false) => check_polys(ctx, "next target", core::slice::from_ref(target), 1)?,
         (None, true) => {}
@@ -1490,10 +1611,10 @@ pub fn verify<const K: usize>(
 }
 
 /// The range and linear sumchecks of one iteration (paper, Section 4.3): absorbs $\mathbf v$,
-/// draws the challenges, absorbs $\mathbf u'$, draws the coins, and runs the two sumchecks with
-/// common challenges. Returns their point $\mathbf a$ and $y = \tilde w(\mathbf a) =$
-/// `proof.final_eval`, which it checks against both final claims and then absorbs. Shared by
-/// [`verify`] and the reduction tests.
+/// draws the challenges, absorbs $\mathbf u'$ (or the tail's commitment if the proof has one),
+/// draws the coins, and runs the two sumchecks with common challenges. Returns their point
+/// $\mathbf a$ and $y = \tilde w(\mathbf a) =$ `proof.final_eval`, which it checks against both
+/// final claims and then absorbs. Shared by [`verify`] and the reduction tests.
 ///
 /// # Errors
 /// [`VerifyError::Check`] if a sumcheck's final value is wrong; arithmetic errors.
@@ -1515,7 +1636,10 @@ fn verify_sumcheck<const K: usize>(
         .iter()
         .map(|ci| ring.from_i64(ci))
         .collect::<hachi_co_math::Result<_>>()?;
-    fs.polys(LABEL_U_NEXT, &proof.next_commitment);
+    match &proof.tail_commitment {
+        Some(words) => fs.words(LABEL_TAIL_COMMITMENT, words),
+        None => fs.polys(LABEL_U_NEXT, &proof.next_commitment),
+    }
     let lr = log_rows(params.rows);
     let coins = fs.field_coins::<K>(LABEL_COINS, ctx.q, 1 + params.table_vars + lr)?;
     let (alpha, tau0, tau1) = (

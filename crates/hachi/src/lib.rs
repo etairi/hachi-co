@@ -43,6 +43,10 @@
 //!   that appendix): randomized commitments with a masking row per chunk, a first claim mixed
 //!   with the masks by a challenge, and a first iteration masked by discrete Gaussians with
 //!   rejection sampling (`pcs`, "Hiding").
+//! - **A tail**, optional ([`HachiPcs::with_tail`], [`tail`]): an option that is not in the paper
+//!   or the draft. A scheme behind the [`Tail`] trait commits to the last table and proves its
+//!   claim in place of the table sent in the clear, one opening at a time or several claims in
+//!   one proof (`pcs`, "Tail").
 //!
 //! **Not implemented:**
 //! - **Secure parameters.** [`HachiChoices::toy`] and [`HachiChoices::toy_hiding`] are test
@@ -57,6 +61,7 @@
 //! - [`iteration`]: one iteration and the reduction to the next claim.
 //! - [`partials`]: the sumcheck that binds the partial evaluations of a multilinear opening.
 //! - [`pcs`]: the scheme and its encodings.
+//! - [`tail`]: the optional tail of the openings.
 //! - [`mle`]: multilinear helpers.
 //! - [`fs`]: the transcript.
 #![forbid(unsafe_code)]
@@ -73,7 +78,9 @@ pub mod pcs;
 pub mod relation;
 pub mod sumcheck;
 pub mod table;
+pub mod tail;
 
 pub use error::{Error, Result, VerifyError};
 pub use params::{HachiChoices, Hiding, Layout, Schedule};
 pub use pcs::{Commitment, FinalWitness, HachiPcs, Proof, State, VERSION};
+pub use tail::{Tail, TailMode};

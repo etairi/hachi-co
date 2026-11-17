@@ -19,5 +19,10 @@ rand.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
 
+[features]
+# The stub tail (`tail::StubTail`), for the tests of other crates: a SHAKE digest as the
+# commitment and the tables as the proof, neither succinct nor hiding.
+stub-tail = []
+
 [dev-dependencies]
 sha2.workspace = true

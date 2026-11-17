@@ -32,6 +32,20 @@
 //! [`HachiBase::new`] with `hiding: None` gives the published scheme. The provers draw the seeds of
 //! the randomness from their [`PartyRandomness`](hachi_co_core::PartyRandomness) (`base_pcs`).
 //!
+//! **Tail**, optional ([`HachiBase::with_tail`], `hachi::tail`): an option that is not in the
+//! draft, approved on 2026-11-17. Hachi runs with the tail in batched mode, so each of a prover's
+//! three openings ends with the tail's claim on its last table instead of the table in the clear,
+//! and the party-level step ([`BasePcs::finish_openings`]) proves the three claims, in the order
+//! $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$, with one tail proof. That proof is
+//! carried in the final step of the share polynomial's opening, and the blinders' openings carry
+//! none. Its context is `hachi::tail::batch_context` of the three openings' contexts, each the
+//! seed that the opening's transcript gives after its last iteration, so that the tail proof is
+//! bound to the three transcripts, and through them to the sumcheck's. The verifier
+//! ([`BasePcs::verify_openings`]) checks the three openings up to their claims and then the one
+//! tail proof, and rejects all three if any of them fails. With a tail every opening runs the
+//! fewest iterations whose last table fits the tail (`hachi::pcs`, "Tail"). Merged commitments do
+//! not take a tail, and the digest of an instance with a tail differs from the one without.
+//!
 //! **Encodings.** Commitments and proofs travel as the words of
 //! [`HachiPcs::commitment_to_words`] and [`HachiPcs::proof_to_words`]: packed, with
 //! $\lceil \log\_2 q \rceil$ bits per residue and $\lceil \log\_2 b \rceil$ bits per digit of a
@@ -42,14 +56,18 @@
 
 use crate::error::Error;
 use hachi::pcs::ExtSource;
-use hachi::{Commitment, HachiChoices, HachiPcs, Hiding, Proof, State};
-use hachi_co_core::base_pcs::{LiftedCoeffs, PartedCoeffs};
+use hachi::tail::{Deferred, DeferredClaim, batch_context};
+use hachi::{Commitment, HachiChoices, HachiPcs, Hiding, Proof, Schedule, State, Tail, TailMode};
+use hachi_co_core::base_pcs::{
+    LiftedCoeffs, OpeningKind, OpeningWords, PartedCoeffs, check_opening_words,
+};
 use hachi_co_core::{BasePcs, Context, Layout};
 use hachi_co_math::Ext;
 use hachi_co_params::{BasePcsWords, PadRule};
 use hachi_co_sampling::ShakePrg;
 use hachi_co_transcript::Transcript;
 use rand::Rng;
+use std::sync::Arc;
 
 /// The PRG domain of the seed of Hachi's public matrices ([`base_pcs_seed`]), next to the
 /// domains of $\mathbf A$, $\mathbf B$, $\mathbf D$ in [`Context::setup`].
@@ -85,7 +103,7 @@ impl<const K: usize> HachiBase<K> {
     /// that $2K$ does not divide, or $q \not\equiv 5 \pmod 8$).
     pub fn new(q: u64, choices: HachiChoices) -> Result<Self, Error> {
         let pcs = HachiPcs::new(q, choices)?;
-        let digest = digest(q, K, &pcs.ctx().choices, false);
+        let digest = digest(q, K, &pcs.ctx().choices, false, None);
         Ok(Self {
             pcs,
             digest,
@@ -98,7 +116,8 @@ impl<const K: usize> HachiBase<K> {
     /// commitments"). Not the draft's protocol: an option to compare against it.
     ///
     /// # Errors
-    /// [`Error::Hachi`] without masks: Hachi merges only with [`HachiChoices::hiding`].
+    /// [`Error::Hachi`] without masks: Hachi merges only with [`HachiChoices::hiding`]. Also with
+    /// a tail ([`HachiBase::with_tail`]), which merged commitments do not take.
     pub fn merged(self) -> Result<Self, Error> {
         let c = &self.pcs.ctx().choices;
         if c.hiding.is_none() {
@@ -106,12 +125,80 @@ impl<const K: usize> HachiBase<K> {
                 hachi::Error::Parameter("merged commitments need hiding choices".into()).into(),
             );
         }
-        let digest = digest(self.pcs.ctx().q, K, c, true);
+        if self.pcs.tail().is_some() {
+            return Err(
+                hachi::Error::Parameter("merged commitments do not take a tail".into()).into(),
+            );
+        }
+        let digest = digest(self.pcs.ctx().q, K, c, true, None);
         Ok(Self {
             digest,
             merged: true,
             ..self
         })
+    }
+
+    /// This base PCS with the tail `tail` (module documentation, "Tail"): Hachi in batched mode,
+    /// and one tail proof per prover for the claims of its three openings. Not the draft's
+    /// protocol: an option, approved on 2026-11-17.
+    ///
+    /// # Errors
+    /// [`Error::Hachi`] for merged commitments, which do not take a tail, or a tail that Hachi
+    /// refuses ([`HachiPcs::with_tail`]).
+    pub fn with_tail(self, tail: Arc<dyn Tail<K>>) -> Result<Self, Error> {
+        if self.merged {
+            return Err(
+                hachi::Error::Parameter("merged commitments do not take a tail".into()).into(),
+            );
+        }
+        let named = (tail.max_vars(), tail.params_digest());
+        let pcs = self.pcs.with_tail(tail, TailMode::Batched)?;
+        let digest = digest(pcs.ctx().q, K, &pcs.ctx().choices, false, Some(named));
+        Ok(Self {
+            pcs,
+            digest,
+            merged: false,
+        })
+    }
+
+    /// The tail, if this base PCS has one ([`HachiBase::with_tail`]).
+    pub fn tail(&self) -> Option<&Arc<dyn Tail<K>>> {
+        self.pcs.tail().map(|(tail, _)| tail)
+    }
+
+    /// The schedules of a prover's three openings at the layout `layout`, in the order
+    /// $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$: the share polynomial's in
+    /// $\ell''$ variables and the blinders' of $1 + \ell'' d\_b$ coefficients. With a tail they
+    /// follow the tail's rule (`hachi::pcs`, "Tail").
+    ///
+    /// # Errors
+    /// As [`HachiBase::words`].
+    pub fn schedules(&self, layout: &Layout) -> Result<[Schedule; 3], Error> {
+        let pcs = &self.pcs;
+        let w = match layout.pad_rule {
+            PadRule::Field => pcs.multilinear_ext_schedule(layout.ell_pp)?,
+            PadRule::Residues => pcs.multilinear_schedule(layout.ell_pp)?,
+        };
+        Ok([
+            w,
+            pcs.vector_schedule(blinder_len(layout, layout.d0)?)?,
+            pcs.vector_schedule(blinder_len(layout, layout.d1)?)?,
+        ])
+    }
+
+    /// The sizes $L$ of the last tables of a prover's three openings at the layout `layout`, in
+    /// the order of [`HachiBase::schedules`]: with a tail, the sizes of the claims of its proof.
+    ///
+    /// # Errors
+    /// As [`HachiBase::schedules`], and [`Error::Hachi`] for an opening without iterations.
+    pub fn last_tables(&self, layout: &Layout) -> Result<[usize; 3], Error> {
+        let [w, g0, g1] = self.schedules(layout)?;
+        let last = |s: Schedule| -> Result<usize, Error> {
+            s.iterations.last().map(|it| it.table_vars).ok_or_else(|| {
+                hachi::Error::Parameter("an opening without iterations has no table".into()).into()
+            })
+        };
+        Ok([last(w)?, last(g0)?, last(g1)?])
     }
 
     /// The base PCS of $\mathsf{Setup}$ (`6_Collaborative_Hachi.tex`:294-297) for the context
@@ -190,7 +277,9 @@ impl<const K: usize> HachiBase<K> {
     /// commitments of [`HachiPcs::commitment_words`], the multilinear opening of
     /// $\langle \widetilde w \rangle\_p$ in $\ell''$ variables and the inner-product openings of
     /// the blinders' $1 + \ell'' d\_b$ coefficients ([`HachiPcs::multilinear_ext_proof_words`],
-    /// [`HachiPcs::vector_proof_words`]).
+    /// [`HachiPcs::vector_proof_words`]). With a tail (module documentation, "Tail") the openings
+    /// are those of batched mode, and the share polynomial's carries the party's tail proof,
+    /// [`Tail::proof_words`] at the sizes of [`HachiBase::last_tables`].
     ///
     /// # Errors
     /// [`Error::Hachi`] if Hachi cannot open polynomials of these sizes (fewer than $\log\_2 d$
@@ -205,18 +294,12 @@ impl<const K: usize> HachiBase<K> {
             .into());
         }
         let commitment = pcs.commitment_words() as u128;
-        let blinder_len = |degree: usize| -> Result<usize, Error> {
-            Ok(layout
-                .ell_pp
-                .checked_mul(degree)
-                .and_then(|n| n.checked_add(1))
-                .ok_or_else(|| {
-                    hachi::Error::Parameter("the blinder length overflows usize".into())
-                })?)
-        };
         if self.merged {
             // One commitment and one proof per prover, and empty items for the blinders.
-            let lens = [blinder_len(layout.d0)?, blinder_len(layout.d1)?];
+            let lens = [
+                blinder_len(layout, layout.d0)?,
+                blinder_len(layout, layout.d1)?,
+            ];
             return Ok(BasePcsWords {
                 commitment_w: commitment,
                 proof_w: pcs.merged_proof_words(layout.ell_pp, lens)? as u128,
@@ -224,7 +307,11 @@ impl<const K: usize> HachiBase<K> {
             });
         }
         let vector = |degree: usize| -> Result<u128, Error> {
-            Ok(pcs.vector_proof_words(blinder_len(degree)?)? as u128)
+            Ok(pcs.vector_proof_words(blinder_len(layout, degree)?)? as u128)
+        };
+        let carried = match self.tail() {
+            Some(tail) => tail.proof_words(&self.last_tables(layout)?) as u128,
+            None => 0,
         };
         Ok(BasePcsWords {
             commitment_w: commitment,
@@ -233,20 +320,83 @@ impl<const K: usize> HachiBase<K> {
             proof_w: match layout.pad_rule {
                 PadRule::Field => pcs.multilinear_ext_proof_words(layout.ell_pp)?,
                 PadRule::Residues => pcs.multilinear_proof_words(layout.ell_pp)?,
-            } as u128,
+            } as u128
+                + carried,
             proof_g0: vector(layout.d0)?,
             proof_g1: vector(layout.d1)?,
         })
     }
+
+    /// The claim that a batched opening leaves, from the words of its commitment and proof: the
+    /// deferred verifier of its kind (`hachi::pcs`, "Tail").
+    ///
+    /// # Errors
+    /// The reason of the rejection, as [`check_opening_words`] gives it.
+    fn deferred_claim(
+        &self,
+        opening: &OpeningWords<'_, K>,
+    ) -> core::result::Result<DeferredClaim<K>, String> {
+        let com = self
+            .pcs
+            .commitment_from_words(opening.commitment)
+            .map_err(|e| format!("the commitment does not decode: Hachi: {e}"))?;
+        let proof = self
+            .pcs
+            .proof_from_words(opening.proof)
+            .map_err(|e| format!("the proof does not decode: Hachi: {e}"))?;
+        let (value, context, pcs) = (opening.value, opening.context, &self.pcs);
+        match opening.kind {
+            OpeningKind::Multilinear(point) => {
+                pcs.verify_multilinear_deferred(&com, point.len(), point, value, &proof, context)
+            }
+            OpeningKind::MultilinearExt(point) => pcs.verify_multilinear_ext_deferred(
+                &com,
+                point.len(),
+                point,
+                value,
+                &proof,
+                context,
+            ),
+            OpeningKind::InnerProduct(weights) => pcs.verify_inner_product_deferred(
+                &com,
+                weights.len(),
+                weights,
+                value,
+                &proof,
+                context,
+            ),
+        }
+        .map_err(|e| format!("Hachi: {e}"))
+    }
+}
+
+/// The number of coefficients of a blinder of degree `degree` at the layout `layout`: $1 + \ell''
+/// d\_b$.
+///
+/// # Errors
+/// [`Error::Hachi`] on overflow.
+fn blinder_len(layout: &Layout, degree: usize) -> Result<usize, Error> {
+    Ok(layout
+        .ell_pp
+        .checked_mul(degree)
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(|| hachi::Error::Parameter("the blinder length overflows usize".into()))?)
 }
 
 /// The parameter digest: the challenge seed of a transcript with the domain
 /// [`HACHI_BASE_DIGEST_DOMAIN`] that absorbs $q$, $K$, every choice, Hachi's version
 /// ([`hachi::VERSION`]) and the seed of the matrices, then, only with masks
-/// ([`HachiChoices::hiding`]), the masks' four words ([`Hiding::words`]), and only for merged
-/// commitments ([`HachiBase::merged`]) the word 1 under `merged`: the digests of the other
-/// choices are unchanged.
-fn digest(q: u64, k: usize, c: &HachiChoices, merged: bool) -> [u8; 32] {
+/// ([`HachiChoices::hiding`]), the masks' four words ([`Hiding::words`]), only for merged
+/// commitments ([`HachiBase::merged`]) the word 1 under `merged`, and only with a tail
+/// ([`HachiBase::with_tail`]) the word 1 under `tail`, its largest table and its digest
+/// (`tail`): the digests of the other choices are unchanged.
+fn digest(
+    q: u64,
+    k: usize,
+    c: &HachiChoices,
+    merged: bool,
+    tail: Option<(usize, [u8; 32])>,
+) -> [u8; 32] {
     let mut t = Transcript::new(HACHI_BASE_DIGEST_DOMAIN);
     let words: [(&[u8], u64); 11] = [
         (b"q", q),
@@ -277,6 +427,11 @@ fn digest(q: u64, k: usize, c: &HachiChoices, merged: bool) -> [u8; 32] {
     }
     if merged {
         t.append_u64(b"merged", 1);
+    }
+    if let Some((max_vars, params)) = tail {
+        t.append_u64(b"tail", 1);
+        t.append_u64(b"tail/max_vars", max_vars as u64);
+        t.append_message(b"tail/params", &params);
     }
     t.challenge_seed(b"digest")
 }
@@ -631,6 +786,89 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
                 context,
             )
             .map_err(|e| format!("Hachi: {e}"))
+    }
+
+    /// Without a tail, each proof encoded on its own. With a tail (module documentation,
+    /// "Tail"), the three claims that the batched openings left, in the order
+    /// $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$, proved with one tail proof under
+    /// `hachi::tail::batch_context` of their contexts, which the share polynomial's opening then
+    /// carries.
+    fn finish_openings(&self, proofs: [Proof<K>; 3]) -> hachi_co_core::Result<[Vec<u64>; 3]> {
+        let Some(tail) = self.tail() else {
+            return Ok(proofs.map(|p| self.pcs.proof_to_words(&p)));
+        };
+        let mut proofs = proofs;
+        let mut claims: Vec<Deferred<K>> = Vec::with_capacity(3);
+        for p in &mut proofs {
+            let claim = p.tail.as_mut().and_then(|ending| ending.deferred.take());
+            claims.push(claim.ok_or_else(|| {
+                hachi_co_core::Error::BasePcs(
+                    "Hachi: an opening with a tail leaves its claim to the party".into(),
+                )
+            })?);
+        }
+        let contexts: Vec<[u8; 32]> = claims.iter().map(|c| c.context).collect();
+        let vars: Vec<usize> = claims.iter().map(|c| c.vars).collect();
+        let prover: Vec<_> = claims.iter().map(Deferred::prover_claim).collect();
+        let words = tail
+            .prove(&prover, &batch_context(&contexts))
+            .map_err(base_error)?;
+        if words.len() != tail.proof_words(&vars) {
+            return Err(hachi_co_core::Error::BasePcs(format!(
+                "Hachi: the tail's proof has {} words, {} expected",
+                words.len(),
+                tail.proof_words(&vars)
+            )));
+        }
+        drop(prover);
+        drop(claims);
+        if let Some(ending) = proofs[0].tail.as_mut() {
+            ending.proof = words;
+        }
+        Ok(proofs.map(|p| self.pcs.proof_to_words(&p)))
+    }
+
+    /// Without a tail, each opening checked on its own. With a tail (module documentation,
+    /// "Tail"), each opening up to its claim (the deferred verifiers of `hachi::pcs`), then the
+    /// one tail proof that the share polynomial's opening carries on the three claims, the
+    /// blinders' openings carrying none. All three are rejected if one of them is, as the tail
+    /// proof covers their claims together.
+    fn verify_openings(
+        &self,
+        openings: [OpeningWords<'_, K>; 3],
+    ) -> [core::result::Result<(), String>; 3] {
+        let Some(tail) = self.tail() else {
+            return openings.map(|opening| check_opening_words(self, &opening));
+        };
+        let claims = openings.map(|opening| self.deferred_claim(&opening));
+        let names = ["the share polynomial", "g0", "g1"];
+        if let Some((i, Err(e))) = claims.iter().enumerate().find(|(_, c)| c.is_err()) {
+            let reason = format!(
+                "Hachi: the party's tail proof is not checked, as the opening of {} is rejected: {e}",
+                names[i]
+            );
+            return core::array::from_fn(|j| match &claims[j] {
+                Err(own) => Err(own.clone()),
+                Ok(_) => Err(reason.clone()),
+            });
+        }
+        let claims: Vec<DeferredClaim<K>> = claims.into_iter().filter_map(Result::ok).collect();
+        let verdict = (|| {
+            if !claims[1].carried.is_empty() || !claims[2].carried.is_empty() {
+                return Err(
+                    "Hachi: only the share polynomial's opening carries a tail proof".into(),
+                );
+            }
+            let vars: Vec<usize> = claims.iter().map(|c| c.vars).collect();
+            if claims[0].carried.len() != tail.proof_words(&vars) {
+                return Err("Hachi: the party's tail proof does not have its length".into());
+            }
+            let contexts: Vec<[u8; 32]> = claims.iter().map(|c| c.context).collect();
+            let checked: Vec<_> = claims.iter().map(DeferredClaim::claim).collect();
+            tail.verify(&checked, &claims[0].carried, &batch_context(&contexts))
+                .map_err(|e| format!("Hachi: the party's tail proof: {e}"))
+        })();
+        [verdict.clone(), verdict.clone(), verdict]
     }
 
     /// A transcript hash of $q$, $K$ and every choice of Hachi, the seed of its matrices

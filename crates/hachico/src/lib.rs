@@ -152,6 +152,8 @@
 
 mod base;
 mod error;
+#[cfg(feature = "greyhound")]
+pub mod greyhound;
 pub mod harness;
 mod proof;
 mod prover;

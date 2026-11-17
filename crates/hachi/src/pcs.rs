@@ -121,18 +121,41 @@
 //! outside the digit set, non-zero padding, and any length other than the one the header and the
 //! parameters imply. The verifier checks the counts of a header: $B$ against $\ell - \kappa$, the
 //! others against the schedule.
+//!
+//! **Tail**, optional ([`HachiPcs::with_tail`], [`crate::tail`]): an option that is not in the
+//! paper or the draft. The last iteration commits its table with the tail and absorbs that
+//! commitment in place of $\mathbf u'$ ([`crate::iteration`]), and the final step sends no table:
+//! in single mode the tail's proof of the claim $\tilde w(\mathbf a) = y'$ that step 3 checks, in
+//! batched mode nothing, the claim going to the caller ([`crate::tail::TailFinal`]). The tail's
+//! proof is made under a context that the transcript gives after the last iteration (label
+//! `hachi/tail/context`). With a tail:
+//! - **the schedule** has the fewest iterations, at least one, whose last table has at most
+//!   $2^{\mathtt{max\_vars}}$ digits ([`Tail::max_vars`]), or [`HachiChoices::fixed_iterations`]
+//!   if that table fits. Without a tail the schedule is the smallest proof's, as above.
+//! - **the statement** absorbs, after its other words, the word `TAIL`, the mode
+//!   ([`TailMode::word`]), $\mathtt{max\_vars}$ and the four words of the tail's digest
+//!   ([`Tail::params_digest`]).
+//! - **the encodings** keep the version, and the header of a proof ends with the mode's word
+//!   (after $M$ with hiding), which the decoder checks. $N$ counts the tail proof words of the
+//!   final step. The last iteration sends the tail's commitment ([`Tail::commitment_words`] at
+//!   its $L$) in place of $\mathbf u'$, and the final step sends the $N$ tail proof words in place
+//!   of the table, every tail word as a field of 64 bits. A commitment is unchanged.
+//!
+//! Without a tail, proofs, encodings, statements and schedules are those of the scheme above, bit
+//! for bit.
 
 use crate::commit::{Committed, Ctx, commit, commit_source, commit_source_parts, commit_table};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::iteration::{
-    self, Claim, IterationProof, MessageView, OwnedParts, OwnedSource, Reduced, Witness,
+    self, After, Claim, IterationProof, MessageView, OwnedParts, OwnedSource, Reduced, Witness,
     check_exts, check_polys, commitment_randomness, evaluate_claim, table_eval,
 };
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
 use crate::partials::{self, RoundValues};
 use crate::sumcheck::RoundMessage;
 use crate::table::{DigitTable, ResidueTable};
+use crate::tail::{Deferred, DeferredClaim, Tail, TailClaim, TailFinal, TailMode, check_words};
 use crate::{Error, Result};
 use hachi_co_math::decompose::digit_range;
 use hachi_co_math::{Ext, Poly};
@@ -348,6 +371,9 @@ pub struct Proof<const K: usize> {
     pub blinder_mask_evals: Vec<Ext<K>>,
     /// With a merged opening, $Y^*$ of the two vectors, in order, and empty otherwise.
     pub blinder_ring_values: Vec<Poly>,
+    /// With a tail ([`HachiPcs::with_tail`]): what the final step sends in place of the table,
+    /// [`Proof::final_witness`] being an empty table of digits. `None` without a tail.
+    pub tail: Option<TailFinal<K>>,
 }
 
 /// What the final step of an opening sends (module documentation, "Encodings").
@@ -410,11 +436,23 @@ impl Reduction {
     }
 }
 
-/// Hachi with fixed parameters.
+/// Hachi with fixed parameters, and optionally a tail ([`HachiPcs::with_tail`]).
 #[derive(Clone, Debug)]
 pub struct HachiPcs<const K: usize> {
     ctx: Ctx<K>,
+    tail: Option<TailSlot<K>>,
 }
+
+/// A tail and its mode ([`HachiPcs::with_tail`]).
+#[derive(Clone, Debug)]
+struct TailSlot<const K: usize> {
+    tail: Arc<dyn Tail<K>>,
+    mode: TailMode,
+}
+
+/// The first word of the tail's words in a statement (module documentation, "Tail"): `TAIL` in
+/// ASCII.
+const STATEMENT_TAIL: u64 = 0x4c49_4154;
 
 /// Transcript labels.
 const LABEL_STATEMENT: &[u8] = b"hachi/statement";
@@ -429,6 +467,8 @@ const LABEL_MERGED_SHAPE: &[u8] = b"hachi/merged/lengths";
 const LABEL_MERGED_WEIGHTS: &[u8] = b"hachi/merged/weights";
 const LABEL_MERGED_VALUES: &[u8] = b"hachi/merged/values";
 const LABEL_MERGED_COIN: &[u8] = b"hachi/merged/lambda";
+/// The label of the seed that is the context of the tail's proof (module documentation, "Tail").
+const LABEL_TAIL_CONTEXT: &[u8] = b"hachi/tail/context";
 
 /// The PRG domain of a commitment's randomness (index 0).
 pub const DOMAIN_COMMIT_R: &[u8] = b"hachi/commit/r";
@@ -443,7 +483,37 @@ impl<const K: usize> HachiPcs<K> {
     pub fn new(q: u64, choices: HachiChoices) -> Result<Self> {
         Ok(Self {
             ctx: Ctx::new(q, choices)?,
+            tail: None,
         })
+    }
+
+    /// This scheme with the tail `tail` in the mode `mode` (module documentation, "Tail"), in
+    /// place of any tail it had: every opening's last table is committed and proved by the tail
+    /// instead of sent in the clear.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] if the tail takes tables of $2^{64}$ digits or more, whose sizes no
+    /// word holds.
+    pub fn with_tail(self, tail: Arc<dyn Tail<K>>, mode: TailMode) -> Result<Self> {
+        if tail.max_vars() >= u64::BITS as usize {
+            return Err(Error::Parameter(
+                "a tail takes tables of fewer than 2^64 digits".into(),
+            ));
+        }
+        Ok(Self {
+            tail: Some(TailSlot { tail, mode }),
+            ..self
+        })
+    }
+
+    /// This scheme without a tail.
+    pub fn without_tail(self) -> Self {
+        Self { tail: None, ..self }
+    }
+
+    /// The tail and its mode, if the scheme has one ([`HachiPcs::with_tail`]).
+    pub fn tail(&self) -> Option<(&Arc<dyn Tail<K>>, TailMode)> {
+        self.tail.as_ref().map(|slot| (&slot.tail, slot.mode))
     }
 
     /// The arithmetic context.
@@ -579,6 +649,9 @@ impl<const K: usize> HachiPcs<K> {
     /// words, the one with fewer iterations on a tie.
     fn schedule(&self, first: Layout, reduction: Reduction) -> Result<Schedule> {
         let (c, q) = (&self.ctx.choices, self.ctx.q);
+        if let Some(slot) = &self.tail {
+            return self.tail_schedule(first, slot.tail.max_vars());
+        }
         if let Some(n) = c.fixed_iterations {
             return Schedule::fixed(c, q, K, first, n);
         }
@@ -591,6 +664,43 @@ impl<const K: usize> HachiPcs<K> {
         }
         best.map(|(_, s)| s)
             .ok_or_else(|| Error::Parameter("no schedule to choose from".into()))
+    }
+
+    /// The schedule with a tail that takes tables of at most $2^{\mathtt{max\_vars}}$ digits
+    /// (module documentation, "Tail"): [`HachiChoices::fixed_iterations`] iterations if set, and
+    /// otherwise the candidate of [`Schedule::candidates`] with the fewest iterations, at least
+    /// one, whose last table fits.
+    ///
+    /// # Errors
+    /// [`Error::Parameter`] if no candidate fits, or the fixed number of iterations is 0, cannot
+    /// be parametrised or ends with a table that does not fit.
+    fn tail_schedule(&self, first: Layout, max_vars: usize) -> Result<Schedule> {
+        let (c, q) = (&self.ctx.choices, self.ctx.q);
+        let fits = |s: &Schedule| {
+            s.iterations
+                .last()
+                .is_some_and(|it| it.table_vars <= max_vars)
+        };
+        if let Some(n) = c.fixed_iterations {
+            let schedule = Schedule::fixed(c, q, K, first, n)?;
+            if !fits(&schedule) {
+                return Err(Error::Parameter(format!(
+                    "{n} iterations do not end with a table of at most 2^{max_vars} digits, as the \
+                     tail needs"
+                )));
+            }
+            return Ok(schedule);
+        }
+        Schedule::candidates(c, q, K, first)
+            .into_iter()
+            .find(fits)
+            .ok_or_else(|| {
+                Error::Parameter(format!(
+                    "no schedule of at most {} iterations ends with a table of at most \
+                     2^{max_vars} digits, as the tail needs",
+                    c.max_iterations
+                ))
+            })
     }
 
     /// The bits of a residue in the encodings: $\lceil \log_2 q \rceil$.
@@ -653,10 +763,13 @@ impl<const K: usize> HachiPcs<K> {
     /// ($n_B d$), the rounds ($L$ rounds of $b + 2$ and 3 field elements), $y'$ ($K$) and, except
     /// after the last iteration, $p'$ ($d$); the final witness, $2^{r+m} d$ residues without
     /// iterations, else the $2^{r+m} d/K = 2^L$ digits of the last table, of $\lceil \log_2 b
-    /// \rceil$ bits each.
+    /// \rceil$ bits each. With a tail (module documentation, "Tail") the header has one more word,
+    /// the last iteration sends the tail's commitment in place of $\mathbf u'$, and the final
+    /// step the tail's proof in single mode and nothing in batched mode, 64 bits per tail word.
     ///
     /// # Errors
-    /// [`Error::Parameter`] if the count of the reduction's residues overflows.
+    /// [`Error::Parameter`] if the count of the reduction's residues overflows, or for a schedule
+    /// without iterations with a tail.
     fn proof_words(&self, schedule: &Schedule, reduction: Reduction) -> Result<usize> {
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
@@ -664,24 +777,49 @@ impl<const K: usize> HachiPcs<K> {
             .residues(K, d)
             .ok_or_else(|| Error::Parameter("the size of the proof overflows".into()))?;
         let count = schedule.iterations.len();
+        let tail = self.tail.as_ref();
         for (index, it) in schedule.iterations.iter().enumerate() {
-            // Per iteration: v, u', the L sumcheck rounds and y', then p' except after the last.
-            residues += (c.n_d + c.n_b) * d + it.table_vars * round + K;
-            if index + 1 < count {
+            // Per iteration: v, u' (none after the last one with a tail), the L sumcheck rounds
+            // and y', then p' except after the last.
+            let last = index + 1 == count;
+            let u_next = if last && tail.is_some() { 0 } else { c.n_b };
+            residues += (c.n_d + u_next) * d + it.table_vars * round + K;
+            if !last {
                 residues += d;
             }
         }
         let last = schedule.final_layout;
-        let (entries, entry_bits) = if count == 0 {
-            (last.chunks() * last.chunk_len() * d, self.residue_bits())
-        } else {
-            (
+        let (entries, entry_bits, tail_words) = match (tail, schedule.iterations.last()) {
+            (Some(slot), Some(it)) => {
+                let final_words = match slot.mode {
+                    TailMode::Single => slot.tail.proof_words(&[it.table_vars]),
+                    TailMode::Batched => 0,
+                };
+                (
+                    0,
+                    0,
+                    slot.tail.commitment_words(it.table_vars) + final_words,
+                )
+            }
+            (Some(_), None) => {
+                return Err(Error::Parameter(
+                    "an opening with a tail has at least one iteration".into(),
+                ));
+            }
+            (None, _) if count == 0 => {
+                (last.chunks() * last.chunk_len() * d, self.residue_bits(), 0)
+            }
+            (None, _) => (
                 last.chunks() * last.chunk_len() * self.ctx.d_over_k(),
                 self.digit_bits(),
-            )
+                0,
+            ),
         };
-        let bits = residues * self.residue_bits() + entries * entry_bits;
-        let header = 5 + schedule.iterations.len() + usize::from(self.ctx.hiding().is_some());
+        let bits = residues * self.residue_bits() + entries * entry_bits + 64 * tail_words;
+        let header = 5
+            + schedule.iterations.len()
+            + usize::from(self.ctx.hiding().is_some())
+            + usize::from(tail.is_some());
         Ok(header + bits.div_ceil(64))
     }
 
@@ -1219,6 +1357,22 @@ impl<const K: usize> HachiPcs<K> {
         if let Some(h) = c.hiding {
             words.extend(h.words());
         }
+        // Only with a tail, after the others: a statement without a tail is unchanged.
+        if let Some(slot) = &self.tail {
+            words.extend([
+                STATEMENT_TAIL,
+                slot.mode.word(),
+                slot.tail.max_vars() as u64,
+            ]);
+            words.extend(
+                slot.tail
+                    .params_digest()
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|b| u64::from_le_bytes(*b)),
+            );
+        }
         fs.words(LABEL_STATEMENT, &words);
         fs.polys(LABEL_COMMITMENT, commitment);
         fs.exts(LABEL_POINT, point);
@@ -1477,10 +1631,9 @@ impl<const K: usize> HachiPcs<K> {
 
     /// Runs the iterations and the final step for the prover; `reduction` is what the proof
     /// carries ahead of them (it enters the choice of the schedule). Returns the iterations and
-    /// the final witness.
-    ///
-    /// The witness of each later level is owned here and handed to its iteration, which frees its
-    /// message after step 2; so is the first one when `committed` is owned ([`Witness`]).
+    /// the final witness, without the tail's part ([`HachiPcs::prove_rest_with`]): for the tests
+    /// of a scheme without a tail.
+    #[cfg(test)]
     fn prove_rest<'w>(
         &self,
         layout: Layout,
@@ -1490,12 +1643,23 @@ impl<const K: usize> HachiPcs<K> {
         fs: &mut Fs,
         seed: &[u8; 32],
     ) -> Result<(Vec<IterationProof<K>>, FinalWitness)> {
-        self.prove_rest_with(layout, reduction, committed, claim, None, fs, seed)
+        let (iterations, final_witness, _) =
+            self.prove_rest_with(layout, reduction, committed, claim, None, fs, seed)?;
+        Ok((iterations, final_witness))
     }
 
-    /// [`HachiPcs::prove_rest`] with the first iteration's $w_i$ given if `first_w` is
-    /// ([`iteration::prove_with_w`]).
+    /// Runs the iterations and the final step for the prover, with the first iteration's $w_i$
+    /// given if `first_w` is ([`iteration::prove_with_w`]). `reduction` is what the proof carries
+    /// ahead of them (it enters the choice of the schedule). Returns the iterations, the final
+    /// witness and, with a tail, what the final step sends in place of the table (module
+    /// documentation, "Tail"): the final witness is then an empty table, and the tail's part holds
+    /// in single mode the tail's proof of the last claim, in batched mode that claim for the
+    /// caller.
+    ///
+    /// The witness of each later level is owned here and handed to its iteration, which frees its
+    /// message after step 2, and so is the first one when `committed` is owned ([`Witness`]).
     #[allow(clippy::too_many_arguments)] // the inputs of prove_rest and the given w
+    #[allow(clippy::type_complexity)] // the three parts of the end of a proof
     fn prove_rest_with<'w>(
         &self,
         layout: Layout,
@@ -1505,20 +1669,22 @@ impl<const K: usize> HachiPcs<K> {
         mut first_w: Option<Vec<Poly>>,
         fs: &mut Fs,
         seed: &[u8; 32],
-    ) -> Result<(Vec<IterationProof<K>>, FinalWitness)> {
+    ) -> Result<(Vec<IterationProof<K>>, FinalWitness, Option<TailFinal<K>>)> {
         let schedule = self.schedule(layout, reduction)?;
         let first: Witness<'w> = committed.into();
         // The witness of each later iteration is sourced from the previous one's table
         // (`iteration::Next`), which it reads in its steps 1 and 2 and then drops, instead of its
-        // message packed whole. The last iteration's table is the final witness (step 3).
+        // message packed whole. The last iteration's table is the final witness (step 3), or the
+        // tail's (module documentation, "Tail").
         let mut current: Witness<'_> = first;
         let mut claim = claim;
         let count = schedule.iterations.len();
         let mut proofs = Vec::with_capacity(count);
         let protocol = |what: &str| Error::Protocol(what.into());
+        let tail = self.tail.as_ref();
         for (index, params) in schedule.iterations.iter().enumerate() {
             let last = index + 1 == count;
-            let (proof, next, next_claim) = iteration::prove_next(
+            let (proof, after, next_claim) = iteration::prove_next_tail(
                 &self.ctx,
                 index,
                 params,
@@ -1528,22 +1694,78 @@ impl<const K: usize> HachiPcs<K> {
                 fs,
                 seed,
                 last,
+                tail.map(|slot| slot.tail.as_ref()),
             )?;
+            let (commitment, value) = (proof.tail_commitment.clone(), proof.final_eval);
             proofs.push(proof);
+            let next = match after {
+                After::Next(next) => next,
+                After::Tail {
+                    table,
+                    opening,
+                    point,
+                } => {
+                    let (slot, commitment) = tail
+                        .zip(commitment)
+                        .ok_or_else(|| protocol("only a tail commits the last table"))?;
+                    let claim = Deferred {
+                        vars: params.table_vars,
+                        commitment,
+                        point,
+                        value,
+                        digits: table.into_values(),
+                        opening: Arc::from(opening),
+                        context: fs.seed(LABEL_TAIL_CONTEXT),
+                    };
+                    let ending = self.prove_tail(slot, claim)?;
+                    let empty = DigitTable::zeros(self.ctx.ring.zq(), 0);
+                    return Ok((proofs, FinalWitness::Digits(empty), Some(ending)));
+                }
+            };
             if last {
                 let table = next
                     .into_table()
                     .ok_or_else(|| protocol("the last iteration keeps its table"))?;
-                return Ok((proofs, FinalWitness::Digits(table)));
+                return Ok((proofs, FinalWitness::Digits(table), None));
             }
             current = next.into_witness(&self.ctx)?;
             claim =
                 next_claim.ok_or_else(|| protocol("an iteration before the last has a claim"))?;
         }
+        if tail.is_some() {
+            return Err(protocol(
+                "an opening with a tail has at least one iteration",
+            ));
+        }
         Ok((
             proofs,
             FinalWitness::Message(current.committed().message.concat()),
+            None,
         ))
+    }
+
+    /// The final step with a tail (module documentation, "Tail") on the last iteration's claim
+    /// `claim`, whose context the transcript gave after that iteration: in single mode the
+    /// tail's proof of it under that context, in batched mode the claim itself for the caller.
+    ///
+    /// # Errors
+    /// Those of [`Tail::prove`], and [`Error::Protocol`] for a proof of another length than
+    /// [`Tail::proof_words`].
+    fn prove_tail(&self, slot: &TailSlot<K>, claim: Deferred<K>) -> Result<TailFinal<K>> {
+        match slot.mode {
+            TailMode::Single => {
+                let proof = slot.tail.prove(&[claim.prover_claim()], &claim.context)?;
+                check_words("proof", proof.len(), slot.tail.proof_words(&[claim.vars]))?;
+                Ok(TailFinal {
+                    proof,
+                    deferred: None,
+                })
+            }
+            TailMode::Batched => Ok(TailFinal {
+                proof: Vec::new(),
+                deferred: Some(claim),
+            }),
+        }
     }
 
     /// Proves $f(\mathbf x)$ for a committed multilinear polynomial; returns the value and the
@@ -1599,11 +1821,12 @@ impl<const K: usize> HachiPcs<K> {
         let claim = self.ring_claim(state, &r, &at_r)?;
         let ring_value = claim.target.clone();
         fs.polys(LABEL_RING_VALUE, core::slice::from_ref(&ring_value));
-        let (iterations, final_witness) = self.prove_rest(
+        let (iterations, final_witness, tail) = self.prove_rest_with(
             state.committed.layout,
             self.multilinear_reduction(*vars),
             &state.committed,
             claim,
+            None,
             &mut fs,
             seed,
         )?;
@@ -1619,6 +1842,7 @@ impl<const K: usize> HachiPcs<K> {
                 final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
+                tail,
             },
         ))
     }
@@ -1745,7 +1969,7 @@ impl<const K: usize> HachiPcs<K> {
                 ));
             }
         };
-        let (iterations, final_witness) = self.prove_rest_with(
+        let (iterations, final_witness, tail) = self.prove_rest_with(
             layout,
             self.masks_or_direct(),
             committed,
@@ -1766,6 +1990,7 @@ impl<const K: usize> HachiPcs<K> {
                 final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
+                tail,
             },
         ))
     }
@@ -1834,11 +2059,12 @@ impl<const K: usize> HachiPcs<K> {
             (None, Claim { b, a, target: y })
         };
         let ring_value = claim.target.clone();
-        let (iterations, final_witness) = self.prove_rest(
+        let (iterations, final_witness, tail) = self.prove_rest_with(
             layout,
             self.masks_or_direct(),
             &state.committed,
             claim,
+            None,
             &mut fs,
             seed,
         )?;
@@ -1854,12 +2080,14 @@ impl<const K: usize> HachiPcs<K> {
                 final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
+                tail,
             },
         ))
     }
 
     /// Runs the iterations' verifiers and the final step; `reduction` as for
-    /// [`HachiPcs::prove_rest`].
+    /// [`HachiPcs::prove_rest_with`]. With a tail in batched mode it returns the last claim for
+    /// the caller (module documentation, "Tail"), and `None` otherwise.
     fn verify_rest(
         &self,
         layout: Layout,
@@ -1868,7 +2096,7 @@ impl<const K: usize> HachiPcs<K> {
         claim: Claim,
         proof: &Proof<K>,
         fs: &mut Fs,
-    ) -> core::result::Result<(), VerifyError> {
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
         let ctx = &self.ctx;
         let schedule = self.schedule(layout, reduction)?;
         if proof.iterations.len() != schedule.iterations.len() {
@@ -1882,17 +2110,29 @@ impl<const K: usize> HachiPcs<K> {
         let mut claim = claim;
         let mut evaluation = None;
         let count = schedule.iterations.len();
+        let tail = self.tail.as_ref();
         for (index, (params, it)) in schedule
             .iterations
             .iter()
             .zip(&proof.iterations)
             .enumerate()
         {
-            match iteration::verify(ctx, index, params, &u, &claim, it, index + 1 == count, fs)? {
+            let tail_words = tail.map(|slot| slot.tail.commitment_words(params.table_vars));
+            let last = index + 1 == count;
+            match iteration::verify_tail(ctx, index, params, &u, &claim, it, last, tail_words, fs)?
+            {
                 Reduced::Claim(next) => claim = next,
                 Reduced::Evaluation { point, value } => evaluation = Some((point, value)),
             }
             u.clone_from(&it.next_commitment);
+        }
+        if let Some(slot) = tail {
+            return self.verify_tail_end(slot, &schedule, proof, evaluation, fs);
+        }
+        if proof.tail.is_some() {
+            return Err(VerifyError::Malformed(
+                "only an opening with a tail ends with the tail's part".into(),
+            ));
         }
         let last = schedule.final_layout;
         let opens = |recomputed: &Committed| -> core::result::Result<(), VerifyError> {
@@ -1963,7 +2203,76 @@ impl<const K: usize> HachiPcs<K> {
                 ));
             }
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// The final step with a tail (module documentation, "Tail"), after the iterations of
+    /// `schedule` left `evaluation`: the proof sends an empty table and the tail's part, the
+    /// context comes from `fs`, and then in single mode the tail's proof must prove the last
+    /// claim, and in batched mode that claim goes to the caller with the words the final step
+    /// carries.
+    ///
+    /// # Errors
+    /// [`VerifyError::Malformed`] for a proof of another shape, [`VerifyError::Check`] if the
+    /// tail rejects its proof.
+    fn verify_tail_end(
+        &self,
+        slot: &TailSlot<K>,
+        schedule: &Schedule,
+        proof: &Proof<K>,
+        evaluation: Option<(Vec<Ext<K>>, Ext<K>)>,
+        fs: &mut Fs,
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
+        let malformed = |what: &str| VerifyError::Malformed(what.into());
+        let (Some(ending), FinalWitness::Digits(table)) = (&proof.tail, &proof.final_witness)
+        else {
+            return Err(malformed(
+                "an opening with a tail ends with the tail's part and no table",
+            ));
+        };
+        if !table.is_empty() {
+            return Err(malformed("an opening with a tail sends no table"));
+        }
+        let (Some((point, value)), Some(it), Some(last)) = (
+            evaluation,
+            schedule.iterations.last(),
+            proof.iterations.last(),
+        ) else {
+            return Err(malformed(
+                "an opening with a tail has at least one iteration",
+            ));
+        };
+        let commitment = last
+            .tail_commitment
+            .as_ref()
+            .ok_or_else(|| malformed("the last iteration sends the tail's commitment"))?;
+        let vars = it.table_vars;
+        let context = fs.seed(LABEL_TAIL_CONTEXT);
+        match slot.mode {
+            TailMode::Single => {
+                if ending.proof.len() != slot.tail.proof_words(&[vars]) {
+                    return Err(malformed("the tail's proof does not have its length"));
+                }
+                let claim = TailClaim {
+                    vars,
+                    commitment,
+                    point: &point,
+                    value,
+                };
+                slot.tail
+                    .verify(&[claim], &ending.proof, &context)
+                    .map_err(|e| VerifyError::Check(format!("the tail: {e}")))?;
+                Ok(None)
+            }
+            TailMode::Batched => Ok(Some(DeferredClaim {
+                vars,
+                commitment: commitment.clone(),
+                point,
+                value,
+                context,
+                carried: ending.proof.clone(),
+            })),
+        }
     }
 
     /// Checks the commitment's shape.
@@ -1975,7 +2284,8 @@ impl<const K: usize> HachiPcs<K> {
     /// variables committed in `commitment`.
     ///
     /// # Errors
-    /// [`VerifyError`] for a malformed or rejected proof.
+    /// [`VerifyError`] for a malformed or rejected proof, and [`VerifyError::Malformed`] in
+    /// batched mode, whose openings [`HachiPcs::verify_multilinear_deferred`] verifies.
     pub fn verify_multilinear(
         &self,
         commitment: &Commitment,
@@ -1985,6 +2295,36 @@ impl<const K: usize> HachiPcs<K> {
         proof: &Proof<K>,
         context: &[u8; 32],
     ) -> core::result::Result<(), VerifyError> {
+        complete(self.verify_multilinear_with(commitment, vars, point, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_multilinear`] in batched mode (module documentation, "Tail"): every
+    /// check but the tail's, whose claim it returns.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::verify_multilinear`], and [`VerifyError::Malformed`] outside batched mode.
+    pub fn verify_multilinear_deferred(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<DeferredClaim<K>, VerifyError> {
+        deferred(self.verify_multilinear_with(commitment, vars, point, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_multilinear`] up to the tail's claim, returned in batched mode.
+    fn verify_multilinear_with(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
         let ctx = &self.ctx;
         self.check_commitment(commitment)?;
         if point.len() != vars {
@@ -2074,7 +2414,8 @@ impl<const K: usize> HachiPcs<K> {
     /// `value` for the polynomial in `vars` variables committed in `commitment`.
     ///
     /// # Errors
-    /// [`VerifyError`] for a malformed or rejected proof.
+    /// [`VerifyError`] for a malformed or rejected proof, and [`VerifyError::Malformed`] in
+    /// batched mode, whose openings [`HachiPcs::verify_multilinear_ext_deferred`] verifies.
     pub fn verify_multilinear_ext(
         &self,
         commitment: &Commitment,
@@ -2084,6 +2425,37 @@ impl<const K: usize> HachiPcs<K> {
         proof: &Proof<K>,
         context: &[u8; 32],
     ) -> core::result::Result<(), VerifyError> {
+        complete(self.verify_multilinear_ext_with(commitment, vars, point, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_multilinear_ext`] in batched mode (module documentation, "Tail"):
+    /// every check but the tail's, whose claim it returns.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::verify_multilinear_ext`], and [`VerifyError::Malformed`] outside batched
+    /// mode.
+    pub fn verify_multilinear_ext_deferred(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<DeferredClaim<K>, VerifyError> {
+        deferred(self.verify_multilinear_ext_with(commitment, vars, point, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_multilinear_ext`] up to the tail's claim, returned in batched mode.
+    fn verify_multilinear_ext_with(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
         let ctx = &self.ctx;
         self.check_commitment(commitment)?;
         if point.len() != vars {
@@ -2150,7 +2522,8 @@ impl<const K: usize> HachiPcs<K> {
     /// the vector of length `len` committed in `commitment`.
     ///
     /// # Errors
-    /// [`VerifyError`] for a malformed or rejected proof.
+    /// [`VerifyError`] for a malformed or rejected proof, and [`VerifyError::Malformed`] in
+    /// batched mode, whose openings [`HachiPcs::verify_inner_product_deferred`] verifies.
     pub fn verify_inner_product(
         &self,
         commitment: &Commitment,
@@ -2160,6 +2533,37 @@ impl<const K: usize> HachiPcs<K> {
         proof: &Proof<K>,
         context: &[u8; 32],
     ) -> core::result::Result<(), VerifyError> {
+        complete(self.verify_inner_product_with(commitment, len, weights, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_inner_product`] in batched mode (module documentation, "Tail"): every
+    /// check but the tail's, whose claim it returns.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::verify_inner_product`], and [`VerifyError::Malformed`] outside batched
+    /// mode.
+    pub fn verify_inner_product_deferred(
+        &self,
+        commitment: &Commitment,
+        len: usize,
+        weights: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<DeferredClaim<K>, VerifyError> {
+        deferred(self.verify_inner_product_with(commitment, len, weights, value, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_inner_product`] up to the tail's claim, returned in batched mode.
+    fn verify_inner_product_with(
+        &self,
+        commitment: &Commitment,
+        len: usize,
+        weights: &[Ext<K>],
+        value: &Ext<K>,
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
         let ctx = &self.ctx;
         self.check_commitment(commitment)?;
         check_exts(ctx, "weights", weights, len)?;
@@ -2558,11 +2962,12 @@ impl<const K: usize> HachiPcs<K> {
             .try_into()
             .map_err(|_| Error::Shape("two vectors are expected".into()))?;
         let claim = self.merged_claim(&layout, b, a, &vector_weights, &coin, &lambda, &targets)?;
-        let (iterations, final_witness) = self.prove_rest(
+        let (iterations, final_witness, tail) = self.prove_rest_with(
             layout,
             Reduction::Merged,
             &state.committed,
             claim,
+            None,
             &mut fs,
             seed,
         )?;
@@ -2579,6 +2984,7 @@ impl<const K: usize> HachiPcs<K> {
                 final_witness,
                 blinder_mask_evals: vec![mask_evals[1], mask_evals[2]],
                 blinder_ring_values: vec![r0, r1],
+                tail,
             },
         ))
     }
@@ -2588,7 +2994,8 @@ impl<const K: usize> HachiPcs<K> {
     /// inner products `values[1]` and `values[2]` with them.
     ///
     /// # Errors
-    /// [`VerifyError`] for a malformed or rejected proof.
+    /// [`VerifyError`] for a malformed or rejected proof, and [`VerifyError::Malformed`] in
+    /// batched mode, whose openings [`HachiPcs::verify_merged_deferred`] verifies.
     #[allow(clippy::too_many_arguments)]
     pub fn verify_merged(
         &self,
@@ -2600,6 +3007,40 @@ impl<const K: usize> HachiPcs<K> {
         proof: &Proof<K>,
         context: &[u8; 32],
     ) -> core::result::Result<(), VerifyError> {
+        complete(self.verify_merged_with(commitment, vars, point, weights, values, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_merged`] in batched mode (module documentation, "Tail"): every check
+    /// but the tail's, whose claim it returns.
+    ///
+    /// # Errors
+    /// As [`HachiPcs::verify_merged`], and [`VerifyError::Malformed`] outside batched mode.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_merged_deferred(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        values: &[Ext<K>; 3],
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<DeferredClaim<K>, VerifyError> {
+        deferred(self.verify_merged_with(commitment, vars, point, weights, values, proof, context)?)
+    }
+
+    /// [`HachiPcs::verify_merged`] up to the tail's claim, returned in batched mode.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_merged_with(
+        &self,
+        commitment: &Commitment,
+        vars: usize,
+        point: &[Ext<K>],
+        weights: [&[Ext<K>]; 2],
+        values: &[Ext<K>; 3],
+        proof: &Proof<K>,
+        context: &[u8; 32],
+    ) -> core::result::Result<Option<DeferredClaim<K>>, VerifyError> {
         let ctx = &self.ctx;
         let field = ctx.field();
         self.check_commitment(commitment)?;
@@ -2665,6 +3106,38 @@ impl<const K: usize> HachiPcs<K> {
             &mut fs,
         )
     }
+}
+
+/// The verdict of a verifier that checks the whole opening: a claim left to the caller means the
+/// scheme is in batched mode, whose openings the deferred methods verify.
+///
+/// # Errors
+/// [`VerifyError::Malformed`] for a deferred claim.
+fn complete<const K: usize>(
+    claim: Option<DeferredClaim<K>>,
+) -> core::result::Result<(), VerifyError> {
+    match claim {
+        None => Ok(()),
+        Some(_) => Err(VerifyError::Malformed(
+            "in batched mode the tail's claim goes to the caller: verify the opening with the \
+             deferred method"
+                .into(),
+        )),
+    }
+}
+
+/// The claim of a deferred verifier, which only batched mode leaves.
+///
+/// # Errors
+/// [`VerifyError::Malformed`] without one.
+fn deferred<const K: usize>(
+    claim: Option<DeferredClaim<K>>,
+) -> core::result::Result<DeferredClaim<K>, VerifyError> {
+    claim.ok_or_else(|| {
+        VerifyError::Malformed(
+            "only an opening in batched mode leaves its claim to the caller".into(),
+        )
+    })
 }
 
 // ------------------------------------------------------------------------------- encodings ----
@@ -2872,13 +3345,17 @@ impl<const K: usize> HachiPcs<K> {
             proof.iterations.len() as u64,
         ];
         out.extend(proof.iterations.iter().map(|it| it.rounds.len() as u64));
-        out.push(match &proof.final_witness {
-            FinalWitness::Message(message) => message.len(),
-            FinalWitness::Digits(table) => table.len(),
+        out.push(match (&proof.tail, &proof.final_witness) {
+            (Some(ending), _) => ending.proof.len(),
+            (None, FinalWitness::Message(message)) => message.len(),
+            (None, FinalWitness::Digits(table)) => table.len(),
         } as u64);
         if self.ctx.hiding().is_some() {
             let merged = !proof.blinder_ring_values.is_empty();
             out.push(u64::from(proof.mask_eval.is_some()) | (u64::from(merged) << 1));
+        }
+        if let Some(slot) = &self.tail {
+            out.push(slot.mode.word());
         }
         let mut w = BitWriter::default();
         self.put_exts(&mut w, &proof.partials);
@@ -2897,6 +3374,9 @@ impl<const K: usize> HachiPcs<K> {
         for it in &proof.iterations {
             self.put_polys(&mut w, &it.v);
             self.put_polys(&mut w, &it.next_commitment);
+            for word in it.tail_commitment.iter().flatten() {
+                w.push(*word, 64);
+            }
             for round in &it.rounds {
                 self.put_exts(&mut w, &round.h0);
                 self.put_exts(&mut w, &round.h_alpha);
@@ -2906,9 +3386,14 @@ impl<const K: usize> HachiPcs<K> {
                 self.put_polys(&mut w, core::slice::from_ref(target));
             }
         }
-        match &proof.final_witness {
-            FinalWitness::Message(message) => self.put_polys(&mut w, message),
-            FinalWitness::Digits(table) => {
+        match (&proof.tail, &proof.final_witness) {
+            (Some(ending), _) => {
+                for word in &ending.proof {
+                    w.push(*word, 64);
+                }
+            }
+            (None, FinalWitness::Message(message)) => self.put_polys(&mut w, message),
+            (None, FinalWitness::Digits(table)) => {
                 let zq = self.ctx.ring.zq();
                 let (lo, _) = digit_range(self.ctx.choices.b);
                 for i in 0..table.len() {
@@ -2972,11 +3457,38 @@ impl<const K: usize> HachiPcs<K> {
         } else {
             stream
         };
+        // With a tail, the mode's word ends the header (module documentation, "Tail").
+        let stream = match &self.tail {
+            Some(slot) => {
+                let Some((&mode, stream)) = stream.split_first() else {
+                    return Err(shape("the encoding ends early"));
+                };
+                if mode != slot.mode.word() {
+                    return Err(shape(
+                        "the tail's word of the header is not the scheme's mode",
+                    ));
+                }
+                stream
+            }
+            None => stream,
+        };
         let round_counts = round_counts
             .iter()
             .map(|l| usize::try_from(*l).map_err(|_| too_large()))
             .collect::<Result<Vec<_>>>()?;
         let final_count = usize::try_from(final_count).map_err(|_| too_large())?;
+        // With a tail: the words of the tail's commitment at the last iteration's L, which the
+        // decoder bounds by the tail's largest table before the tail sees it.
+        let tail_commitment = match (&self.tail, round_counts.last()) {
+            (Some(slot), Some(l)) if *l <= slot.tail.max_vars() => {
+                Some(slot.tail.commitment_words(*l))
+            }
+            (Some(_), Some(_)) => return Err(shape("a last table beyond the tail's largest")),
+            (Some(_), None) => {
+                return Err(shape("an opening with a tail has at least one iteration"));
+            }
+            (None, _) => None,
+        };
         // The length the header implies, checked before anything is allocated.
         let (d, c) = (self.ctx.d(), &self.ctx.choices);
         let round = K * (c.b as usize + 2 + 3);
@@ -2993,7 +3505,12 @@ impl<const K: usize> HachiPcs<K> {
             });
         }
         // The final witness: N ring elements of residues without iterations, N digits after them.
-        let (entry, entry_bits) = if count == 0 {
+        // With a tail, the last iteration sends no u', and the tail's words take 64 bits each:
+        // its commitment and the N words of the final step.
+        let (entry, entry_bits) = if tail_commitment.is_some() {
+            residues = residues.and_then(|r| r.checked_sub(c.n_b * d));
+            (1, 64)
+        } else if count == 0 {
             (d, self.residue_bits())
         } else {
             (1, self.digit_bits())
@@ -3002,6 +3519,7 @@ impl<const K: usize> HachiPcs<K> {
             .and_then(|r| r.checked_mul(self.residue_bits()))
             .and_then(|b| {
                 final_count
+                    .checked_add(tail_commitment.unwrap_or(0))?
                     .checked_mul(entry)?
                     .checked_mul(entry_bits)?
                     .checked_add(b)
@@ -3033,7 +3551,17 @@ impl<const K: usize> HachiPcs<K> {
         let mut iterations = Vec::with_capacity(count);
         for (index, l) in round_counts.into_iter().enumerate() {
             let v = self.take_polys(&mut r, c.n_d)?;
-            let next_commitment = self.take_polys(&mut r, c.n_b)?;
+            let (next_commitment, tail_words) = match tail_commitment {
+                Some(words) if index + 1 == count => (
+                    Vec::new(),
+                    Some(
+                        (0..words)
+                            .map(|_| r.take(64))
+                            .collect::<Result<Vec<u64>>>()?,
+                    ),
+                ),
+                _ => (self.take_polys(&mut r, c.n_b)?, None),
+            };
             let rounds = (0..l)
                 .map(|_| {
                     Ok(RoundMessage {
@@ -3054,12 +3582,30 @@ impl<const K: usize> HachiPcs<K> {
                 rounds,
                 final_eval,
                 next_target,
+                tail_commitment: tail_words,
             });
         }
-        let final_witness = if count == 0 {
-            FinalWitness::Message(self.take_polys(&mut r, final_count)?)
+        // With a tail: an empty table and the N tail proof words of the final step.
+        let (final_witness, tail) = if tail_commitment.is_some() {
+            let proof = (0..final_count)
+                .map(|_| r.take(64))
+                .collect::<Result<Vec<u64>>>()?;
+            let empty = DigitTable::zeros(self.ctx.ring.zq(), 0);
+            let ending = TailFinal {
+                proof,
+                deferred: None,
+            };
+            (FinalWitness::Digits(empty), Some(ending))
+        } else if count == 0 {
+            (
+                FinalWitness::Message(self.take_polys(&mut r, final_count)?),
+                None,
+            )
         } else {
-            FinalWitness::Digits(self.take_digit_table(&mut r, final_count)?)
+            (
+                FinalWitness::Digits(self.take_digit_table(&mut r, final_count)?),
+                None,
+            )
         };
         r.finish()?;
         Ok(Proof {
@@ -3072,6 +3618,7 @@ impl<const K: usize> HachiPcs<K> {
             final_witness,
             blinder_mask_evals,
             blinder_ring_values,
+            tail,
         })
     }
 }
@@ -3228,6 +3775,7 @@ mod tests {
                 final_witness,
                 blinder_mask_evals: Vec::new(),
                 blinder_ring_values: Vec::new(),
+                tail: None,
             }
         }
 

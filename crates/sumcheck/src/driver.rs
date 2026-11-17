@@ -115,8 +115,8 @@ fn all_gather_words<C: Comm>(
 }
 
 /// The index of `poly` in the arrays of this module: $\widetilde w$, $g\_0$, $g\_1$ (the order of
-/// [`PcsWords`] and [`FinalValues`]).
-fn slot(poly: ClaimedPoly) -> usize {
+/// [`PcsWords`] and [`FinalValues`], and of the party-level steps of [`BasePcs`]).
+pub(crate) fn slot(poly: ClaimedPoly) -> usize {
     match poly {
         ClaimedPoly::W => 0,
         ClaimedPoly::G0 => 1,
@@ -179,8 +179,9 @@ fn column<const K: usize>(rows: &[Vec<Ext<K>>], index: usize) -> Vec<Ext<K>> {
 ///    poly))`, then $g\_{b,p}(\mathbf a)$ by [`BasePcs::prove_inner_product`] with the weights
 ///    $(1, (a\_j^k)\_{j,k})$ ([`blinder_weights`]) and $\langle \widetilde w \rangle\_p(\mathbf a)$
 ///    by [`BasePcs::prove_multilinear_ext`] at $\mathbf a$; each opened value must equal the final
-///    value of step 7 ([`Error::OpeningMismatch`] otherwise); the proofs in words
-///    ([`BasePcs::proof_to_words`]) through [`Comm::all_gather`] (label
+///    value of step 7 ([`Error::OpeningMismatch`] otherwise). The proofs become words by the
+///    party-level step [`BasePcs::finish_openings`] after the three openings (by default
+///    [`BasePcs::proof_to_words`] of each) and go through [`Comm::all_gather`] (label
 ///    [`ALL_GATHER_OPENINGS`]). Nothing follows them in the transcript, so they are not
 ///    absorbed.
 ///
@@ -628,15 +629,17 @@ fn prove_with<
         } => {
             // The share's state goes to its opening, the last of the three (`ClaimedPoly::ORDER`),
             // which may free what it no longer reads (`BasePcs::prove_multilinear_ext_owned`) and
-            // forms again what the state shed after its commitment.
+            // forms again what the state shed after its commitment. The three proofs then go to
+            // the party-level step (`BasePcs::finish_openings`), which encodes them.
             let mut st_w = Some(st_w);
             if l.pad_rule != PadRule::Field {
                 drop(base.take());
             }
+            let mut opened: [Option<P::Proof>; 3] = [None, None, None];
             for poly in ClaimedPoly::ORDER {
                 let context = context_of(poly);
                 let seed = rng.base_pcs(poly.seed_index(true))?;
-                let (value, words) = match poly {
+                let (value, proof) = match poly {
                     ClaimedPoly::W => {
                         let st = st_w.take().ok_or_else(|| {
                             Error::State("the share polynomial is opened once".into())
@@ -691,7 +694,7 @@ fn prove_with<
                                 pcs.prove_multilinear(&st, &point, &context, &seed)?
                             }
                         };
-                        (value, pcs.proof_to_words(&proof))
+                        (value, proof)
                     }
                     ClaimedPoly::G0 | ClaimedPoly::G1 => {
                         let (st, degree) = if poly == ClaimedPoly::G0 {
@@ -700,16 +703,18 @@ fn prove_with<
                             (&st_g1, l.d1)
                         };
                         let weights = blinder_weights(field, &point, degree);
-                        let (value, proof) =
-                            pcs.prove_inner_product(st, &weights, &context, &seed)?;
-                        (value, pcs.proof_to_words(&proof))
+                        pcs.prove_inner_product(st, &weights, &context, &seed)?
                     }
                 };
                 if field.reduce(&value) != expected[slot(poly)] {
                     return Err(Error::OpeningMismatch { party, poly });
                 }
-                proofs[slot(poly)] = words;
+                opened[slot(poly)] = Some(proof);
             }
+            let [Some(w), Some(g0), Some(g1)] = opened else {
+                return Err(Error::State("each polynomial is opened once".into()));
+            };
+            proofs = pcs.finish_openings([w, g0, g1])?;
         }
     }
     let openings = all_gather_words(comm, ALL_GATHER_OPENINGS, n, &proofs)?;

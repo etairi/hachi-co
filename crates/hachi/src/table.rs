@@ -133,6 +133,16 @@ impl DigitTable {
         Ok(())
     }
 
+    /// The entries as digits.
+    pub fn values(&self) -> &[i8] {
+        &self.values
+    }
+
+    /// The entries as digits, the table given up.
+    pub fn into_values(self) -> Vec<i8> {
+        self.values
+    }
+
     /// The residues of the entries.
     pub fn to_residues(&self) -> Vec<u64> {
         self.values

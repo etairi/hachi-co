@@ -4,7 +4,7 @@
 use crate::blinder::blinder_weights;
 use crate::driver::{
     LABEL_COMMIT_G0, LABEL_COMMIT_G1, LABEL_COMMIT_W, LABEL_FINAL_G0, LABEL_FINAL_G1,
-    LABEL_FINAL_W, LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1, opening_label,
+    LABEL_FINAL_W, LABEL_G0, LABEL_G1, LABEL_H0, LABEL_H1, opening_label, slot,
 };
 use crate::eq::{eq_eval, eq_point, eq_table, msb_bits};
 use crate::error::{Error, Result, VerifyError, check_len, pow2};
@@ -15,6 +15,7 @@ use crate::tables::{
 };
 use crate::transcript::{Claim, ClaimedPoly, FinalClaims, SumcheckTranscript};
 use core::ops::Range;
+use hachi_co_core::base_pcs::{OpeningKind, OpeningWords};
 use hachi_co_core::{BasePcs, Challenger, Context, Layout, Poly};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_params::PadRule;
@@ -441,38 +442,19 @@ fn sum<const K: usize>(f: &Fqk<K>, values: &[Ext<K>]) -> Ext<K> {
     values.iter().fold(f.zero(), |acc, v| f.add(&acc, v))
 }
 
-/// One opening checked with the base PCS: decode the commitment and the proof, then verify the
-/// multilinear evaluation ($\widetilde w$) or the inner product with `weights` (the blinders).
-#[allow(clippy::too_many_arguments)] // one opening's instance
-fn check_opening<const K: usize, P: BasePcs<K>>(
-    pcs: &P,
+/// What the opening of `poly` proves: $\widetilde w$ at the point, over the field or over
+/// $\mathbb Z\_q$ by the pad rule, and the blinders against their weights.
+fn opening_kind<'a, const K: usize>(
     pad_rule: PadRule,
     poly: ClaimedPoly,
-    com_words: &[u64],
-    proof_words: &[u64],
-    point: &[Ext<K>],
-    weights: &[Ext<K>],
-    value: &Ext<K>,
-    context: &[u8; 32],
-) -> core::result::Result<(), String> {
-    let com = pcs
-        .commitment_from_words(com_words)
-        .map_err(|e| format!("the commitment does not decode: {e}"))?;
-    let proof = pcs
-        .proof_from_words(proof_words)
-        .map_err(|e| format!("the proof does not decode: {e}"))?;
-    match poly {
-        ClaimedPoly::W => match pad_rule {
-            PadRule::Field => {
-                pcs.verify_multilinear_ext(&com, point.len(), point, value, &proof, context)
-            }
-            PadRule::Residues => {
-                pcs.verify_multilinear(&com, point.len(), point, value, &proof, context)
-            }
-        },
-        ClaimedPoly::G0 | ClaimedPoly::G1 => {
-            pcs.verify_inner_product(&com, weights.len(), weights, value, &proof, context)
-        }
+    point: &'a [Ext<K>],
+    weights: [&'a [Ext<K>]; 2],
+) -> OpeningKind<'a, K> {
+    match (poly, pad_rule) {
+        (ClaimedPoly::W, PadRule::Field) => OpeningKind::MultilinearExt(point),
+        (ClaimedPoly::W, PadRule::Residues) => OpeningKind::Multilinear(point),
+        (ClaimedPoly::G0, _) => OpeningKind::InnerProduct(weights[0]),
+        (ClaimedPoly::G1, _) => OpeningKind::InnerProduct(weights[1]),
     }
 }
 
@@ -529,7 +511,9 @@ fn check_merged<const K: usize, P: BasePcs<K>>(
 ///   must open the commitment to the final value: $\langle \widetilde w \rangle\_p(\mathbf a)$ by
 ///   [`BasePcs::verify_multilinear_ext`] in $\ell''$ variables at $\mathbf a$, $g\_{b,p}(\mathbf a)$ by
 ///   [`BasePcs::verify_inner_product`] with the weights $(1, (a\_j^k)\_{j,k})$ of
-///   [`blinder_weights`] ($1 + \ell'' d\_b$ entries). If the base PCS merges
+///   [`blinder_weights`] ($1 + \ell'' d\_b$ entries). The three openings of a party are checked
+///   by the party-level check [`BasePcs::verify_openings`], by default one by one as above. If
+///   the base PCS merges
 ///   ([`BasePcs::merges`]), each party has one commitment and one proof, in the share
 ///   polynomial's items, which open to its three final values at once under the share
 ///   polynomial's context ([`BasePcs::verify_merged`]). The blinders' items must be empty, and
@@ -618,63 +602,63 @@ pub fn verify_checks<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     for p0 in 0..l.n {
         let party = p0 + 1;
         let contexts = ClaimedPoly::ORDER.map(|poly| ch.context(&opening_label(party, poly)));
-        let merged = if pcs.merges() {
-            let w = ClaimedPoly::ORDER
+        let context_of = |poly: ClaimedPoly| {
+            let i = ClaimedPoly::ORDER
                 .iter()
-                .position(|p| *p == ClaimedPoly::W)
+                .position(|p| *p == poly)
                 .unwrap_or(0);
-            let item = |poly: ClaimedPoly| {
-                (
-                    transcript.commitments.of(poly)[p0].as_slice(),
-                    transcript.openings.of(poly)[p0].as_slice(),
-                )
-            };
-            let values = [finals.w[p0], finals.g0[p0], finals.g1[p0]];
-            Some(
-                check_merged(
-                    pcs,
-                    [
-                        item(ClaimedPoly::W),
-                        item(ClaimedPoly::G0),
-                        item(ClaimedPoly::G1),
-                    ],
-                    &point,
-                    [&weights0, &weights1],
-                    &values,
-                    &contexts[w],
-                )
-                .err(),
-            )
-        } else {
-            None
+            &contexts[i]
         };
-        for (poly, context) in ClaimedPoly::ORDER.into_iter().zip(contexts) {
-            let value = finals.of(poly)[p0];
-            let error = match &merged {
-                Some(error) => error.clone(),
-                None => {
-                    let weights = if poly == ClaimedPoly::G1 {
-                        &weights1
-                    } else {
-                        &weights0
-                    };
-                    check_opening(
-                        pcs,
-                        l.pad_rule,
-                        poly,
-                        &transcript.commitments.of(poly)[p0],
-                        &transcript.openings.of(poly)[p0],
-                        &point,
-                        weights,
-                        &value,
-                        &context,
-                    )
-                    .err()
+        let item = |poly: ClaimedPoly| {
+            (
+                transcript.commitments.of(poly)[p0].as_slice(),
+                transcript.openings.of(poly)[p0].as_slice(),
+            )
+        };
+        // The verdicts in the order w, g0, g1 (`slot`): of the one merged opening for all three,
+        // or of the party-level check of the three openings (`BasePcs::verify_openings`).
+        let verdicts: [Option<String>; 3] = if pcs.merges() {
+            let values = [finals.w[p0], finals.g0[p0], finals.g1[p0]];
+            let error = check_merged(
+                pcs,
+                [
+                    item(ClaimedPoly::W),
+                    item(ClaimedPoly::G0),
+                    item(ClaimedPoly::G1),
+                ],
+                &point,
+                [&weights0, &weights1],
+                &values,
+                context_of(ClaimedPoly::W),
+            )
+            .err();
+            [error.clone(), error.clone(), error]
+        } else {
+            let opening = |poly: ClaimedPoly| {
+                let (commitment, proof) = item(poly);
+                OpeningWords {
+                    commitment,
+                    proof,
+                    kind: opening_kind(l.pad_rule, poly, &point, [&weights0, &weights1]),
+                    value: &finals.of(poly)[p0],
+                    context: context_of(poly),
                 }
             };
+            pcs.verify_openings([
+                opening(ClaimedPoly::W),
+                opening(ClaimedPoly::G0),
+                opening(ClaimedPoly::G1),
+            ])
+            .map(core::result::Result::err)
+        };
+        for poly in ClaimedPoly::ORDER {
             openings.push(OpeningCheck {
-                claim: Claim { party, poly, value },
-                error,
+                claim: Claim {
+                    party,
+                    poly,
+                    value: finals.of(poly)[p0],
+                },
+                error: verdicts[slot(poly)].clone(),
             });
         }
     }

@@ -22,6 +22,12 @@
 //! three polynomials of a prover in one commitment and open them with one proof, which still gives
 //! the three values. This is not the draft's protocol, which commits and opens them separately,
 //! and the methods default to "not supported".
+//!
+//! **Party-level steps**, optional ([`BasePcs::finish_openings`], [`BasePcs::verify_openings`]):
+//! after a prover's three openings, a scheme may prove something about them together, for example
+//! one proof that ends all three (Hachi with a tail, `hachi_co::HachiBase`), and its verifier then
+//! checks the three openings together. By default the three proofs are encoded and checked one by
+//! one, as the draft has them.
 
 use crate::data::check_len;
 use crate::{Error, Result};
@@ -439,6 +445,30 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         Err("this base PCS does not merge commitments".into())
     }
 
+    /// The party-level step after a prover's three openings (see "Party-level steps"): their
+    /// proofs, in the order $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$, become the
+    /// words the prover publishes for them, in the same order. Each item must still have the
+    /// length the sizes of the polynomials fix (see "Words"). By default each proof is encoded on
+    /// its own ([`proof_to_words`](Self::proof_to_words)).
+    ///
+    /// # Errors
+    /// Implementation-specific, for example a proof that does not belong to this prover's
+    /// openings.
+    fn finish_openings(&self, proofs: [Self::Proof; 3]) -> Result<[Vec<u64>; 3]> {
+        Ok(proofs.map(|p| self.proof_to_words(&p)))
+    }
+
+    /// The party-level check of a prover's three openings (see "Party-level steps"), in the
+    /// order $\langle \widetilde w \rangle\_p$, $g\_{0,p}$, $g\_{1,p}$: the verdict of each, in the
+    /// same order. By default each is checked on its own ([`check_opening_words`]). A scheme that
+    /// checks the three together must reject each opening whose claim it could not check.
+    fn verify_openings(
+        &self,
+        openings: [OpeningWords<'_, K>; 3],
+    ) -> [core::result::Result<(), String>; 3] {
+        openings.map(|opening| check_opening_words(self, &opening))
+    }
+
     /// A digest of the scheme's own public parameters. Hachi-Co absorbs it into the statement
     /// of every proof (`6_Collaborative_Hachi.tex`:294-297: $\mathsf{pp}\_{\mathsf{PCS}}$ is part
     /// of $\mathsf{pp}$), so that a proof is bound to the base PCS it was made with. Two
@@ -463,6 +493,65 @@ pub trait BasePcs<const K: usize>: Send + Sync {
     /// # Errors
     /// For any input that `proof_to_words` does not produce.
     fn proof_from_words(&self, words: &[u64]) -> Result<Self::Proof>;
+}
+
+/// What one opening of a party proves, for [`BasePcs::verify_openings`]: the verify method that
+/// checks it, with its point or weights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpeningKind<'a, const K: usize> {
+    /// A polynomial over $\mathbb Z\_q$ at the point ([`BasePcs::verify_multilinear`]).
+    Multilinear(&'a [Ext<K>]),
+    /// A polynomial over $\mathbb F\_{q^K}$ at the point ([`BasePcs::verify_multilinear_ext`]).
+    MultilinearExt(&'a [Ext<K>]),
+    /// A vector against the weights ([`BasePcs::verify_inner_product`]).
+    InnerProduct(&'a [Ext<K>]),
+}
+
+/// One opening of a party as the verifier received it, for [`BasePcs::verify_openings`]: the
+/// words of its commitment and of its proof, what it proves, the value and the context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpeningWords<'a, const K: usize> {
+    /// The words of the commitment.
+    pub commitment: &'a [u64],
+    /// The words of the proof.
+    pub proof: &'a [u64],
+    /// What the opening proves.
+    pub kind: OpeningKind<'a, K>,
+    /// The value it must prove.
+    pub value: &'a Ext<K>,
+    /// The opening's context (see "Contexts").
+    pub context: &'a [u8; 32],
+}
+
+/// One opening checked on its own, as [`BasePcs::verify_openings`] checks each by default: decode
+/// the commitment and the proof ([`BasePcs::commitment_from_words`],
+/// [`BasePcs::proof_from_words`]), then the verify method of its kind.
+///
+/// # Errors
+/// The reason of the rejection: a commitment or a proof that does not decode, or the verify
+/// method's.
+pub fn check_opening_words<const K: usize, P: BasePcs<K> + ?Sized>(
+    pcs: &P,
+    opening: &OpeningWords<'_, K>,
+) -> core::result::Result<(), String> {
+    let com = pcs
+        .commitment_from_words(opening.commitment)
+        .map_err(|e| format!("the commitment does not decode: {e}"))?;
+    let proof = pcs
+        .proof_from_words(opening.proof)
+        .map_err(|e| format!("the proof does not decode: {e}"))?;
+    let (value, context) = (opening.value, opening.context);
+    match opening.kind {
+        OpeningKind::Multilinear(point) => {
+            pcs.verify_multilinear(&com, point.len(), point, value, &proof, context)
+        }
+        OpeningKind::MultilinearExt(point) => {
+            pcs.verify_multilinear_ext(&com, point.len(), point, value, &proof, context)
+        }
+        OpeningKind::InnerProduct(weights) => {
+            pcs.verify_inner_product(&com, weights.len(), weights, value, &proof, context)
+        }
+    }
 }
 
 /// Checks that a table of a multilinear polynomial has $2^\ell$ entries for some $\ell \ge 0$.

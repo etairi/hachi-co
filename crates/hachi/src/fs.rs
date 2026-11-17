@@ -93,6 +93,12 @@ impl Fs {
             .collect::<hachi_co_sampling::Result<Vec<_>>>()?)
     }
 
+    /// A 32-byte seed squeezed under `label`: the context of a sub-proof bound to everything the
+    /// transcript absorbed (the tail's, [`crate::tail`]).
+    pub fn seed(&mut self, label: &[u8]) -> [u8; 32] {
+        self.transcript.challenge_seed(label)
+    }
+
     /// The digest of the state, for tests that compare the prover's and the verifier's
     /// transcripts.
     pub fn digest(&self) -> [u8; 32] {
