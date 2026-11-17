@@ -14,8 +14,8 @@ Plans (presets secure-l{l}-n{n}-a8, 115 bits; the 100-bit comparison with PPP26 
 - smoke: the toy presets at n = 2 and 4 and the single prover, one repetition each, to check the machine.
 - calibration: l = 20 and n = 2 at 1 and 4 threads per party, and l = 24 and n = 8 at 1 thread (the memory of eight
   parties), one repetition each.
-- phase1: l = 16, 20, 24 and n = 2, 4, 8 at 1 thread per party; n = 2 at 4 threads per party; the same instance
-  without hiding in the base PCS (-nonhiding) at n = 2 and 1 thread; the single prover at 1 and 8 threads. Three
+- phase1: l = 20, 22, 24 and n = 2, 4, 8 at 1 thread per party; n = 2 at 4 threads per party; the same instance
+  without hiding in the base PCS (-nonhiding) at n = 2 and 1 thread; the single prover at 1 and 8 threads. Two
   repetitions each, in increasing size within each part.
 """
 import argparse
@@ -26,7 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-ELLS = (16, 20, 24)
+ELLS = (20, 22, 24)
+REPS = 2
 
 
 def preset(ell, n, suffix=""):
@@ -43,10 +44,10 @@ def plan_cells(name):
                 ("cal-l20-n2-t4", "parties", preset(20, 2), 2, 4, 1),
                 ("cal-l24-n8-t1", "parties", preset(24, 8), 8, 1, 1)]
     if name == "phase1":
-        cells = [(f"l{ell}-n{n}-t1", "parties", preset(ell, n), n, 1, 3) for ell in ELLS for n in (2, 4, 8)]
-        cells += [(f"l{ell}-n2-t4", "parties", preset(ell, 2), 2, 4, 3) for ell in ELLS]
-        cells += [(f"l{ell}-n2-t1-nonhiding", "parties", preset(ell, 2, "-nonhiding"), 2, 1, 3) for ell in ELLS]
-        cells += [(f"l{ell}-single-t{t}", "single", preset(ell, 2), 1, t, 3) for ell in ELLS for t in (1, 8)]
+        cells = [(f"l{ell}-n{n}-t1", "parties", preset(ell, n), n, 1, REPS) for ell in ELLS for n in (2, 4, 8)]
+        cells += [(f"l{ell}-n2-t4", "parties", preset(ell, 2), 2, 4, REPS) for ell in ELLS]
+        cells += [(f"l{ell}-n2-t1-nonhiding", "parties", preset(ell, 2, "-nonhiding"), 2, 1, REPS) for ell in ELLS]
+        cells += [(f"l{ell}-single-t{t}", "single", preset(ell, 2), 1, t, REPS) for ell in ELLS for t in (1, 8)]
         return cells
     raise SystemExit(f"unknown plan {name}")
 
