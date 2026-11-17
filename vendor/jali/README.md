@@ -1,0 +1,316 @@
+# Jali
+
+Jali is a Rust library for lattice-based zero-knowledge proofs. It implements the proof system
+of Lyubashevsky, Nguyen and Plançon (LNP22): ABDLOP commitments with compressed opening proofs,
+proofs of quadratic relations with automorphisms, evaluation proofs, and the combined protocol
+with binary, exact Euclidean-norm and approximate range proofs. On top of it, a statement
+compiler turns relations over other polynomial rings and moduli into those proofs: named
+variables with norm bounds, degree lowering, modulus lifting with carries, constraints modulo
+several moduli, ℓ<sub>∞</sub> bounds and subring variables. An optional straight-line
+extractable mode adds Katsumata's transform, so that an extractor holding a trapdoor recovers the
+witness from a single proof, without rewinding. A separate module implements LaBRADOR (Beullens
+and Seiler), a succinct proof system for dot-product constraints, which is not zero knowledge.
+
+## Status
+
+Jali is research code, version 0.2.
+
+- **Not audited.** No independent review of the code or of its parameters has taken place.
+- **No constant-time guarantee.** Arithmetic, sampling and rejection run in variable time, so
+  timing may depend on secret values.
+- **Unstable formats.** The API, the proof encoding and the transcripts may change between
+  versions. Proofs are not interoperable with other implementations.
+- **Standard transcripts.** Since 0.2 every proof follows the CFRG draft
+  draft-irtf-cfrg-fiat-shamir-04: one SHAKE128 duplex sponge per proof, a session identifier
+  that binds the argument and the context, the instance absorbed first, every prover message
+  absorbed as it is sent and every challenge squeezed with a fixed length. The final round uses
+  the compact flavor of draft-irtf-cfrg-sigma-protocols-04. Proofs of 0.1 do not verify under
+  0.2.
+- **Randomness.** `commit`, `prove` and `prove_bytes` draw a fresh seed per call from a
+  `rand_core` 0.10 `CryptoRng` (for example from `rand` 0.10); prefer them. The `_with_seed`
+  variants take a 32-byte seed that must be secret and uniformly random. A seed may be reused:
+  each call derives its keys from the seed and all of its inputs (assuming that SHAKE128 and
+  AES-256 behave as pseudorandom functions). But identical calls return identical outputs: two
+  commitments to the same values, or two proofs of the same statement, context and witness, are
+  equal and therefore linkable. Use fresh seeds wherever multi-theorem zero-knowledge is needed
+  and wherever faults can be injected (a fault that changes a challenge but not the key can
+  reveal the witness).
+- **Context binding.** Every proof takes an application `context: &[u8]` and verifies only under
+  the same bytes.
+- **Parameters.** The shipped parameter sets meet a root-Hermite-factor criterion
+  (*δ* ≤ 1.0044, about 101 bits under core-SVP), not 128 bits. Hardness figures are
+  heuristic estimates.
+- **Straight-line extraction.** The extractable mode is new in 0.1.1. Its extraction argument for
+  the whole toolbox is an outline, in the classical random-oracle model only. The security notes
+  say which steps are proved.
+
+The [security notes](https://github.com/etairi/jali/blob/main/docs/security.md) give the
+details, including what the Fiat–Shamir proofs do and do not guarantee.
+
+## Installation
+
+Jali is on [crates.io](https://crates.io/crates/jali). It needs Rust 1.95 or later (edition
+2024).
+
+```toml
+[dependencies]
+jali = { version = "0.3", features = ["serde"] }
+```
+
+The crate forbids `unsafe` code and has no C dependencies.
+
+## Quick start
+
+Commit to two vectors of polynomials and prove knowledge of an opening. The fixed seeds keep the
+example reproducible; applications use `commit` and `prove` with a `rand_core` 0.10
+`CryptoRng`.
+
+```rust
+use jali::{Error, abdlop::Abdlop, math::PolyVec, params::toy_d64};
+
+fn main() -> Result<(), Error> {
+    // The 32-byte public seed from which the public matrices are expanded.
+    let scheme = Abdlop::new([1; 32], toy_d64())?;
+    let ring = scheme.ring().clone();
+    let bounded = PolyVec::zero(ring.clone(), scheme.bounded_len());
+    let messages = PolyVec::zero(ring, scheme.message_len());
+    let (commitment, opening) = scheme.commit_with_seed(bounded, messages, [2; 32])?;
+    let proof = scheme.prove_with_seed(&commitment, &opening, b"example/opening", [3; 32])?;
+    let bytes = scheme.encode_proof(&proof)?;
+    scheme.verify(&commitment, &scheme.decode_proof(&bytes)?, b"example/opening")?;
+    Ok(())
+}
+```
+
+## Proving a statement
+
+A `statement::Statement` declares named variables with norm bounds over a statement ring and
+adds constraints built from affine and quadratic forms. `compile` checks the statement against a
+parameter set and returns a `Compiled` statement that proves and verifies. This example proves
+knowledge of a short **w** with **Aw** + **t** = **0** over
+ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), with **A** of size 4 × 8 and ‖**w**‖<sup>2</sup> ≤ 2950,
+the shape of a Kyber-1024 key pair, for which the crate ships parameters.
+
+```rust
+use jali::{
+    Error,
+    math::{Poly, Ring},
+    params::kyber1024_d64,
+    statement::{Norm, Statement},
+};
+use std::collections::BTreeMap;
+
+fn main() -> Result<(), Error> {
+    let ring = Ring::new(3329, 256)?;
+    // A deterministic toy instance: ternary w, pseudorandom A, t = -Aw.
+    let mut x = 1u64;
+    let mut sample = |m: u64| {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((x >> 33) % m) as i128
+    };
+    let w = (0..8)
+        .map(|_| Poly::new(ring.clone(), (0..256).map(|_| sample(3) - 1).collect()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut statement = Statement::new(ring.clone());
+    statement.var("w", 8, Norm::L2Squared(2950))?;
+    for _ in 0..4 {
+        let row = (0..8)
+            .map(|_| Poly::new(ring.clone(), (0..256).map(|_| sample(3329)).collect()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut t = Poly::zero(ring.clone());
+        for (a, wj) in row.iter().zip(&w) {
+            t = t.sub(&a.mul(wj)?)?;
+        }
+        // The constraint t + sum_j A_ij w_j = 0 modulo 3329.
+        let mut form = statement.constant(t)?;
+        for (j, a) in row.iter().enumerate() {
+            form = form.add(&statement.variable("w", j)?.scale(a)?)?;
+        }
+        statement.eq_mod_p(form)?;
+    }
+
+    let compiled = statement.compile(kyber1024_d64())?;
+    let witness = BTreeMap::from([("w".to_string(), w)]);
+    let public_seed = [7; 32];
+    let proof = compiled.prove_bytes_with_seed(public_seed, &witness, b"example/kyber", [9; 32])?;
+    compiled.verify_bytes(public_seed, &proof, b"example/kyber")?;
+    Ok(())
+}
+```
+
+Constraints can also be quadratic (`product_affine`), hold only for the constant coefficient
+(`const_coeff_zero`), or use a modulus of their own (`variable_in`, `constant_in`). The
+statement degree may exceed the proof degree (64 or 128); the compiler lowers it. For a
+statement of a new shape, `Statement::requirements` exports what a parameter search needs; see
+[parameter sets](#parameter-sets).
+[`examples/possession.rs`](https://github.com/etairi/jali/blob/main/examples/possession.rs)
+proves a quadratic relation modulo 13, lowered from degree 128 to 64, with a committed carry and
+its own parameter set:
+
+```sh
+cargo run --release --features serde --example possession
+```
+
+## Straight-line extraction
+
+A plain proof is a Fiat–Shamir proof, whose knowledge extractor rewinds the prover. The
+extractable mode applies Katsumata's transform: beside the final opening proof it commits to the
+witness with an extractable linear homomorphic commitment, whose key is a random-oracle output on
+the statement and the context. An extractor that programs that oracle with a trapdoored key
+decrypts the responses to other challenges from one proof and recovers the witness without
+rewinding, as protocols that simulate provers straight-line need. Each parameter set takes an
+extraction set, which fixes the commitment's rank and modulus:
+
+```rust,ignore
+let extraction = jali::params::kyber1024_d64_extraction();
+let proof = compiled.prove_extractable_bytes_with_seed(public_seed, &extraction, &witness, context, seed)?;
+compiled.verify_extractable_bytes(public_seed, &extraction, &proof, context)?;
+```
+
+[`examples/extractable.rs`](https://github.com/etairi/jali/blob/main/examples/extractable.rs)
+proves the Kyber-1024 shape above in both modes:
+
+```sh
+cargo run --release --example extractable
+```
+
+An extractable proof is about six times as long (121.0 kB instead of 21.0 kB for that shape),
+proving takes 1.3 to 1.5 times the instructions and verifying 1.2 times. The [protocol
+notes](https://github.com/etairi/jali/blob/main/docs/protocol.md#straight-line-extractable-mode)
+describe the construction and the [security
+notes](https://github.com/etairi/jali/blob/main/docs/security.md#straight-line-extraction) its
+guarantee and status.
+
+## Features
+
+| Feature | Purpose |
+| --- | --- |
+| `serde` | Parameter sets from JSON (`TboxParams::from_json`) and export of statement requirements. Proofs always use the binary codec. |
+| `parallel` | Rayon parallelism inside proving and verifying. Outputs do not depend on the number of threads. |
+| `test-utils` | Capture and replay of sampler randomness, for tests only. |
+
+There are no default features.
+
+## Supported parameters and limits
+
+- **Statement rings** ℤ<sub>*p*</sub>\[*X*\]/(*X*<sup>*d*′</sup> + 1): any modulus 2 ≤ *p* < 2<sup>256</sup>
+  and power-of-two degrees 64 ≤ *d*′ ≤ 1024. Each constraint may have its own modulus.
+- **Proof rings**: degree 64 or 128, with a modulus *q* < 2<sup>256</sup> of one or two prime
+  factors ≡ 5 (mod 8). Binary, exact-norm and range proofs need a single prime. Factors below
+  2<sup>64</sup> are proven prime (deterministic Miller–Rabin); larger factors pass the Baillie–PSW
+  probable-prime test, which is not a proof of primality.
+- **Norms**: exact squared Euclidean (`Norm::L2Squared`), also two-sided
+  (`Norm::L2SquaredRange`, min ≤ ‖**s**‖<sup>2</sup> ≤ max, for example **s** ≠ **0** with
+  `min = 1`), binary, exact ℓ<sub>∞</sub> through bits (`Norm::LinfExact`), approximate
+  ℓ<sub>∞</sub> (`Norm::Linf`, which a proof bounds only by the extraction bound of the
+  approximate range proof), or unbounded. Bounds fit `u64`.
+- **Capacities**: Gaussian width exponents up to 100, derived response bounds below
+  2<sup>128</sup>, encoded proofs up to 16 MiB. Violations return errors.
+- **Arithmetic** is exact, with 62-bit RNS/NTT products over up to nine primes: two at
+  *q* ≈ 2<sup>40</sup>, eight or nine at *q* ≈ 2<sup>240</sup>.
+
+## Parameter sets
+
+| Function | Relation | Proof degree | log<sub>2</sub> *q* | Proof size |
+| --- | --- | ---: | ---: | ---: |
+| `params::kyber1024_d64` | **Aw** + **t** = **0** over ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), **A** ∈ *R*<sup>4×8</sup>, ‖**w**‖<sup>2</sup> ≤ 2950 | 64 | 41.14 | 21,004 B |
+| `params::kyber1024_d128` | the same | 128 | 41.14 | 22,552 B |
+| `params::demo_d64` | the same shape with *p* = 2<sup>32</sup> − 4607 and ‖**w**‖<sup>2</sup> ≤ 2048, the size of the Module-LWE example of LNP22 §6.2 | 64 | 60.44 | 24,772 B |
+| `params::toy_d64` | a small statement with every kind of block, for tests and examples | 64 | 40.00 | 17,844 B |
+
+The first three were derived by the parameter tool for the worst case over public data, so they
+compile every instance of their shape. Their hardness criterion is *δ* ≤ 1.0044 for MLWE
+and MSIS, about 101 bits under core-SVP; the [parameter
+notes](https://github.com/etairi/jali/blob/main/docs/parameters.md) give the estimates and
+lattice-estimator cross-checks. Every field of a proof has a fixed width, so every proof of a
+set has the size in the table (`CheckedParams::estimated_proof_bytes`).
+
+`params::kyber1024_d64_extraction`, `kyber1024_d128_extraction`, `demo_d64_extraction` and
+`toy_d64_extraction` are the extraction sets of these four, for the extractable mode.
+
+For a new statement, export `Statement::requirements` (feature `serde`), derive a set with the
+Python [parameter tool](https://github.com/etairi/jali/blob/main/tools/README.md), load it with
+`TboxParams::from_json`, which checks it, and compile. The tool is not part of the crate
+package.
+
+## Performance
+
+Indicative timings of version 0.1 from one benchmark session on an Apple M4 (4 performance and
+6 efficiency cores, 16 GiB), macOS 27.0.1, rustc 1.99.0, default release profile. Each figure is the median
+wall-clock time of one call over seeds 1 to 3 and five rounds (15 proofs and 45 verifications
+per row); `parallel` ran on two threads (`RAYON_NUM_THREADS=2`). The machine carried other load
+(median one-minute load average 5.15), and the number of rejection-sampling restarts varies with
+the seed and the statement, so single proofs can take much longer or shorter than the median.
+`cargo bench --bench protocols` times the opening proof and the other protocols on `toy_d64` at
+one fixed seed, and `cargo run --release --features serde --example possession` times one proof
+of the example.
+
+| Statement | Prove, 1 thread | Prove, `parallel` (2 threads) | Verify, 1 thread |
+| --- | ---: | ---: | ---: |
+| Opening proof (`toy_d64`) | 31.1 ms | 17.8 ms | 0.52 ms |
+| Kyber-1024 shape (`kyber1024_d64`) | 284 ms | 214 ms | 126 ms |
+| Kyber-1024 shape (`kyber1024_d128`) | 277 ms | 190 ms | 118 ms |
+| 32-bit shape (`demo_d64`) | 420 ms | 291 ms | 155 ms |
+| `examples/possession.rs` | 292 ms | 190 ms | 57.4 ms |
+
+Verification of the compiled statements includes decoding the proof and expanding the public
+matrices; that of the opening proof includes decoding only.
+
+Version 0.2, with the transcript of draft-irtf-cfrg-fiat-shamir-04, needs fewer instructions
+than version 0.1: over seeds 1 to 100 of the Kyber-1024 shape (rustc 1.100.0, one thread, retired
+instructions per call), proving took 0.73 (`kyber1024_d64`), 0.73 (`kyber1024_d128`) and 0.77
+(`demo_d64`) times those of 0.1 and verifying 0.74, 0.69 and 0.74 times, and in the extractable
+mode 0.79, 0.80 and 0.81 and 0.78, 0.72 and 0.79 times. Version 0.1 encoded and hashed the
+derived equations at every layer, which took about a quarter of its time.
+
+In the extractable mode of version 0.2, over the same seeds, proving took 1.49 (`kyber1024_d64`),
+1.30 (`kyber1024_d128`) and 1.31 (`demo_d64`) times the plain mode's retired instructions, and
+verifying 1.24, 1.18 and 1.24 times. Proving restarts a random number of times, so the prover's
+ratios move with the seeds.
+
+## Documentation
+
+- [Protocol and statement compiler](https://github.com/etairi/jali/blob/main/docs/protocol.md)
+- [Encodings, transcripts and key
+  derivation](https://github.com/etairi/jali/blob/main/docs/encodings.md)
+- [Parameters](https://github.com/etairi/jali/blob/main/docs/parameters.md)
+- [LaBRADOR](https://github.com/etairi/jali/blob/main/docs/labrador.md)
+- [Security notes](https://github.com/etairi/jali/blob/main/docs/security.md)
+- [Parameter tool](https://github.com/etairi/jali/blob/main/tools/README.md)
+- [Contributing: tests, oracles and
+  benchmarks](https://github.com/etairi/jali/blob/main/CONTRIBUTING.md)
+
+The API documentation writes formulas as KaTeX. `cargo doc` leaves them readable as LaTeX;
+`cargo docs` builds the documentation with the KaTeX header in `docs/katex-header.html`, as
+docs.rs does.
+
+## References
+
+- V. Lyubashevsky, N. K. Nguyen and M. Plançon. Lattice-Based Zero-Knowledge Proofs and
+  Applications: Shorter, Simpler, and More General. CRYPTO 2022. Full version: Cryptology ePrint
+  Archive, Paper 2022/284, revision of 14 August 2022, to which the section, figure and equation
+  numbers in this crate refer.
+- W. Beullens and G. Seiler. LaBRADOR: Compact Proofs for R1CS from Module-SIS. CRYPTO 2023.
+  Cryptology ePrint Archive, Paper 2022/1341. (The `labrador` module.)
+- S. Katsumata. A New Simple Technique to Bootstrap Various Lattice Zero-Knowledge Proofs to QROM
+  Secure NIZKs. CRYPTO 2021. Full version: Cryptology ePrint Archive, Paper 2021/927. (The
+  extractable mode.)
+- L. Ducas, A. Durmus, T. Lepoint and V. Lyubashevsky. Lattice Signatures and Bimodal Gaussians.
+  CRYPTO 2013. (Bimodal rejection sampling.)
+- L. Ducas, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler and D. Stehlé. CRYSTALS –
+  Dilithium: Digital Signatures from Module Lattices. Cryptology ePrint Archive, Report
+  2017/633. (Compression with hints, as LNP22 §6.1 uses it.)
+- M. Orrù and C. Yun. Fiat-Shamir Transformation. Internet-Draft
+  draft-irtf-cfrg-fiat-shamir-04, Crypto Forum Research Group, 2 November 2026. (The
+  transcript, its session identifiers, decodings and serializations.)
+- M. Orrù and C. Yun. Sigma Proofs for Linear Relations. Internet-Draft
+  draft-irtf-cfrg-sigma-protocols-04, Crypto Forum Research Group, 2 November 2026. (The compact
+  flavor of the final round.)
+- NIST. FIPS 203, Module-Lattice-Based Key-Encapsulation Mechanism Standard, and FIPS 204,
+  Module-Lattice-Based Digital Signature Standard, 2024. (The centred binomial decoding of the
+  projection matrices and the bit packing of codec C1.)
+
+## License
+
+MIT; see [LICENSE](https://github.com/etairi/jali/blob/main/LICENSE).

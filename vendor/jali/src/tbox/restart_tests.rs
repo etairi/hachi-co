@@ -1,0 +1,327 @@
+//! The range round of the toolbox prover: the attempt limit, a restart after a rejected first
+//! attempt, and the restarts of `range_response` on a coefficient above q/2 and on the bounds
+//! `z3_bound_squared` and `z4_bound`. Also the witness check's norm budget.
+use super::*;
+use crate::{
+    abdlop::verifier_check_tests::with_norm, lnp::AffineBlock, math::PolyMat,
+    rand::reject::Variance,
+};
+
+fn selector(
+    ring: &std::sync::Arc<crate::math::Ring>,
+    columns: usize,
+    indices: &[usize],
+) -> PolyMat {
+    PolyMat::new(
+        ring.clone(),
+        indices.len(),
+        columns,
+        indices
+            .iter()
+            .flat_map(|i| {
+                (0..columns).map(move |j| Poly::constant(ring.clone(), i128::from(*i == j)))
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+/// The statement and witness of `tests/toolbox.rs`: binary rows 0 and 1, Euclidean blocks on
+/// rows 2, 3 and on row 4, and a range block on both messages.
+pub(super) fn selector_statement(scheme: &Abdlop) -> (Statement, PolyVec, PolyVec) {
+    let ring = scheme.ring().clone();
+    let select_s = |indices: &[usize]| AffineBlock {
+        rows: indices.len(),
+        s: Some(selector(&ring, 10, indices)),
+        m: None,
+        offset: None,
+    };
+    let statement = Statement {
+        binary: Some(select_s(&[0, 1])),
+        l2: vec![
+            crate::lnp::L2Block {
+                map: select_s(&[2, 3]),
+                bound_squared: 128,
+            },
+            crate::lnp::L2Block {
+                map: select_s(&[4]),
+                bound_squared: 64,
+            },
+        ],
+        arp: Some(AffineBlock {
+            rows: 2,
+            s: None,
+            m: Some(selector(&ring, 2, &[0, 1])),
+            offset: None,
+        }),
+        ..Statement::default()
+    };
+    let s1 = PolyVec::new(
+        ring.clone(),
+        (0..10)
+            .map(|i| {
+                Poly::new(
+                    ring.clone(),
+                    (0..64).map(|j| ((i + j) % 2) as i128).collect(),
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let m = PolyVec::new(
+        ring.clone(),
+        vec![Poly::constant(ring.clone(), 2), Poly::constant(ring, -3)],
+    )
+    .unwrap();
+    (statement, s1, m)
+}
+
+#[test]
+fn range_round_restarts_and_its_attempt_limit() {
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let (statement, s1, m) = selector_statement(&scheme);
+    let prove = |seed: u8, attempts: u32| {
+        prove_with_attempts(
+            &scheme,
+            &statement,
+            &s1,
+            &m,
+            b"restarts",
+            &Zeroizing::new([seed; 32]),
+            attempts,
+        )
+    };
+    assert_eq!(prove(0, 0).err(), Some(Error::RestartLimit));
+    // A seed whose first range attempt is rejected and whose second is accepted.
+    let seed = (0..=255)
+        .find(|seed| prove(*seed, 1).err() == Some(Error::RestartLimit) && prove(*seed, 2).is_ok())
+        .expect("a seed with exactly one range restart among 256");
+    let proof = prove(seed, 2).unwrap();
+    verify(&scheme, &statement, &proof, b"restarts").unwrap();
+    assert_eq!(prove(seed, secret::MAX_ATTEMPTS).unwrap(), proof);
+    assert_eq!(prove(seed, u32::MAX).unwrap(), proof);
+}
+
+#[test]
+fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let ring = scheme.ring().clone();
+    let slots = 256 / ring.degree();
+    let seed = [9; 32];
+    let coins = |domain: u64| AesPrg::new(&[7; 32], domain);
+    // The response to the projections of `values` under `mask`, and the next 32 bytes of the
+    // coin stream after it.
+    let respond = |exact: bool, values: &[i128], mask: PolyVec, domain: u64| {
+        let t = scheme.parameters.log_sigma[if exact { 2 } else { 3 }];
+        let mask = abdlop::Mask {
+            values: mask,
+            variance: Variance::gaussian(t).unwrap(),
+        };
+        let mut random = coins(domain);
+        let z = range_response(
+            &scheme,
+            &Projections::for_tests(&seed, values.len(), values.len()),
+            exact,
+            values,
+            &mask,
+            1,
+            &mut random,
+        )
+        .unwrap();
+        let mut next = [0u8; 32];
+        random.fill(&mut next).unwrap();
+        (z, next)
+    };
+    // Zero values project to zero, so the response is the mask itself, and rejection sampling
+    // accepts with probability 1/M whatever the mask: the coin stream alone decides.
+    let zeros = [0i128; 2];
+    let zero = PolyVec::zero(ring.clone(), slots);
+    let accepting = |exact: bool| {
+        (0..64)
+            .find(|domain| respond(exact, &zeros, zero.clone(), *domain).0.is_some())
+            .expect("an accepting coin among 64")
+    };
+    // The largest coefficient of each block's fixed-width code.
+    let width_max = |t: u32| (1i128 << (response_width(t) - 1)) - 1;
+    // Exact block: squared norm z3_bound_squared is kept, one more restarts, with every
+    // coefficient within the code's width. A coefficient beyond the width restarts although
+    // the norm is within z3_bound_squared.
+    let z3 = scheme.checked.z3_bound_squared;
+    let exact_max = width_max(scheme.parameters.log_sigma[2]);
+    let domain = accepting(true);
+    let at = spread_norm(&ring, slots, z3, exact_max);
+    assert_eq!(respond(true, &zeros, at.clone(), domain).0, Some(at));
+    let above = spread_norm(&ring, slots, z3 + 1, exact_max);
+    assert_eq!(respond(true, &zeros, above, domain).0, None);
+    let wide = |value: i128| {
+        let mut entries = zero.entries().to_vec();
+        entries[0].set_coefficient(3, value).unwrap();
+        PolyVec::new(ring.clone(), entries).unwrap()
+    };
+    assert!(((exact_max + 1) * (exact_max + 1)) as u128 <= z3);
+    assert!(respond(true, &zeros, wide(exact_max), domain).0.is_some());
+    assert_eq!(respond(true, &zeros, wide(-exact_max - 1), domain).0, None);
+    // Approximate block: the code's width is below z4_bound, so the width decides: a
+    // coefficient at the width is kept, one more restarts, and so does one at z4_bound.
+    let z4 = scheme.checked.z4_bound as i128;
+    let approx_max = width_max(scheme.parameters.log_sigma[3]);
+    assert!(approx_max < z4);
+    let domain = accepting(false);
+    let one = |value: i128| {
+        let mut entries = zero.entries().to_vec();
+        entries[slots - 1].set_coefficient(5, value).unwrap();
+        PolyVec::new(ring.clone(), entries).unwrap()
+    };
+    for (value, kept) in [
+        (approx_max, true),
+        (-approx_max, true),
+        (approx_max + 1, false),
+        (-approx_max - 1, false),
+        (z4, false),
+    ] {
+        let z = respond(false, &zeros, one(value), domain).0;
+        assert_eq!(z.is_some(), kept, "{value}");
+    }
+    // A mask coefficient is at most q/2, so only a long projection exceeds it. Values (h, 1),
+    // with h = (q - 1)/2, project to at most h + 1 in absolute value, and the prover restarts
+    // before it reads a coin; values (h, 0) project to at most h, and it reads one coin, 32
+    // bytes, before the z4 bound refuses.
+    let half = ring.modulus_i128() / 2;
+    let mut fresh = [0u8; 64];
+    coins(domain).fill(&mut fresh).unwrap();
+    for (second, reads_a_coin) in [(1, false), (0, true)] {
+        let values = [half, second];
+        let most = projections(
+            &Projections::for_tests(&seed, values.len(), values.len()),
+            false,
+            &values,
+        )
+        .unwrap()
+        .iter()
+        .map(|v| v.unsigned_abs())
+        .max();
+        assert_eq!(most, Some((half + second) as u128));
+        let (z, next) = respond(false, &values, zero.clone(), domain);
+        assert_eq!(z, None);
+        let read = if reads_a_coin { 32 } else { 0 };
+        assert_eq!(next[..], fresh[read..read + 32], "{second}");
+    }
+}
+
+/// A finite tape of bytes, read in order.
+struct Tape(Vec<u8>, usize);
+impl ByteStream for Tape {
+    fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
+        let end = self.1 + output.len();
+        output.copy_from_slice(self.0.get(self.1..end).ok_or(Error::Randomness)?);
+        self.1 = end;
+        Ok(())
+    }
+}
+
+#[test]
+fn a_range_test_decides_with_one_whole_256_bit_coin() {
+    // Zero values project to zero, and the bimodal test then accepts with probability exactly
+    // 1/M whatever the mask: it takes the coins u with u M <= 2^256, read little-endian from 32
+    // bytes. A coin of 128 bits, or one compared on its high half, would decide alike on either
+    // side of the threshold.
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let ring = scheme.ring().clone();
+    let slots = 256 / ring.degree();
+    for exact in [true, false] {
+        let t = scheme.parameters.log_sigma[if exact { 2 } else { 3 }];
+        let mask = abdlop::Mask {
+            values: PolyVec::zero(ring.clone(), slots),
+            variance: Variance::gaussian(t).unwrap(),
+        };
+        let m = range_rejection_m(&scheme, exact).unwrap();
+        assert!(m >= 2, "{m}");
+        let threshold = if m.is_power_of_two() {
+            U256::ONE.shl_vartime(256 - m.trailing_zeros())
+        } else {
+            U256::MAX
+                .div_rem_vartime(&crypto_bigint::NonZero::new(U256::from(m)).unwrap())
+                .0
+        };
+        let respond = |u: &U256| {
+            let mut tape = Tape(u.to_le_bytes()[..].to_vec(), 0);
+            tape.0.extend_from_slice(&[0xa5; 32]);
+            let z = range_response(
+                &scheme,
+                &Projections::for_tests(&[9; 32], 2, 2),
+                exact,
+                &[0; 2],
+                &mask,
+                1,
+                &mut tape,
+            );
+            (z.unwrap().is_some(), tape.1)
+        };
+        let one = U256::ONE;
+        assert_eq!(respond(&threshold), (true, 32), "{exact}");
+        assert_eq!(
+            respond(&threshold.wrapping_add(&one)),
+            (false, 32),
+            "{exact}"
+        );
+        assert_eq!(respond(&U256::ZERO), (true, 32), "{exact}");
+        assert_eq!(respond(&U256::MAX), (false, 32), "{exact}");
+    }
+}
+
+#[test]
+fn the_witness_check_refuses_a_witness_above_the_norm_budget() {
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let (statement, s1, m) = selector_statement(&scheme);
+    // Rows 5 to 9 are in no block, so only the norm budget alpha_squared constrains them.
+    let budget = u128::from(scheme.parameters.alpha_squared);
+    let with_budget = |n: u128| {
+        let mut entries = s1.entries().to_vec();
+        let used: u128 = s1.entries()[..5]
+            .iter()
+            .flat_map(|p| p.coefficients_i128().unwrap().to_vec())
+            .map(|x| x.unsigned_abs().pow(2))
+            .sum();
+        let rest = with_norm(scheme.ring(), 5, n - used);
+        entries[5..].clone_from_slice(rest.entries());
+        let out = PolyVec::new(scheme.ring().clone(), entries).unwrap();
+        assert_eq!(out.norm_squared().unwrap(), U256::from(n));
+        out
+    };
+    statement
+        .check_witness(&scheme, &with_budget(budget), &m)
+        .unwrap();
+    assert_eq!(
+        statement
+            .check_witness(&scheme, &with_budget(budget + 1), &m)
+            .err(),
+        Some(Error::Witness)
+    );
+}
+
+/// `len` polynomials of `ring` of squared norm exactly `n`, every coefficient at most `max` in
+/// absolute value: equal values in all but four coefficients, and the rest in the last four
+/// as a sum of four squares.
+fn spread_norm(ring: &Arc<Ring>, len: usize, n: u128, max: i128) -> PolyVec {
+    let total = len * ring.degree();
+    let a = ((n / total as u128) as f64).sqrt() as i128;
+    let a = (a - 1..=a + 1)
+        .rev()
+        .find(|a| *a >= 0 && (a * a) as u128 * total as u128 <= n)
+        .unwrap();
+    let mut values = vec![a; total - 4];
+    let rest = n - (a * a) as u128 * (total - 4) as u128;
+    values.extend(crate::abdlop::verifier_check_tests::four_squares(rest));
+    assert!(values.iter().all(|x| x.abs() <= max), "{a} {rest}");
+    let out = PolyVec::new(
+        ring.clone(),
+        values
+            .chunks_exact(ring.degree())
+            .map(|c| Poly::new(ring.clone(), c.to_vec()).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(out.norm_squared().unwrap(), U256::from(n));
+    out
+}

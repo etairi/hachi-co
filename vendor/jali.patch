@@ -1,0 +1,682 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 8003451..a4c8b49 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,6 +3,34 @@
+ All notable changes to this crate are listed here. The crate follows [semantic
+ versioning](https://semver.org); before 1.0, a minor version may break the API.
+ 
++## [0.3.1] - 2026-11-17
++
++Made for Hachi-Co's Greyhound tail, which runs LaBRADOR at moduli of 48 to 62 bits.
++
++### Changed
++
++- **LaBRADOR moduli up to $`2^{62}`$** (from $`2^{48}`$). The norms of witnesses and last
++  witnesses are summed with saturation (squares of centred 61-bit residues reach $`2^{122}`$, so
++  sums of more than 64 of them could wrap in release builds), the projection condition
++  computes $`30q^2`$ without overflow, and the projection table holds centred residues (at most
++  $`q/2`$ in magnitude, where its sums of 4 weighted entries reached $`4q`$), so that the
++  column sums of 64 table entries stay in `i64` below $`2^{58}`$, and from $`2^{58}`$ they are
++  taken in `i128`. The projection constraints only take residues of these sums, so they do not
++  change. The ring's tests run at three more moduli (53.3, 56.4 and 61.1 bits) with an oracle
++  that reduces each product.
++- **A bounded base search in the level planner.** It tried every odd base up to four times
++  its heuristic one, which takes minutes for witnesses with large coefficients. It still does
++  when there are at most 160 of them (so those levels choose what they chose), and otherwise
++  tries 24 bases spread geometrically and 12 more between the best one's neighbours.
++- **Parallel aggregation and statement checks** with `parallel`: the aggregation sums the
++  linear terms vector by vector, and the check evaluates the constraints apart. Results do not
++  depend on the threads.
++
++### Added
++
++- `labrador::predicted_proof_bytes`: the proof size the planner predicts for a statement's
++  shape and bound.
++
+ ## [0.3.0] - 2026-11-16
+ 
+ The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in both modes.
+diff --git a/Cargo.toml b/Cargo.toml
+index e1bbe47..636db2f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "jali"
+-version = "0.3.0"
++version = "0.3.1"
+ edition = "2024"
+ rust-version = "1.95"
+ license = "MIT"
+diff --git a/docs/labrador.md b/docs/labrador.md
+index b7c5599..f020ce1 100644
+--- a/docs/labrador.md
++++ b/docs/labrador.md
+@@ -13,7 +13,7 @@ aggregating signatures, or under a zero-knowledge layer.
+ 
+ A `Statement` holds the principal relation of BS23 §5.1 over
+ $`\mathcal R_q=\mathbb Z_q[X]/(X^{64}+1)`$, for a prime $`q\equiv5\pmod8`$ with
+-$`2^{16}<q<2^{48}`$, so that $`X^{64}+1`$ splits into two irreducible factors modulo $`q`$. A
++$`2^{16}<q<2^{62}`$, so that $`X^{64}+1`$ splits into two irreducible factors modulo $`q`$. A
+ witness is $`r`$ vectors $`s_1,\dots,s_r\in\mathcal R_q^n`$ with
+ $`\sum_i\|s_i\|^2\le\beta^2`$ (centred coefficients). A constraint is
+ 
+diff --git a/src/labrador/level.rs b/src/labrador/level.rs
+index 90c1c98..e86cebd 100644
+--- a/src/labrador/level.rs
++++ b/src/labrador/level.rs
+@@ -484,7 +484,7 @@ fn projection_blocks<T: Send>(
+     work: impl Fn(BlockPolys) -> Result<T, Error> + Sync,
+     mut absorb: impl FnMut(T) -> Result<(), Error>,
+ ) -> Result<(), Error> {
+-    let table = projection_table(omega);
++    let table = projection_table(ring, omega);
+     let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK / ring.degree();
+     let total = shape.r * shape.n;
+     let blocks = total.div_ceil(per_block);
+@@ -509,18 +509,23 @@ fn projection_blocks<T: Send>(
+ }
+ 
+ /// For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
+-/// side by side, so that one lookup reads the λ sums of a byte.
+-fn projection_table(omega: &[Vec<u64>]) -> Vec<i64> {
++/// side by side, so that one lookup reads the λ sums of a byte. Each sum is stored as its
++/// centred residue modulo $`q`$ (at most $`q/2`$ in magnitude, while the sum of 4 canonical
++/// residues reaches $`4q`$, beyond `i64` for $`q>2^{61}`$); the polynomials of [`block_polys`]
++/// only take residues of sums of entries, so they do not change.
++fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> Vec<i64> {
+     let lambda = omega.len();
++    let q = i128::from(ring.modulus());
+     let mut table = vec![0i64; 64 * 256 * lambda];
+     for (k, w) in omega.iter().enumerate() {
+         for group in 0..64 {
+             for byte in 0..256usize {
+-                let mut s = 0i64;
++                let mut s = 0i128;
+                 for (e, v) in DECODE[byte].iter().enumerate() {
+-                    s += i64::from(*v) * w[4 * group + e] as i64;
++                    s += i128::from(*v) * i128::from(w[4 * group + e]);
+                 }
+-                table[(group * 256 + byte) * lambda + k] = s;
++                let s = s.rem_euclid(q);
++                table[(group * 256 + byte) * lambda + k] = if 2 * s > q { s - q } else { s } as i64;
+             }
+         }
+     }
+@@ -538,6 +543,8 @@ fn block_polys(
+ ) -> Result<BlockPolys, Error> {
+     let d = ring.degree();
+     let q = ring.modulus() as i64;
++    // 64 centred residues of at most q/2 each: `i64` sums while q < 2^58, `i128` from there.
++    let wide = (ring.modulus() >= 1 << 58).then(|| i128::from(ring.modulus()));
+     let stride = lambda * d;
+     let mut data = vec![0u64; indices.len() * stride];
+     let mut tmp = vec![0u64; d];
+@@ -546,8 +553,7 @@ fn block_polys(
+     for polys in data.chunks_exact_mut(stride) {
+         for c in 0..d {
+             projection.column_bytes(&mut column)?;
+-            // 64 terms below 2^50 in magnitude for each k.
+-            column_sums(table, lambda, &column, &mut sums);
++            column_sums(table, lambda, &column, &mut sums, wide);
+             for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {
+                 poly[c] = s.rem_euclid(q) as u64;
+             }
+@@ -566,8 +572,29 @@ fn block_polys(
+ 
+ /// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` for $`k<\lambda`$, the λ sums
+ /// side by side in `table`. Specialized for each λ of the supported moduli (3 to 8), so that
+-/// the sums stay in registers, with the general loop for any other.
+-fn column_sums(table: &[i64], lambda: usize, column: &[u8; 64], sums: &mut [i64]) {
++/// the sums stay in registers, with the general loop for any other. With `wide` $`=q`$ the
++/// sums are taken in `i128` and returned modulo $`q`$ (for $`q\ge2^{58}`$, where 64 entries of
++/// $`q/2`$ leave `i64`).
++fn column_sums(
++    table: &[i64],
++    lambda: usize,
++    column: &[u8; 64],
++    sums: &mut [i64],
++    wide: Option<i128>,
++) {
++    if let Some(q) = wide {
++        let mut acc = vec![0i128; lambda];
++        for (g, b) in column.iter().enumerate() {
++            let at = (g * 256 + usize::from(*b)) * lambda;
++            for (s, t) in acc.iter_mut().zip(&table[at..at + lambda]) {
++                *s += i128::from(*t);
++            }
++        }
++        for (s, a) in sums.iter_mut().zip(acc) {
++            *s = a.rem_euclid(q) as i64;
++        }
++        return;
++    }
+     fn fixed<const L: usize>(table: &[i64], column: &[u8; 64], sums: &mut [i64]) {
+         let table = table.as_chunks::<L>().0;
+         let mut acc = [0i64; L];
+@@ -745,7 +772,10 @@ pub(crate) fn prove<R: Relation>(
+     let hats: Zeroizing<Vec<Vec<u64>>> =
+         Zeroizing::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
+     let pairs = Zeroizing::new(all_pairs(ring, &hats));
+-    let norm_sq: u128 = witness.iter().map(|v| ring.norm_sq(v)).sum();
++    let norm_sq: u128 = witness
++        .iter()
++        .map(|v| ring.norm_sq(v))
++        .fold(0, u128::saturating_add);
+     if norm_sq > shape.norm_sq {
+         return Err(Error::Witness);
+     }
+@@ -973,7 +1003,10 @@ fn attempt_level<R: Relation>(
+         }
+     }
+     let next_wit = next_witness(ring, params, &layout, &z, &v);
+-    let next_norm: u128 = next_wit.iter().map(|w| ring.norm_sq(w)).sum();
++    let next_norm: u128 = next_wit
++        .iter()
++        .map(|w| ring.norm_sq(w))
++        .fold(0, u128::saturating_add);
+     if next_norm > params.next_norm_sq {
+         return Ok(None);
+     }
+diff --git a/src/labrador/mod.rs b/src/labrador/mod.rs
+index b28de30..96a80b5 100644
+--- a/src/labrador/mod.rs
++++ b/src/labrador/mod.rs
+@@ -46,6 +46,7 @@ use crate::{
+ use level::Ctx;
+ use sample::ChallengeSet;
+ use statement::Relation;
++use std::sync::Arc;
+ 
+ /// The most levels a proof may have.
+ pub const MAX_LEVELS: u32 = 32;
+@@ -148,6 +149,33 @@ pub fn prove(
+     Proof::from_bytes(out)
+ }
+ 
++/// The proof size in bytes that the prover's planner predicts for a statement of
++/// `multiplicity` vectors of `rank` polynomials over `ring` with the bound
++/// `norm_bound_squared`, from these alone: the levels it picks with the bound as the witness's
++/// norm and its garbage unknown, their bytes, and its model of the last witness. A proof
++/// differs from it by the choices made with the actual statistics and by the codes of the
++/// last witness, which depend on its values.
++///
++/// Fails with [`Error::Parameter`] if the ring has no challenge set or no parameters meet the
++/// policy.
++pub fn predicted_proof_bytes(
++    ring: &Arc<Rq>,
++    multiplicity: usize,
++    rank: usize,
++    norm_bound_squared: u128,
++    policy: &Policy,
++) -> Result<usize, Error> {
++    policy.check()?;
++    let set = ChallengeSet::for_degree(ring.degree())?;
++    let shape = params::Shape {
++        r: multiplicity,
++        n: rank,
++        norm_sq: norm_bound_squared,
++    };
++    let bytes = plan::predict_bytes(ring, &set, policy, &shape)?;
++    Ok(bytes.ceil() as usize)
++}
++
+ /// Verify `proof` for `statement` with the same public seed, context and policy as the
+ /// prover. Fails with [`Error::InvalidProof`] or [`Error::Encoding`].
+ pub fn verify(
+@@ -176,7 +204,10 @@ pub fn verify(
+         return Err(Error::Encoding);
+     }
+     transcript.absorb(&before[..before.len() - input.len()]);
+-    let norm: u128 = wit.iter().map(|w| ctx.ring.norm_sq(w)).sum();
++    let norm: u128 = wit
++        .iter()
++        .map(|w| ctx.ring.norm_sq(w))
++        .fold(0, u128::saturating_add);
+     if norm > next.params.next_norm_sq {
+         return Err(Error::InvalidProof);
+     }
+diff --git a/src/labrador/params.rs b/src/labrador/params.rs
+index 474c79e..1efe40f 100644
+--- a/src/labrador/params.rs
++++ b/src/labrador/params.rs
+@@ -338,7 +338,11 @@ impl LevelParams {
+ /// $`\sqrt{337/30}\,\beta\le q/125`$, in integers: $`337\cdot125^2\beta^2\le30q^2`$.
+ pub(crate) fn projection_condition(norm_sq: u128, q: u64) -> Result<(), Error> {
+     let lhs = norm_sq.checked_mul(337 * 125 * 125);
+-    let rhs = 30 * u128::from(q) * u128::from(q);
++    // 30 q^2 exceeds u128 for q above 2^61.5, and then every representable lhs passes.
++    let rhs = u128::from(q)
++        .checked_mul(u128::from(q))
++        .and_then(|x| x.checked_mul(30))
++        .unwrap_or(u128::MAX);
+     match lhs {
+         Some(l) if l <= rhs => Ok(()),
+         _ => Err(Error::Parameter(
+diff --git a/src/labrador/plan.rs b/src/labrador/plan.rs
+index b5830bb..354f688 100644
+--- a/src/labrador/plan.rs
++++ b/src/labrador/plan.rs
+@@ -314,16 +314,49 @@ pub(crate) fn choose(
+     shape: &Shape,
+     stats: &Stats<'_>,
+ ) -> Result<LevelParams, Error> {
++    choose_with_cost(ring, set, policy, shape, stats).map(|(params, _)| params)
++}
++
++/// The odd bases that [`choose`] tries: every odd base from 3 to `top` while there are at most
++/// [`EXHAUSTIVE_BASES`] of them (as before, so that such levels choose what they chose), and
++/// otherwise [`COARSE_BASES`] spread geometrically over that range together with `heuristic`,
++/// which [`choose`] then refines around the best.
++fn coarse_bases(top: u64, heuristic: u64) -> Vec<u64> {
++    if top.saturating_sub(1) / 2 <= EXHAUSTIVE_BASES {
++        return (3..=top).step_by(2).collect();
++    }
++    let ratio = (top as f64 / 3.0).ln() / (COARSE_BASES - 1) as f64;
++    let mut bases: Vec<u64> = (0..COARSE_BASES)
++        .map(|k| odd_round((3.0 * (ratio * k as f64).exp()).min(top as f64)))
++        .chain([heuristic.clamp(3, top) | 1])
++        .filter(|b| (3..=top).contains(b))
++        .collect();
++    bases.sort_unstable();
++    bases.dedup();
++    bases
++}
++
++/// Odd bases tried exhaustively: up to 160, as for every level of a witness with small digits.
++const EXHAUSTIVE_BASES: u64 = 160;
++/// Bases of the coarse grid beyond that, and of the refinement around its best.
++const COARSE_BASES: usize = 24;
++const FINE_BASES: usize = 12;
++
++/// [`choose`] with its predicted proof size from this level on (this level's bytes and the
++/// lookahead's). Every candidate base is one the verifier accepts, so the bounded search of
++/// [`coarse_bases`] only affects how close to the planner's optimum a large witness gets.
++pub(crate) fn choose_with_cost(
++    ring: &Rq,
++    set: &ChallengeSet,
++    policy: &Policy,
++    shape: &Shape,
++    stats: &Stats<'_>,
++) -> Result<(LevelParams, f64), Error> {
+     super::params::projection_condition(shape.norm_sq, ring.modulus())?;
+     let mut best: Option<(f64, LevelParams)> = None;
+-    // The odd bases from 3 to four times the heuristic one.
+-    let top = 4 * heuristic_base(set, shape, stats, ring.degree());
+-    for (last, base) in [true, false]
+-        .into_iter()
+-        .flat_map(|last| (3..=top).step_by(2).map(move |b| (last, b)))
+-    {
++    let consider = |last: bool, base: u64, best: &mut Option<(f64, LevelParams)>| {
+         let Some(fit) = fit(ring, set, policy, shape, stats, last, Some(base)) else {
+-            continue;
++            return;
+         };
+         let here = level_bytes(ring, shape, &fit.params);
+         for (nu, mu) in splits(shape, &fit.params) {
+@@ -347,12 +380,73 @@ pub(crate) fn choose(
+             };
+             let cost = here + rest;
+             if best.as_ref().is_none_or(|(c, _)| cost < *c) {
+-                best = Some((cost, params));
++                *best = Some((cost, params));
+             }
+         }
++    };
++    // The odd bases from 3 to four times the heuristic one (all of them, or a grid).
++    let heuristic = heuristic_base(set, shape, stats, ring.degree());
++    let top = 4 * heuristic;
++    let bases = coarse_bases(top, heuristic);
++    let exhaustive = bases.len() as u64 == top.saturating_sub(1) / 2;
++    for (last, base) in [true, false]
++        .into_iter()
++        .flat_map(|last| bases.iter().map(move |b| (last, *b)))
++    {
++        consider(last, base, &mut best);
++    }
++    if !exhaustive {
++        // Refine around the best base of the grid, between its neighbours there.
++        if let Some((_, p)) = best {
++            let at = bases.partition_point(|b| *b < p.b);
++            let lo = bases[at.saturating_sub(1)].max(3);
++            let hi = bases[(at + 1).min(bases.len() - 1)].max(lo);
++            let ratio = (hi as f64 / lo as f64).ln() / (FINE_BASES - 1) as f64;
++            let fine: Vec<u64> = (0..FINE_BASES)
++                .map(|k| odd_round(lo as f64 * (ratio * k as f64).exp()))
++                .filter(|b| (3..=top).contains(b) && !bases.contains(b))
++                .collect();
++            for last in [true, false] {
++                for b in &fine {
++                    consider(last, *b, &mut best);
++                }
++            }
++        }
++    }
++    best.ok_or(Error::Parameter("no LaBRADOR parameters meet the policy"))
++        .map(|(c, p)| (p, c))
++}
++
++/// The proof size the planner predicts for a statement of `shape`, from its shape and bound
++/// alone: the levels [`choose_with_cost`] picks with the bound as the witness's norm and the
++/// garbage unknown, each level's bytes ([`level_bytes`]) and, at the last, its prediction of
++/// the witness sent in the clear.
++pub(crate) fn predict_bytes(
++    ring: &Rq,
++    set: &ChallengeSet,
++    policy: &Policy,
++    shape: &Shape,
++) -> Result<f64, Error> {
++    let mut shape = *shape;
++    let mut total = 0.0;
++    for _ in 0..super::MAX_LEVELS {
++        let stats = Stats {
++            norm_sq: shape.norm_sq,
++            garbage: None,
++        };
++        let (params, cost) = choose_with_cost(ring, set, policy, &shape, &stats)?;
++        if params.last {
++            return Ok(total + cost);
++        }
++        total += level_bytes(ring, &shape, &params);
++        let layout = params.layout(&shape)?;
++        shape = Shape {
++            r: layout.r_next,
++            n: layout.n_next,
++            norm_sq: params.next_norm_sq,
++        };
+     }
+-    best.map(|(_, p)| p)
+-        .ok_or(Error::Parameter("no LaBRADOR parameters meet the policy"))
++    Err(Error::Parameter("too many LaBRADOR levels"))
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/labrador/ring.rs b/src/labrador/ring.rs
+index 9df8910..4dc7aef 100644
+--- a/src/labrador/ring.rs
++++ b/src/labrador/ring.rs
+@@ -1,5 +1,5 @@
+ //! Arithmetic in $`\mathcal R_q=\mathbb Z_q[X]/(X^d+1)`$ for a prime $`q\equiv5\pmod8`$ below
+-//! $`2^{48}`$, the single-precision setting of LaBRADOR (BS23 §2, §6.1).
++//! $`2^{62}`$, the single-precision setting of LaBRADOR (BS23 §2, §6.1).
+ //!
+ //! Coefficients are canonical `u64` residues in $`[0,q)`$. Products go through the negacyclic
+ //! NTTs of [`crate::math::ntt`] over the first $`k`$ primes of [`NTT_PRIMES`], in Montgomery
+@@ -8,7 +8,7 @@
+ //! magnitude at most $`((q-1)/2)^2`$. The ring takes the least $`k`$ for which the product
+ //! $`P`$ of its primes satisfies $`P/2>2^{32}d((q-1)/2)^2`$, so that up to $`2^{32}`$ products
+ //! accumulated in the transform domain reconstruct exactly: two primes for $`q<2^{40}`$ at
+-//! $`d\le256`$, three up to $`2^{48}`$. This arithmetic is separate from the 256-bit
++//! $`d\le256`$, three up to $`2^{62}`$. This arithmetic is separate from the 256-bit
+ //! arithmetic of the LNP22 proofs, which it does not change.
+ use crate::{
+     Error,
+@@ -23,8 +23,10 @@ use std::sync::Arc;
+ 
+ /// Moduli must exceed $`2^{16}`$.
+ pub const MIN_MODULUS: u64 = 1 << 16;
+-/// Moduli must be below $`2^{48}`$.
+-pub const MAX_MODULUS_BITS: u32 = 48;
++/// Moduli must be below $`2^{62}`$: centred residues and their differences stay within `i64`,
++/// Shoup products within `u64`, and three transform primes reconstruct $`2^{32}`$ accumulated
++/// products exactly (the rule of [`Rq::new`]).
++pub const MAX_MODULUS_BITS: u32 = 62;
+ 
+ /// The ring $`\mathbb Z_q[X]/(X^d+1)`$ with its transform plans and CRT constants.
+ #[derive(Debug)]
+@@ -44,7 +46,7 @@ pub(crate) struct Sparse {
+ 
+ impl Rq {
+     /// The ring of degree `d` (64, 128 or 256) modulo `q`, a prime with $`q\equiv5\pmod8`$ and
+-    /// $`2^{16}<q<2^{48}`$. Then $`X^d+1`$ splits into two irreducible factors modulo $`q`$,
++    /// $`2^{16}<q<2^{62}`$. Then $`X^d+1`$ splits into two irreducible factors modulo $`q`$,
+     /// the setting of BS23 §2.
+     pub fn new(q: u64, d: usize) -> Result<Arc<Self>, Error> {
+         if !matches!(d, 64 | 128 | 256) {
+@@ -340,14 +342,14 @@ impl Rq {
+         }
+     }
+ 
+-    /// The squared Euclidean norm of the centred coefficients.
++    /// The squared Euclidean norm of the centred coefficients, saturating at `u128::MAX`: a
++    /// square is below $`2^{122}`$ for $`q<2^{62}`$, so sums of more than 64 of them could wrap,
++    /// and a saturated norm is above every bound.
+     pub(crate) fn norm_sq(&self, a: &[u64]) -> u128 {
+-        a.iter()
+-            .map(|x| {
+-                let c = i128::from(self.center(*x));
+-                (c * c) as u128
+-            })
+-            .sum()
++        a.iter().fold(0u128, |acc, x| {
++            let c = u128::from(self.center(*x).unsigned_abs());
++            acc.saturating_add(c * c)
++        })
+     }
+ 
+     /// The largest centred coefficient magnitude.
+diff --git a/src/labrador/ring/tests.rs b/src/labrador/ring/tests.rs
+index 7a2fc98..b772a82 100644
+--- a/src/labrador/ring/tests.rs
++++ b/src/labrador/ring/tests.rs
+@@ -1,13 +1,13 @@
+ //! The ring arithmetic against an `i128` schoolbook oracle: products, accumulated inner
+ //! products, sparse products and $`\sigma_{-1}`$, at every supported degree and at moduli from
+-//! just above $`2^{16}`$ to just below $`2^{48}`$, on random and extreme operands.
++//! just above $`2^{16}`$ to just below $`2^{62}`$, on random and extreme operands.
+ use super::*;
+ use crate::labrador::test_rng::TestRng;
+ 
+ /// Moduli $`\equiv5\pmod8`$, prime: the smallest above $`2^{16}`$, the largest below
+-/// $`2^{20}`$, $`2^{32}`$, $`2^{40}`$, $`2^{47}`$ and $`2^{48}`$, and $`2^{36}-243`$,
+-/// $`2^{38}-107`$.
+-const MODULI: [u64; 8] = [
++/// $`2^{20}`$, $`2^{32}`$, $`2^{40}`$, $`2^{47}`$ and $`2^{48}`$, $`2^{36}-243`$,
++/// $`2^{38}-107`$, and three moduli of Hachi-Co's presets (53.3, 56.4 and 61.1 bits).
++const MODULI: [u64; 11] = [
+     65557,
+     1048573,
+     4294967197,
+@@ -16,14 +16,20 @@ const MODULI: [u64; 8] = [
+     1099511627581,
+     140737488355213,
+     281474976710597,
++    10916536653611741,
++    93266870910952069,
++    2402958527344632421,
+ ];
+ 
++/// The product modulo $`X^d+1`$, each term reduced modulo $`q`$ (exact products of centred
++/// 61-bit residues overflow `i128` once 128 of them are added).
+ fn schoolbook(ring: &Rq, a: &[u64], b: &[u64]) -> Vec<i128> {
+     let d = ring.degree();
++    let q = i128::from(ring.modulus());
+     let mut acc = vec![0i128; d];
+     for i in 0..d {
+         for j in 0..d {
+-            let p = i128::from(ring.center(a[i])) * i128::from(ring.center(b[j]));
++            let p = (i128::from(ring.center(a[i])) * i128::from(ring.center(b[j]))).rem_euclid(q);
+             if i + j < d {
+                 acc[i + j] += p;
+             } else {
+@@ -55,7 +61,7 @@ fn construction_accepts_exactly_the_supported_moduli_and_degrees() {
+         }
+     }
+     // Composite, 1 or 3 mod 8, out of range, and unsupported degrees.
+-    for q in [65557 * 3, 65537, 4294967291, 13, 1 << 48, (1 << 48) + 5] {
++    for q in [65557 * 3, 65537, 4294967291, 13, 1 << 62, (1 << 62) + 5] {
+         assert_eq!(
+             Rq::new(q, 64).err(),
+             Some(Error::Parameter("LaBRADOR modulus")),
+diff --git a/src/labrador/statement.rs b/src/labrador/statement.rs
+index 5b1bec8..685b716 100644
+--- a/src/labrador/statement.rs
++++ b/src/labrador/statement.rs
+@@ -222,25 +222,31 @@ impl Statement {
+         {
+             return Err(Error::Dimension);
+         }
+-        let norm: u128 = witness.vectors.iter().map(|v| ring.norm_sq(v)).sum();
++        let norm: u128 = witness
++            .vectors
++            .iter()
++            .map(|v| ring.norm_sq(v))
++            .fold(0, u128::saturating_add);
+         if norm > self.norm_sq {
+             return Err(Error::Witness);
+         }
+-        let hats: Zeroizing<Vec<Vec<u64>>> =
+-            Zeroizing::new(witness.vectors.iter().map(|v| ring.ntt_many(v)).collect());
++        let hats: Zeroizing<Vec<Vec<u64>>> = Zeroizing::new(crate::par::map(self.r, |i| {
++            ring.ntt_many(&witness.vectors[i])
++        }));
+         let pairs = Zeroizing::new(all_pairs(ring, &hats));
+-        for c in &self.full {
++        // Each constraint on its own (in parallel with `parallel`).
++        let full_ok = crate::par::map(self.full.len(), |j| {
++            let c = &self.full[j];
+             let mut value = evaluate(ring, c, &hats, &pairs, self.r);
+             ring.sub_assign(&mut value, &c.constant);
+-            if value.iter().any(|x| *x != 0) {
+-                return Err(Error::Witness);
+-            }
+-        }
+-        for c in &self.constant_term {
+-            let value = evaluate(ring, c, &hats, &pairs, self.r);
+-            if value[0] != c.constant[0] {
+-                return Err(Error::Witness);
+-            }
++            value.iter().all(|x| *x == 0)
++        });
++        let constant_ok = crate::par::map(self.constant_term.len(), |j| {
++            let c = &self.constant_term[j];
++            evaluate(ring, c, &hats, &pairs, self.r)[0] == c.constant[0]
++        });
++        if full_ok.iter().chain(&constant_ok).any(|ok| !ok) {
++            return Err(Error::Witness);
+         }
+         Ok(())
+     }
+@@ -354,12 +360,15 @@ impl Relation for Statement {
+     }
+ 
+     fn constant_term_values(&self, hats: &[Vec<u64>], pairs: &[Vec<u64>]) -> Vec<Vec<u64>> {
+-        self.constant_term
+-            .iter()
+-            .map(|c| evaluate(&self.ring, c, hats, pairs, self.r))
+-            .collect()
++        crate::par::map(self.constant_term.len(), |j| {
++            evaluate(&self.ring, &self.constant_term[j], hats, pairs, self.r)
++        })
+     }
+ 
++    /// The weighted sum of the constraints. The linear terms, which hold almost all of the
++    /// work (a transform per polynomial of every $`\varphi`$), are summed vector by vector, in
++    /// parallel with `parallel`: each vector's sums are those of the sequential order, and the
++    /// sums are exact residues, so the result does not depend on the threads.
+     fn aggregate(&self, alpha: &[Vec<u64>], gamma: &[Vec<u64>]) -> Result<Aggregate, Error> {
+         if alpha.len() != self.full.len() || gamma.len() != self.constant_term.len() {
+             return Err(Error::Dimension);
+@@ -367,16 +376,19 @@ impl Relation for Statement {
+         let ring = &self.ring;
+         let (d, k, r, n) = (ring.degree(), ring.hat_len(), self.r, self.n);
+         let mut quad: Vec<(usize, usize, Vec<u64>)> = Vec::new();
+-        let mut phi_hat = vec![vec![0u64; n * k]; r];
+-        let mut touched = vec![false; r];
+         let mut constant = vec![0u64; d];
+-        let weighted = self
++        let weighted: Vec<(&Constraint, &Vec<u64>)> = self
+             .full
+             .iter()
+             .zip(alpha)
+-            .chain(self.constant_term.iter().zip(gamma));
+-        for (index, (c, weight)) in weighted.enumerate() {
+-            if weight.iter().all(|x| *x == 0) {
++            .chain(self.constant_term.iter().zip(gamma))
++            .collect();
++        let live: Vec<bool> = weighted
++            .iter()
++            .map(|(_, w)| w.iter().any(|x| *x != 0))
++            .collect();
++        for (index, ((c, weight), live)) in weighted.iter().zip(&live).enumerate() {
++            if !live {
+                 continue;
+             }
+             for (i, j, a) in &c.quadratic {
+@@ -387,33 +399,38 @@ impl Relation for Statement {
+                     None => quad.push((lo, hi, product)),
+                 }
+             }
+-            if !c.linear.is_empty() {
+-                let w = ring.ntt(weight);
+-                for (i, offset, phi) in &c.linear {
+-                    touched[*i] = true;
+-                    for (x, poly) in phi.chunks_exact(d).enumerate() {
+-                        let at = (offset + x) * k;
+-                        ring.mac(&mut phi_hat[*i][at..at + k], &w, &ring.ntt(poly));
+-                    }
+-                }
+-            }
+             if index < self.full.len() {
+                 ring.add_assign(&mut constant, &ring.poly_mul(weight, &c.constant));
+             }
+         }
+-        let phi = phi_hat
+-            .into_iter()
+-            .zip(touched)
+-            .map(|(mut hat, touched)| {
+-                let mut out = vec![0u64; n * d];
+-                if touched {
+-                    for (h, o) in hat.chunks_exact_mut(k).zip(out.chunks_exact_mut(d)) {
+-                        ring.intt_into(h, o);
++        let weights: Vec<Option<Vec<u64>>> = crate::par::map(weighted.len(), |j| {
++            let (c, w) = weighted[j];
++            (live[j] && !c.linear.is_empty()).then(|| ring.ntt(w))
++        });
++        let phi = crate::par::map(r, |i| {
++            let mut hat = vec![0u64; n * k];
++            let mut touched = false;
++            for ((c, _), w) in weighted.iter().zip(&weights) {
++                let Some(w) = w else { continue };
++                for (vector, offset, phi) in &c.linear {
++                    if *vector != i {
++                        continue;
++                    }
++                    touched = true;
++                    for (x, poly) in phi.chunks_exact(d).enumerate() {
++                        let at = (offset + x) * k;
++                        ring.mac(&mut hat[at..at + k], w, &ring.ntt(poly));
+                     }
+                 }
+-                out
+-            })
+-            .collect();
++            }
++            let mut out = vec![0u64; n * d];
++            if touched {
++                for (h, o) in hat.chunks_exact_mut(k).zip(out.chunks_exact_mut(d)) {
++                    ring.intt_into(h, o);
++                }
++            }
++            out
++        });
+         Ok(Aggregate {
+             quad,
+             phi,
+diff --git a/src/math/ring.rs b/src/math/ring.rs
+index 6c63463..cfe4ce2 100644
+--- a/src/math/ring.rs
++++ b/src/math/ring.rs
+@@ -145,9 +145,8 @@ impl<const K: usize> FixedGarner<K> {
+         for i in 0..K {
+             let p = self.primes[i];
+             let mut sum = 0;
+-            for t in 0..i {
+-                let (w, w_shoup) = self.prefixes[i][t];
+-                sum = add_mod(sum, shoup_mul(digits[t], w, w_shoup, p), p);
++            for (&d, &(w, w_shoup)) in digits[..i].iter().zip(&self.prefixes[i]) {
++                sum = add_mod(sum, shoup_mul(d, w, w_shoup, p), p);
+             }
+             let (w, w_shoup) = self.inverses[i];
+             digits[i] = shoup_mul(sub_mod(residues[i][j], sum, p), w, w_shoup, p);
