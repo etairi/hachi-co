@@ -11,8 +11,7 @@ publish = false
 hachi-co-math.workspace = true
 hachi-co-sampling.workspace = true
 hachi-co-transcript.workspace = true
-# jali 0.3.1, the vendored copy that the root Cargo.toml patches in for crates.io's jali (vendor/jali: 0.3.0 at
-# 1ee3448 with vendor/jali.patch).
+# jali 0.3.1, the first release that takes LaBRADOR moduli up to 2^62 (0.3.0 stopped at 2^48).
 jali = { version = "0.3.1", features = ["parallel"] }
 rand.workspace = true
 rayon.workspace = true

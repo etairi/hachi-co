@@ -13,7 +13,7 @@
 # crates/r2l          WP9: ring evaluation claims to linear relations (masks, Rej, aborts)
 # crates/sumcheck     WP10: the collaborative sumcheck and its verifier
 # crates/hachico      WP11: the Hachi-Co PCS with Fiat-Shamir, proof format and sizes
-# crates/greyhound    Greyhound with LaBRADOR (jali, vendored in vendor/jali): the optional tail of Hachi's openings
+# crates/greyhound    Greyhound with LaBRADOR (jali): the optional tail of Hachi's openings
 [workspace]
 resolver = "3"
 members = ["crates/*"]
@@ -69,9 +69,3 @@ opt-level = 2
 lto = "fat"
 codegen-units = 1
 
-# jali 0.3.0 (its commit 1ee3448) with the changes of vendor/jali.patch: moduli up to 2^62
-# (saturated norms, the projection condition and the projection sums made wide enough), a
-# bounded base search in the level planner, a parallel aggregation and statement check, and
-# the planner's prediction of a proof's size.
-[patch.crates-io]
-jali = { path = "vendor/jali" }

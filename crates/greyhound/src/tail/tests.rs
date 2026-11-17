@@ -362,7 +362,7 @@ fn decoders_reject_garbage() {
 }
 
 /// Single claims at Hachi-Co's 48.4-bit modulus (secure100-l20-n4-a8) and at the three moduli
-/// the vendored jali takes beyond 2^48 (53.3, 56.4 and 61.1 bits).
+/// jali 0.3.1 takes beyond 2^48 (53.3, 56.4 and 61.1 bits).
 #[test]
 fn single_claims_at_hachi_co_moduli() {
     for q in [366142346648669, Q53, Q56, 2402958527344632421] {

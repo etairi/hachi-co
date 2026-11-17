@@ -21,8 +21,7 @@
 //!   verifies the LaBRADOR proof.
 //!
 //! The modulus is a runtime parameter: any prime $q \equiv 5 \pmod 8$ with $2^{16} < q < 2^{62}$.
-//! jali 0.3.0 takes only $q < 2^{48}$, and the workspace patches it to its vendored copy, 0.3.1
-//! (`vendor/jali`, with `vendor/jali.patch`), which takes moduli up to $2^{62}$.
+//! jali takes such moduli from its release 0.3.1 on, while 0.3.0 took only $q < 2^{48}$.
 //!
 //! [`tail`] is the tail of Hachi-Co's base PCS: commitments to Hachi's final tables of digits
 //! and one LaBRADOR proof of several multilinear evaluation claims over $\mathbb F_{q^K}$.

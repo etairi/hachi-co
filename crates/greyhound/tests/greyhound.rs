@@ -152,7 +152,7 @@ fn proofs_verify_and_tampering_fails() {
     assert!(verify(&pp, &com, x, y2, &proof2).is_err());
 }
 
-/// The vendored jali takes moduli up to 2^62 (jali 0.3.0 stopped at 2^48): proofs at C's
+/// jali 0.3.1 takes moduli up to 2^62 (0.3.0 stopped at 2^48): proofs at C's
 /// LOGQ = 56 modulus and at three moduli of Hachi-Co's presets (53.3, 56.4 and 61.1 bits).
 #[test]
 fn labrador_at_large_moduli() {
