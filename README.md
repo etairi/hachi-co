@@ -140,7 +140,7 @@ This repository started from the public Hachi prototype by the authors of the Ha
 and Jiapeng Zhang, "Hachi: Efficient Lattice-Based Multilinear Polynomial Commitments over Extension Fields",
 Cryptology ePrint Archive 2026/156). `crates/hachi` started from that code.
 
-Parts of the NTT, CRT, samplers and transcript are adapted from the author's own MIT-licensed library jali.
+Parts of the NTT, CRT, samplers and transcript are adapted from the MIT-licensed library jali.
 
 ## License
 

@@ -11,7 +11,7 @@
 //! $b$-bit words; one word per try is simpler to reproduce from Python or Sage, which the
 //! known-answer tests do, at the cost of more stream bytes.)
 
-// Ported from jali (MIT, (c) 2026 Erkan Tairi): src/rand/uniform.rs (`uniform`, `bounded`), with one
+// Ported from jali (MIT): src/rand/uniform.rs (`uniform`, `bounded`), with one
 // 64-bit word per try instead of packed words.
 
 use crate::draw::{Draw, FromRng};

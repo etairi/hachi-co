@@ -38,7 +38,7 @@ pub enum TauRule {
     /// The least $\tau$ with $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$: every
     /// $z$ with $\lVert z \rVert_\infty \le \beta$ is representable. This is the Setup's $\tau$ as
     /// the draft states it since its commit `21f2b41` (`6_Collaborative_Hachi.tex`, Setup, and
-    /// `4_preliminaries.tex`:65), and the user's choice of 2026-10-17 before that. The default.
+    /// `4_preliminaries.tex`:65), and the choice of 2026-10-17 before that. The default.
     #[default]
     Tight,
     /// $\tau = \lceil \log_b \beta \rceil + 1$, the draft's rule until its commit `21f2b41`

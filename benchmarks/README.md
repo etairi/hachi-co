@@ -194,7 +194,7 @@ python3 scripts/bench_table.py --medians runs/docker.jsonl
 Checked on 2026-11-12 on this Mac: `toy-n2` with the local transport (two repetitions), and `bench-l16-n4` (two
 repetitions) and `toy-n4` in four containers with an RTT of 50 ms and 200 Mbit/s. Every run was accepted, and the
 measured round trips (51 to 55 ms at the minimum) and throughput (165 to 191 Mbit/s) match the emulation. `gcp.py` was
-checked only as a dry run, since nothing may be created without the project and the user's go-ahead.
+then checked only as a dry run.
 
 Also checked on 2026-11-12: `wan_grid.py` over the three settings of PPP26 in four containers with `toy-n4` (two
 repetitions each, Eval growing with the RTT, and a rerun that skipped every cell), and PPP26's PCS mode built and run

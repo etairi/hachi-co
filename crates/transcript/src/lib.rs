@@ -33,7 +33,7 @@
 //! WP5), and ratcheting challenges. `tests/fixtures/gen_kat.py` reimplements it with Python's
 //! `hashlib.shake_128` for the known-answer tests.
 
-// Ported from jali (MIT, (c) 2026 Erkan Tairi): src/transcript.rs (framed labels, challenge_seed).
+// Ported from jali (MIT): src/transcript.rs (framed labels, challenge_seed).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

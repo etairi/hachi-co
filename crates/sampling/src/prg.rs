@@ -5,7 +5,7 @@
 //! with `tag` = [`PRG_TAG`]. Every field carries its length, so distinct
 //! `(seed, domain, index)` triples give distinct SHAKE128 inputs.
 
-// Ported from jali (MIT, (c) 2026 Erkan Tairi): src/rand/prg.rs (`ShakePrg`) with the framing of
+// Ported from jali (MIT): src/rand/prg.rs (`ShakePrg`) with the framing of
 // src/rand/key.rs (`derive_key`).
 
 use core::convert::Infallible;

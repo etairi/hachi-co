@@ -95,7 +95,7 @@ pub fn num_digits(q: u64, b: u64) -> Result<usize> {
 
 /// The tight $\tau$: the least $\tau$ with $(\lceil b/2 \rceil - 1)(b^\tau - 1)/(b - 1) \ge \beta$,
 /// so that every integer of $[-\beta, \beta]$ has $\tau$ balanced digits (`docs/m0-spec.md`,
-/// "τ rule", the user's decision of 2026-10-17, and the draft's Setup since its commit `21f2b41`).
+/// "τ rule", the decision of 2026-10-17, and the draft's Setup since its commit `21f2b41`).
 /// For $\beta = 0$ this is $\tau = 0$.
 ///
 /// # Errors
