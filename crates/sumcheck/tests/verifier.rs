@@ -15,8 +15,8 @@ use common::{
 use hachi_co_core::{Fixture, LinearShare, Poly, ReplayChallenger, escape_key};
 use hachi_co_math::Ext;
 use hachi_co_sumcheck::{
-    ClaimedPoly, PublicInput, SumcheckPrivate, SumcheckTranscript, VerifyError, check_names,
-    quotient_share, verify, verify_checks, verify_claims,
+    ClaimedPoly, PublicInput, RowSource, SumcheckPrivate, SumcheckTranscript, VerifyError,
+    check_names, quotient_share, verify, verify_checks, verify_claims,
 };
 use std::collections::BTreeSet;
 
@@ -182,6 +182,64 @@ fn fixture_transcripts_are_accepted() {
             verify(ctx, &pcs, &pubin, &fixture_transcript(fx), &mut ch),
             Err(VerifyError::Shape { .. })
         ));
+    }
+}
+
+/// The verifier with $\mathbf M$ read one row at a time ([`PublicInput::with_rows`]) gives the
+/// report of the verifier with $\mathbf M$ whole, on every fixture: the same checks, claimed sum,
+/// $\widetilde M^\ast(\mathbf a)$ and claims; a tampered row fails as the tampered matrix does,
+/// and a row of the wrong length is an error.
+#[test]
+fn the_verifier_with_m_by_rows_is_the_verifier_with_m() {
+    for (inst, run) in instances().iter().zip(honest_runs()) {
+        let (ctx, fx) = (&inst.ctx, &inst.fx);
+        let transcript = honest_transcript(inst, run);
+        let pcs = clear_pcs(inst.field());
+        let row = |i: usize| -> hachi_co_core::Result<Vec<Poly>> { Ok(inst.m[i].clone()) };
+        let by_rows = PublicInput::with_rows(ctx, RowSource(&row), &inst.y, &inst.e, &inst.y_ring);
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        let whole = verify_checks(ctx, &pcs, &public(inst), &transcript, &mut ch).unwrap();
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        let read = verify_checks(ctx, &pcs, &by_rows, &transcript, &mut ch).unwrap();
+        assert!(read.accepted(), "{}: {:?}", inst.name, read.failing());
+        assert_eq!(read.mstar_at_a, whole.mstar_at_a, "{}", inst.name);
+        assert_eq!(read.claimed_sum, whole.claimed_sum, "{}", inst.name);
+        assert_eq!(read.claims, whole.claims, "{}", inst.name);
+        assert_eq!(read.named_checks(), whole.named_checks(), "{}", inst.name);
+        // One coefficient of M changed: the same failing checks either way.
+        let mut m_other = inst.m.clone();
+        let q = ctx.q();
+        m_other[0][0].0[0] = (m_other[0][0].0[0] + 1) % q;
+        let tampered = |i: usize| -> hachi_co_core::Result<Vec<Poly>> { Ok(m_other[i].clone()) };
+        let bad_rows =
+            PublicInput::with_rows(ctx, RowSource(&tampered), &inst.y, &inst.e, &inst.y_ring);
+        let bad_whole = PublicInput::new(ctx, &m_other, &inst.y, &inst.e, &inst.y_ring);
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        let mut f_rows = verify_checks(ctx, &pcs, &bad_rows, &transcript, &mut ch)
+            .unwrap()
+            .failing();
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        let mut f_whole = verify_checks(ctx, &pcs, &bad_whole, &transcript, &mut ch)
+            .unwrap()
+            .failing();
+        f_rows.sort();
+        f_whole.sort();
+        assert!(
+            !f_rows.is_empty(),
+            "{}: a tampered M is rejected",
+            inst.name
+        );
+        assert_eq!(f_rows, f_whole, "{}", inst.name);
+        // A row one polynomial short is a shape error.
+        let short = |i: usize| -> hachi_co_core::Result<Vec<Poly>> {
+            let mut r = inst.m[i].clone();
+            r.pop();
+            Ok(r)
+        };
+        let short_rows =
+            PublicInput::with_rows(ctx, RowSource(&short), &inst.y, &inst.e, &inst.y_ring);
+        let mut ch = ReplayChallenger::new(fx).unwrap();
+        assert!(verify_checks(ctx, &pcs, &short_rows, &transcript, &mut ch).is_err());
     }
 }
 

@@ -773,6 +773,32 @@ pub(crate) fn column_weights<const K: usize>(
     c
 }
 
+/// [`column_weights`] with the $n'$ rows of $\mathbf M$ read one at a time from `rows`, in order,
+/// each of `cols` polynomials of `d` coefficients and dropped after it is added: the same weights
+/// (the same additions in the same order), without holding $\mathbf M$.
+///
+/// # Errors
+/// [`Error::Shape`] for a row of the wrong shape, and the errors of `rows`.
+pub(crate) fn column_weights_rows<const K: usize>(
+    field: &Fqk<K>,
+    rows: &(dyn Fn(usize) -> hachi_co_core::Result<Vec<Poly>> + Sync),
+    n_rows: usize,
+    cols: usize,
+    d: usize,
+    eq1: &[Ext<K>],
+    apow: &[Ext<K>],
+) -> Result<Vec<Ext<K>>> {
+    let mut c = vec![field.zero(); cols];
+    for (i, e) in eq1.iter().enumerate().take(n_rows) {
+        let row = rows(i)?;
+        check_row(&row, cols, d)?;
+        add_row_weights(field, &mut c, &row, e, apow);
+        // The row's many ring elements are dropped in parallel.
+        row.into_par_iter().for_each(drop);
+    }
+    Ok(c)
+}
+
 /// Adds row $i'$ of $\mathbf M$, of weight $e = \widetilde{eq}(\tau\_1, \mathsf{bit}(i'))$, to the
 /// column weights of [`column_weights`]: $c\_u \mathrel{+}= \sum\_j M\_{i',u,j} \beta\_j$ with
 /// $\beta\_j = e \alpha^j$. The columns run in parallel, each over its coefficients in order.

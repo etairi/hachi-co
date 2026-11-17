@@ -9,9 +9,9 @@ use crate::error::VerifyError;
 use crate::proof::EvalProof;
 use crate::statement::{EVAL_DOMAIN, absorb_statement, check_statement};
 use hachi_co_conv::{LABEL_E_U, e_matrix, public_vectors};
-use hachi_co_core::{BasePcs, Challenger, Context, Ext, FsChallenger, Poly};
-use hachi_co_r2l::{linear_relation, verifier_challenges, verifier_iteration};
-use hachi_co_sumcheck::{FinalClaims, PublicInput};
+use hachi_co_core::{BasePcs, Challenger, Context, Ext, FsChallenger, MRows, Poly, build_y};
+use hachi_co_r2l::{check_relation, verifier_challenges, verifier_iteration};
+use hachi_co_sumcheck::{FinalClaims, PublicInput, RowSource};
 
 /// The verifier with Fiat-Shamir: [`verify_with`] on a fresh [`FsChallenger`] with the domain
 /// [`EVAL_DOMAIN`]. `Ok(y)` means that the proof is accepted and that the polynomial committed in
@@ -85,8 +85,11 @@ pub fn verify_with<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
 ///    $\mathbf c \in \mathcal C^{2^r}$), the selected iteration ([`verifier_iteration`]: absorb
 ///    the provers' sets of accepted iterations, $j^\ast$ the smallest in all of them, and
 ///    [`NoCommonIteration`](hachi_co_r2l::Error::NoCommonIteration) if there is none,
-///    `fig:ring-to-linear`, step 6), and $\mathbf M$, $\mathbf y$ ([`linear_relation`],
-///    `5_Building_Blocks.tex`:170-193);
+///    `fig:ring-to-linear`, step 6), and $\mathbf M$, $\mathbf y$ (`5_Building_Blocks.tex`:170-193):
+///    the checks of [`hachi_co_r2l::linear_relation`] ([`check_relation`]) and $\mathbf y$
+///    ([`build_y`]), with $\mathbf M$ read one row at a time when the sumcheck verifier forms the
+///    column weights of $\widetilde M^\ast$ ([`MRows`], [`PublicInput::with_rows`]), so that it is
+///    never held whole;
 /// 4. the matrix of $E$ at the point $v$ ([`e_matrix`]) and $y$ embedded in $\mathcal R\_q^H$
 ///    (`ref/README.md`, choice 12);
 /// 5. the sumcheck verifier with the base PCS ([`hachi_co_sumcheck::verify_claims`],
@@ -122,11 +125,17 @@ pub fn verify_claims_with<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     let c = verifier_challenges(ctx, ch, &proof.v).map_err(VerifyError::RingToLinear)?;
     let j_star =
         verifier_iteration(ctx, ch, &proof.accept_sets).map_err(VerifyError::RingToLinear)?;
-    let rel =
-        linear_relation(ctx, &pv, &proof.v, &c, j_star, u).map_err(VerifyError::RingToLinear)?;
+    // The checks of `linear_relation`; M itself is read by rows when the column weights of M*
+    // are formed (`MRows`, the rows of `build_m`, from public values), so that the verifier
+    // never holds M whole, as the provers do not.
+    check_relation(ctx, &pv, &proof.v, &c, u).map_err(VerifyError::RingToLinear)?;
+    let rows = MRows::new(ctx, &pv.b_ring, &pv.a_ring, &c, j_star)
+        .map_err(|e| VerifyError::RingToLinear(e.into()))?;
+    let y_rel = build_y(ctx, &proof.v, u).map_err(|e| VerifyError::RingToLinear(e.into()))?;
     let e = e_matrix(ctx, &pv.v_point).map_err(VerifyError::PublicVectors)?;
     let y_ring = ctx.sub.embed(&y);
-    let public = PublicInput::new(ctx, &rel.m, &rel.y, &e, &y_ring);
+    let row = |i: usize| rows.row(i);
+    let public = PublicInput::with_rows(ctx, RowSource(&row), &y_rel, &e, &y_ring);
     let claims = hachi_co_sumcheck::verify_claims(ctx, pcs, &public, &proof.sumcheck, ch)
         .map_err(VerifyError::Sumcheck)?;
     Ok((y, claims))

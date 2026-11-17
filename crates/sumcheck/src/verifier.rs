@@ -10,20 +10,45 @@ use crate::eq::{eq_eval, eq_point, eq_table, msb_bits};
 use crate::error::{Error, Result, VerifyError, check_len, pow2};
 use crate::interp::Nodes;
 use crate::quotient::check_matrix;
-use crate::tables::{RangeProduct, claimed_sum, column_weights, ind_rows, powers};
+use crate::tables::{
+    RangeProduct, claimed_sum, column_weights, column_weights_rows, ind_rows, powers,
+};
 use crate::transcript::{Claim, ClaimedPoly, FinalClaims, SumcheckTranscript};
 use core::ops::Range;
 use hachi_co_core::{BasePcs, Challenger, Context, Layout, Poly};
 use hachi_co_math::{Ext, Fqk};
 use hachi_co_params::PadRule;
 
+/// The rows of $\mathbf M$ for a verifier that reads them one at a time
+/// ([`hachi_co_core::MRows::row`]) instead of holding $\mathbf M$ whole: row $i$ for
+/// $i \lt n'$, each read once and in order.
+#[derive(Clone, Copy)]
+pub struct RowSource<'a>(pub &'a (dyn Fn(usize) -> hachi_co_core::Result<Vec<Poly>> + Sync));
+
+impl core::fmt::Debug for RowSource<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RowSource")
+    }
+}
+
+impl PartialEq for RowSource<'_> {
+    /// The same function.
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for RowSource<'_> {}
+
 /// The public inputs of the verifier, all computed from public data
 /// (`5_Building_Blocks.tex`:167-196, 283-298; the oracle's `oracle.verifier_public`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInput<'a> {
     /// $\mathbf M \in \mathcal R\_q^{n' \times (\mu - 1)}$ of the challenges and the selected
-    /// iteration ([`hachi_co_core::build_m`]).
+    /// iteration ([`hachi_co_core::build_m`]), or empty when `rows` reads it by rows.
     pub m: &'a [Vec<Poly>],
+    /// The rows of $\mathbf M$ formed when read ([`PublicInput::with_rows`]), in place of `m`.
+    pub rows: Option<RowSource<'a>>,
     /// $\mathbf y = (\mathbf v, \mathbf u, 0, 0, \mathbf 0) \in \mathcal R\_q^{n'}$
     /// ([`hachi_co_core::build_y`]).
     pub y: &'a [Poly],
@@ -48,6 +73,7 @@ impl<'a> PublicInput<'a> {
     ) -> Self {
         Self {
             m,
+            rows: None,
             y,
             e_matrix,
             y_ring,
@@ -55,15 +81,36 @@ impl<'a> PublicInput<'a> {
         }
     }
 
+    /// [`PublicInput::new`] with $\mathbf M$ read one row at a time from `rows` when the column
+    /// weights of $\widetilde M^\ast$ are formed, so that the verifier never holds $\mathbf M$:
+    /// rows that the verifier forms itself from public data ([`hachi_co_core::MRows`]), whose
+    /// shapes are checked as they are read and whose residues are canonical by construction.
+    /// The same verdicts and claims as [`PublicInput::new`] with those rows.
+    pub fn with_rows<const K: usize>(
+        ctx: &Context<K>,
+        rows: RowSource<'a>,
+        y: &'a [Poly],
+        e_matrix: &'a [Vec<u64>],
+        y_ring: &'a Poly,
+    ) -> Self {
+        Self {
+            rows: Some(rows),
+            ..Self::new(ctx, &[], y, e_matrix, y_ring)
+        }
+    }
+
     /// Checks every shape ($\mathbf M$: $n' \times (\mu - 1)$; $\mathbf y$: $n'$; $E$: $d \times d$; $d$
     /// coefficients per polynomial; $n$ lists of ranges inside $\[0, 2^{\ell\_U})$) and that every
-    /// residue is canonical.
+    /// residue is canonical; with `rows`, the rows of $\mathbf M$ are checked when they are read
+    /// instead.
     ///
     /// # Errors
     /// [`VerifyError::Shape`] or [`VerifyError::NonCanonical`].
     pub fn validate(&self, layout: &Layout, q: u64) -> core::result::Result<(), VerifyError> {
         let d = layout.d;
-        check_matrix(self.m, layout.n_prime, layout.len_z, d)?;
+        if self.rows.is_none() {
+            check_matrix(self.m, layout.n_prime, layout.len_z, d)?;
+        }
         check_len("y (one entry per row of M)", layout.n_prime, self.y.len())?;
         check_len("E matrix (rows)", d, self.e_matrix.len())?;
         check_len("y as a ring element", d, self.y_ring.0.len())?;
@@ -283,9 +330,56 @@ pub fn mstar_eval_factorized<const K: usize>(
     point: &[Ext<K>],
 ) -> Result<Ext<K>> {
     let l = &ctx.layout;
+    check_matrix(m, l.n_prime, l.len_z, l.d)?;
+    mstar_eval_with(
+        ctx,
+        |f, apow| Ok(column_weights(f, m, eq1, apow)),
+        e_matrix,
+        eq1,
+        alpha,
+        point,
+    )
+}
+
+/// [`mstar_eval_factorized`] with the rows of $\mathbf M$ read one at a time from `rows`
+/// ([`PublicInput::with_rows`]) when the column weights are formed: the same value, without
+/// holding $\mathbf M$.
+///
+/// # Errors
+/// As [`mstar_eval_factorized`], for a row of the wrong shape when it is read, and those of
+/// `rows`.
+pub fn mstar_eval_factorized_rows<const K: usize>(
+    ctx: &Context<K>,
+    rows: RowSource<'_>,
+    e_matrix: &[Vec<u64>],
+    eq1: &[Ext<K>],
+    alpha: &Ext<K>,
+    point: &[Ext<K>],
+) -> Result<Ext<K>> {
+    let l = &ctx.layout;
+    mstar_eval_with(
+        ctx,
+        |f, apow| column_weights_rows(f, rows.0, l.n_prime, l.len_z, l.d, eq1, apow),
+        e_matrix,
+        eq1,
+        alpha,
+        point,
+    )
+}
+
+/// The evaluation of [`mstar_eval_factorized`] with the column weights $c\_u$ given by
+/// `weights` (from the field and $\alpha^0, \dots, \alpha^{d-1}$).
+fn mstar_eval_with<const K: usize>(
+    ctx: &Context<K>,
+    weights: impl FnOnce(&Fqk<K>, &[Ext<K>]) -> Result<Vec<Ext<K>>>,
+    e_matrix: &[Vec<u64>],
+    eq1: &[Ext<K>],
+    alpha: &Ext<K>,
+    point: &[Ext<K>],
+) -> Result<Ext<K>> {
+    let l = &ctx.layout;
     let f = ctx.field();
     let (d, mu, np) = (l.d, l.mu, l.n_prime);
-    check_matrix(m, np, l.len_z, d)?;
     check_len("E matrix (rows)", d, e_matrix.len())?;
     for row in e_matrix {
         check_len("E matrix (columns)", d, row.len())?;
@@ -309,7 +403,7 @@ pub fn mstar_eval_factorized<const K: usize>(
         square = f.square(&square);
     }
     let apow = powers(f, alpha, d + 1);
-    let c = column_weights(f, m, eq1, &apow[..d]);
+    let c = weights(f, &apow[..d])?;
     let dot = |x: &[Ext<K>], y: &[Ext<K>]| {
         x.iter()
             .zip(y)
@@ -589,7 +683,10 @@ pub fn verify_checks<const K: usize, P: BasePcs<K>, H: Challenger<K>>(
     let range_sum = |rows: &Range<usize>| sum(f, &eq_u[rows.clone()]);
     let ind = range_sum(&ind_rows(l));
     let eq_tau_a = eq_eval(f, &tau0[..l.ell_pp], &point)?;
-    let mstar = mstar_eval_factorized(ctx, public.m, public.e_matrix, &eq1, &alpha, &point)?;
+    let mstar = match public.rows {
+        Some(rows) => mstar_eval_factorized_rows(ctx, rows, public.e_matrix, &eq1, &alpha, &point)?,
+        None => mstar_eval_factorized(ctx, public.m, public.e_matrix, &eq1, &alpha, &point)?,
+    };
     let range = RangeProduct::new(f.zq(), ctx.b());
     let one = f.one();
     let (mut total0, mut total1) = (f.zero(), f.zero());

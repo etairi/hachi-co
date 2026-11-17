@@ -95,6 +95,7 @@ pub use transcript::{
     SumcheckPrivate, SumcheckTranscript,
 };
 pub use verifier::{
-    Check, FINAL_H0, FINAL_H1, OpeningCheck, PublicInput, VerifierReport, check_names,
-    mstar_eval_factorized, round_check_name, verify, verify_checks, verify_claims,
+    Check, FINAL_H0, FINAL_H1, OpeningCheck, PublicInput, RowSource, VerifierReport, check_names,
+    mstar_eval_factorized, mstar_eval_factorized_rows, round_check_name, verify, verify_checks,
+    verify_claims,
 };
