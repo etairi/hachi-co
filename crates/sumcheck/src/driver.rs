@@ -5,13 +5,15 @@
 
 use crate::blinder::{blinder_coefficients, blinder_weights};
 use crate::error::{Error, Result, check_len};
-use crate::prover::PartyProver;
+use crate::prover::{Base, PartyProver};
 use crate::quotient::{check_matrix, quotient_share_rows};
-use crate::tables::{EqSplit, MStarParts, put_pad_residues, w_table};
+use crate::tables::{
+    BaseTable, CompactCoeffs, CompactTable, EqSplit, MStarParts, put_pad_residues, w_table,
+};
 use crate::transcript::{
     ClaimedPoly, FinalValues, PcsWords, RoundMessage, SumcheckPrivate, SumcheckTranscript,
 };
-use hachi_co_core::base_pcs::{LiftedCoeffs, mobius, mobius_ext};
+use hachi_co_core::base_pcs::{LiftedCoeffs, PartedCoeffs, mobius, mobius_ext};
 use hachi_co_core::wire::{flatten_exts, join_words, split_words, unflatten_exts};
 use hachi_co_core::{
     BasePcs, BlinderKind, Challenger, Context, LinearShare, PartyRandomness, Poly,
@@ -344,9 +346,19 @@ fn prove_with<
     if party == 0 || party > n {
         return Err(Error::InvalidParty { party, n });
     }
-    // Steps 1-2.
+    // Steps 1-2. With the pad in the field and separate commitments, the table is formed compactly
+    // from the share (`CompactTable::from_share`), and the commitment reads its coefficients a
+    // part at a time (step 3), so that neither is held whole; otherwise as `w_table` forms it.
     let quotient = quotient_share_rows(ctx, &mut rows, share.get())?;
-    let mut table = w_table(ctx, &share.get().z_prime, &quotient)?;
+    let compact = if l.pad_rule == PadRule::Field && !pcs.merges() {
+        CompactTable::from_share(ctx, &share.get().z_prime, &quotient)?
+    } else {
+        None
+    };
+    let mut table = match compact {
+        Some(_) => Vec::new(),
+        None => w_table(ctx, &share.get().z_prime, &quotient)?,
+    };
     // A lean run drops the share here, after its last reader.
     let share = if lean {
         drop(share);
@@ -366,7 +378,13 @@ fn prove_with<
             None
         }
     };
-    let mut prover = PartyProver::new(ctx, party, table, pad, g0, g1)?;
+    let mut prover = match compact {
+        Some(compact) => PartyProver::from_compact(ctx, party, compact, pad, g0, g1)?,
+        None => PartyProver::new(ctx, party, table, pad, g0, g1)?,
+    };
+    // The fingerprint of the coefficients and the digest of the table when the commitment read
+    // them in parts: the opening reads them in parts again, from the same table.
+    let mut parts_commit: Option<(u64, u64)> = None;
     // Step 3: the three commitments of the draft, or one if the base PCS merges them, with the
     // blinders' items left empty.
     let (states, local) = if pcs.merges() {
@@ -393,6 +411,27 @@ fn prove_with<
         let (st_w, com_w) = {
             let seed = rng.base_pcs(ClaimedPoly::W.seed_index(false))?;
             let (com, st) = match l.pad_rule {
+                PadRule::Field if prover.compact_table().is_some() => {
+                    // The coefficients a part of at most 2^26 at a time (`CompactCoeffs`): those
+                    // of `LiftedCoeffs` on the same table and pad, with its fingerprint.
+                    let compact = prover.compact_table().expect("a compact table");
+                    let parts = (compact.entries() >> 26).max(1);
+                    let coeffs = CompactCoeffs::new(field, compact, prover.pad_entry(), parts)?;
+                    let prepare = |p: usize| coeffs.prepare(p);
+                    let read = |start: usize, out: &mut [Ext<K>]| coeffs.read(start, out);
+                    let fingerprint = || coeffs.fingerprint();
+                    let parted = PartedCoeffs {
+                        vars: l.ell_pp,
+                        parts,
+                        prepare: &prepare,
+                        read: &read,
+                        fingerprint: &fingerprint,
+                    };
+                    let (com, mut st) = pcs.commit_multilinear_ext_parts(&parted, &seed)?;
+                    parts_commit = Some((coeffs.fingerprint(), compact.digest()));
+                    pcs.shed(&mut st);
+                    (com, st)
+                }
                 PadRule::Field => {
                     // The coefficients as the Möbius transform of the base table and the pad
                     // (`LiftedCoeffs`), which the base PCS may read one at a time instead of
@@ -435,6 +474,10 @@ fn prove_with<
             ],
         )
     };
+    // The commitment was the last reader of the table itself: the rounds read it compactly
+    // (`PartyProver::compact`), the same entries in a byte each outside the rows of `ind_rows`,
+    // and the opening forms it again (`PartyProver::into_parts`).
+    prover.compact();
     // Step 4.
     let (s0, s1) = prover.hypercube_sums();
     let sums = all_gather(comm, ALL_GATHER_SUMS, n, &[s0, s1])?;
@@ -492,7 +535,7 @@ fn prove_with<
     // Step 8. The prover's parts: its table goes to the share's opening, which forms the
     // coefficients of step 3 again from it and frees it, so that it is not held through the
     // opening (the private output forms it again at the end).
-    let (w_base, pad, g0, g1, point) = prover.into_parts();
+    let (w_base, pad, g0, g1, point) = prover.into_parts_held();
     let mut base = Some(w_base);
     let expected = [mine.0, mine.1, mine.2];
     let mut proofs: [Vec<u64>; 3] = Default::default();
@@ -553,15 +596,49 @@ fn prove_with<
                         })?;
                         let (value, proof) = match l.pad_rule {
                             PadRule::Field => {
-                                // The coefficients of step 3 again, from the same table, which is
-                                // not read again: its Möbius transform in place.
+                                // The coefficients of step 3 again, from the same table: in parts
+                                // if the commitment read them in parts, otherwise the Möbius
+                                // transform of the table in place.
                                 let base = base.take().ok_or_else(|| {
                                     Error::State("the share's table is read once".into())
                                 })?;
-                                let coeffs = LiftedCoeffs::from_table(field, base, pad)?;
-                                pcs.prove_multilinear_ext_lifted(
-                                    st, coeffs, &point, &context, &seed,
-                                )?
+                                match (base, parts_commit) {
+                                    (Base::Compact(table), Some((fingerprint, digest))) => {
+                                        if table.digest() != digest {
+                                            return Err(Error::State(
+                                                "the share's table changed after its commitment"
+                                                    .into(),
+                                            ));
+                                        }
+                                        let parts = (table.entries() >> 26).max(1);
+                                        let coeffs = CompactCoeffs::new(field, &table, pad, parts)?;
+                                        let prepare = |p: usize| coeffs.prepare(p);
+                                        let read = |start: usize, out: &mut [Ext<K>]| {
+                                            coeffs.read(start, out)
+                                        };
+                                        let fingerprint = || fingerprint;
+                                        let parted = PartedCoeffs {
+                                            vars: l.ell_pp,
+                                            parts,
+                                            prepare: &prepare,
+                                            read: &read,
+                                            fingerprint: &fingerprint,
+                                        };
+                                        pcs.prove_multilinear_ext_parts(
+                                            st, &parted, &point, &context, &seed,
+                                        )?
+                                    }
+                                    (base, _) => {
+                                        let coeffs = LiftedCoeffs::from_table(
+                                            field,
+                                            base.into_dense(),
+                                            pad,
+                                        )?;
+                                        pcs.prove_multilinear_ext_lifted(
+                                            st, coeffs, &point, &context, &seed,
+                                        )?
+                                    }
+                                }
                             }
                             PadRule::Residues => {
                                 pcs.prove_multilinear(&st, &point, &context, &seed)?

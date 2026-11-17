@@ -43,7 +43,7 @@
 use crate::error::Error;
 use hachi::pcs::ExtSource;
 use hachi::{Commitment, HachiChoices, HachiPcs, Hiding, Proof, State};
-use hachi_co_core::base_pcs::LiftedCoeffs;
+use hachi_co_core::base_pcs::{LiftedCoeffs, PartedCoeffs};
 use hachi_co_core::{BasePcs, Context, Layout};
 use hachi_co_math::Ext;
 use hachi_co_params::{BasePcsWords, PadRule};
@@ -375,9 +375,64 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
                 coeffs.coeffs_into(start, out);
             }),
             fingerprint,
+            parts: None,
         };
         self.pcs
             .commit_multilinear_ext_source(&source, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::commit_multilinear_ext_source`] on the coefficients read one part at a time
+    /// ([`hachi::pcs::SourceParts`]): neither they nor their packed message are held whole, only
+    /// the part `coeffs` forms.
+    fn commit_multilinear_ext_parts(
+        &self,
+        coeffs: &PartedCoeffs<'_, K>,
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Commitment, State<K>)> {
+        let source = ExtSource {
+            vars: coeffs.vars,
+            read: std::sync::Arc::new(|start: usize, out: &mut [Ext<K>]| (coeffs.read)(start, out)),
+            fingerprint: 0,
+            parts: Some(hachi::pcs::SourceParts {
+                count: coeffs.parts,
+                prepare: std::sync::Arc::new(|p: usize| {
+                    (coeffs.prepare)(p)
+                        .map_err(|e| hachi::Error::Protocol(format!("forming part {p}: {e}")))
+                }),
+                fingerprint: std::sync::Arc::new(|| (coeffs.fingerprint)()),
+            }),
+        };
+        self.pcs
+            .commit_multilinear_ext_source(&source, seed)
+            .map_err(base_error)
+    }
+
+    /// [`HachiPcs::prove_multilinear_ext_source`] with the coefficients read one part at a time
+    /// ([`hachi::pcs::SourceParts`]), each pass over the message preparing the parts in order.
+    fn prove_multilinear_ext_parts(
+        &self,
+        st: State<K>,
+        coeffs: &PartedCoeffs<'_, K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> hachi_co_core::Result<(Ext<K>, Proof<K>)> {
+        let source = ExtSource {
+            vars: coeffs.vars,
+            read: std::sync::Arc::new(|start: usize, out: &mut [Ext<K>]| (coeffs.read)(start, out)),
+            fingerprint: (coeffs.fingerprint)(),
+            parts: Some(hachi::pcs::SourceParts {
+                count: coeffs.parts,
+                prepare: std::sync::Arc::new(|p: usize| {
+                    (coeffs.prepare)(p)
+                        .map_err(|e| hachi::Error::Protocol(format!("forming part {p}: {e}")))
+                }),
+                fingerprint: std::sync::Arc::new(|| (coeffs.fingerprint)()),
+            }),
+        };
+        self.pcs
+            .prove_multilinear_ext_source(st, source, point, context, seed)
             .map_err(base_error)
     }
 
@@ -399,6 +454,7 @@ impl<const K: usize> BasePcs<K> for HachiBase<K> {
                 coeffs.coeffs_into(start, out);
             }),
             fingerprint,
+            parts: None,
         };
         self.pcs
             .prove_multilinear_ext_source(st, source, point, context, seed)

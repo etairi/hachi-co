@@ -7,7 +7,7 @@
 //! words, and malformed encodings are rejected. Pinned outputs guard against unintended changes.
 
 use hachi::params::{MAX_ITERATIONS, max_digit};
-use hachi::pcs::ExtSource;
+use hachi::pcs::{ExtSource, SourceParts};
 use hachi::table::ResidueTable;
 use hachi::{FinalWitness, HachiChoices, HachiPcs, Layout, Proof, Schedule};
 use hachi_co_math::{Ext, Fqk};
@@ -260,6 +260,7 @@ fn a_commitment_from_a_source_opens_to_the_proof_of_its_coefficients() {
             vars,
             read: std::sync::Arc::new(read),
             fingerprint: 7,
+            parts: None,
         };
         let (source_com, from_source) = pcs.commit_multilinear_ext_source(&source, &SEED).unwrap();
         assert_eq!(source_com, com, "vars {vars} hiding {hiding}");
@@ -289,6 +290,76 @@ fn a_commitment_from_a_source_opens_to_the_proof_of_its_coefficients() {
             )
             .is_err()
         );
+        // The same coefficients read in parts: the same commitment, each part prepared once in
+        // order before its coefficients are read, and the parts' fingerprint in the state, which
+        // the opening with the source checks.
+        for count in [1usize, 2, 4] {
+            let prepared = std::sync::Mutex::new(Vec::new());
+            let current = std::sync::atomic::AtomicUsize::new(usize::MAX);
+            let per = (1usize << vars) / count;
+            let parted = ExtSource {
+                vars,
+                read: std::sync::Arc::new(|start: usize, out: &mut [Ext<K>]| {
+                    let part = current.load(std::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(start / per, part, "a read outside the prepared part");
+                    assert_eq!((start + out.len() - 1) / per, part, "a read across parts");
+                    out.copy_from_slice(&coeffs[start..start + out.len()]);
+                }),
+                fingerprint: 0,
+                parts: Some(SourceParts {
+                    count,
+                    prepare: std::sync::Arc::new(|p: usize| {
+                        prepared.lock().unwrap().push(p);
+                        current.store(p, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    }),
+                    fingerprint: std::sync::Arc::new(|| 7),
+                }),
+            };
+            let (parted_com, from_parts) =
+                pcs.commit_multilinear_ext_source(&parted, &SEED).unwrap();
+            assert_eq!(parted_com, com, "vars {vars} hiding {hiding} parts {count}");
+            assert_eq!(*prepared.lock().unwrap(), (0..count).collect::<Vec<_>>());
+            let (v, pr) = pcs
+                .prove_multilinear_ext_source(
+                    from_parts,
+                    source.clone(),
+                    &point,
+                    &context,
+                    &OPEN_SEED,
+                )
+                .unwrap();
+            assert_eq!((v, pr), (value, proof.clone()), "parts {count}");
+            // The opening reading the same parts: each pass over the chunks prepares them in
+            // order, and the proof is the same.
+            let (_, from_parts) = pcs.commit_multilinear_ext_source(&parted, &SEED).unwrap();
+            prepared.lock().unwrap().clear();
+            let (v, pr) = pcs
+                .prove_multilinear_ext_source(
+                    from_parts,
+                    ExtSource {
+                        fingerprint: 7,
+                        ..parted.clone()
+                    },
+                    &point,
+                    &context,
+                    &OPEN_SEED,
+                )
+                .unwrap();
+            assert_eq!((v, pr), (value, proof.clone()), "opened in {count} parts");
+            let log = prepared.lock().unwrap().clone();
+            assert!(
+                !log.is_empty() && log.len() % count == 0,
+                "whole passes: {log:?}"
+            );
+            for pass in log.chunks(count) {
+                assert_eq!(
+                    pass,
+                    (0..count).collect::<Vec<_>>(),
+                    "a pass in order: {log:?}"
+                );
+            }
+        }
         let (source_value, source_proof) = pcs
             .prove_multilinear_ext_source(from_source, source, &point, &context, &OPEN_SEED)
             .unwrap();

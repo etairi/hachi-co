@@ -567,8 +567,31 @@ pub fn commit_source<const K: usize>(
     elements: &ElementSource<'_>,
     r: Vec<Vec<Poly>>,
 ) -> Result<Committed> {
+    commit_source_parts(ctx, iteration, layout, elements, r, None)
+}
+
+/// Prepares part `p` of a message read in parts ([`commit_source_parts`]): its elements are read
+/// after this and before the next part is prepared.
+pub type PartPrep<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;
+
+/// [`commit_source`] reading the message in `parts.0` parts of consecutive chunks, in order: part
+/// $p$ is prepared by `parts.1(p)` and its chunks are then read (every block of $\mathbf A$'s
+/// columns), so that a source can form one part at a time. The same commitment: each chunk's
+/// products are summed over the blocks of columns in the same order.
+///
+/// # Errors
+/// As [`commit_source`]; [`Error::Shape`] unless the parts divide the chunks; those of the
+/// preparation.
+pub fn commit_source_parts<const K: usize>(
+    ctx: &Ctx<K>,
+    iteration: usize,
+    layout: Layout,
+    elements: &ElementSource<'_>,
+    r: Vec<Vec<Poly>>,
+    parts: Option<(usize, &PartPrep<'_>)>,
+) -> Result<Committed> {
     let fused = layout.chunks() >= 2 * rayon::current_num_threads();
-    let (t, t_hat, u) = products(
+    let (t, t_hat, u) = products_in_parts(
         ctx,
         iteration,
         &layout,
@@ -577,6 +600,7 @@ pub fn commit_source<const K: usize>(
         BLOCK_BYTES,
         fused,
         chunk_group(layout.chunks()),
+        parts,
     )?;
     Ok(Committed {
         layout,
@@ -776,6 +800,41 @@ fn products<const K: usize>(
     fused: bool,
     group: usize,
 ) -> Result<Products> {
+    products_in_parts(
+        ctx,
+        iteration,
+        layout,
+        message,
+        r,
+        block_bytes,
+        fused,
+        group,
+        None,
+    )
+}
+
+/// [`products`] over the chunks in parts ([`commit_source_parts`]), all of them in one part
+/// without `parts`.
+#[allow(clippy::too_many_arguments)] // the commitment and the parameters of its products
+fn products_in_parts<const K: usize>(
+    ctx: &Ctx<K>,
+    iteration: usize,
+    layout: &Layout,
+    message: &Message<'_>,
+    r: &[Vec<Poly>],
+    block_bytes: usize,
+    fused: bool,
+    group: usize,
+    parts: Option<(usize, &PartPrep<'_>)>,
+) -> Result<Products> {
+    let (count, prepare) = parts.map_or((1, None), |(n, f)| (n, Some(f)));
+    if count == 0 || !layout.chunks().is_multiple_of(count) {
+        return Err(Error::Shape(format!(
+            "{count} parts do not divide the {} chunks",
+            layout.chunks()
+        )));
+    }
+    let per_part = layout.chunks() / count;
     let chunks_of_r = if layout.masked { layout.chunks() } else { 0 };
     if r.len() != chunks_of_r {
         return Err(Error::Shape(format!(
@@ -789,34 +848,41 @@ fn products<const K: usize>(
     let per = if layout.decomposed { delta } else { 1 };
     let elements = (block_columns(block_bytes, n_a, ctx.d()) / per).max(1);
     let mut t: Vec<Vec<Poly>> = vec![vec![ring.zero(); n_a]; layout.chunks()];
-    for e0 in (0..layout.chunk_len()).step_by(elements) {
-        let e1 = (e0 + elements).min(layout.chunk_len());
-        let block = ctx.matrix_columns(b"A", iteration, n_a, width, e0 * per..e1 * per)?;
-        let a = ring.prepare_short(&block, layout.beta_s)?;
-        drop(block);
-        let group = if fused { group.max(1) } else { 1 };
-        t.par_chunks_mut(group)
-            .enumerate()
-            .try_for_each(|(g, ts)| -> Result<()> {
-                let elements = (0..ts.len())
-                    .map(|j| message.elements(ctx, g * group + j, e0..e1))
-                    .collect::<Result<Vec<_>>>()?;
-                let products = if !fused {
-                    let s = Committed::digits(ctx, layout, delta, &elements[0])?;
-                    Vec::from([ring.mat_vec_prepared(&a, &s)?])
-                } else if group == 1 {
-                    Vec::from([fused_products(ctx, layout, &a, &elements[0])?])
-                } else {
-                    let slices: Vec<&[Poly]> = elements.iter().map(|e| &e[..]).collect();
-                    fused_products_many(ctx, layout, &a, &slices)?
-                };
-                for (ti, products) in ts.iter_mut().zip(products) {
-                    for (x, y) in ti.iter_mut().zip(products) {
-                        *x = ring.add(x, &y)?;
+    for (part, t_part) in t.chunks_mut(per_part).enumerate() {
+        if let Some(prepare) = prepare {
+            prepare(part)?;
+        }
+        let first = part * per_part;
+        for e0 in (0..layout.chunk_len()).step_by(elements) {
+            let e1 = (e0 + elements).min(layout.chunk_len());
+            let block = ctx.matrix_columns(b"A", iteration, n_a, width, e0 * per..e1 * per)?;
+            let a = ring.prepare_short(&block, layout.beta_s)?;
+            drop(block);
+            let group = if fused { group.max(1) } else { 1 };
+            t_part
+                .par_chunks_mut(group)
+                .enumerate()
+                .try_for_each(|(g, ts)| -> Result<()> {
+                    let elements = (0..ts.len())
+                        .map(|j| message.elements(ctx, first + g * group + j, e0..e1))
+                        .collect::<Result<Vec<_>>>()?;
+                    let products = if !fused {
+                        let s = Committed::digits(ctx, layout, delta, &elements[0])?;
+                        Vec::from([ring.mat_vec_prepared(&a, &s)?])
+                    } else if group == 1 {
+                        Vec::from([fused_products(ctx, layout, &a, &elements[0])?])
+                    } else {
+                        let slices: Vec<&[Poly]> = elements.iter().map(|e| &e[..]).collect();
+                        fused_products_many(ctx, layout, &a, &slices)?
+                    };
+                    for (ti, products) in ts.iter_mut().zip(products) {
+                        for (x, y) in ti.iter_mut().zip(products) {
+                            *x = ring.add(x, &y)?;
+                        }
                     }
-                }
-                Ok(())
-            })?;
+                    Ok(())
+                })?;
+        }
     }
     if !r.is_empty() {
         let a_rand = ctx.rand_matrix()?;

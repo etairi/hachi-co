@@ -191,6 +191,30 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         self.commit_multilinear_ext_owned(coeffs.to_vec(), seed)
     }
 
+    /// [`commit_multilinear_ext_lifted`](Self::commit_multilinear_ext_lifted) on coefficients
+    /// formed one part at a time ([`PartedCoeffs`]), which an implementation may commit part by
+    /// part without holding them all. The commitment is that of the coefficients, and the state
+    /// opens by [`prove_multilinear_ext_lifted`](Self::prove_multilinear_ext_lifted) given them as
+    /// [`LiftedCoeffs`] (whose [`LiftedCoeffs::fingerprint`] is `coeffs.fingerprint()`); by
+    /// default every part is formed and read, then committed.
+    ///
+    /// # Errors
+    /// As [`commit_multilinear_ext`](Self::commit_multilinear_ext); those of `coeffs.prepare`.
+    fn commit_multilinear_ext_parts(
+        &self,
+        coeffs: &PartedCoeffs<'_, K>,
+        seed: &[u8; 32],
+    ) -> Result<(Self::Commitment, Self::State)> {
+        let n = 1usize << coeffs.vars;
+        let per = n / coeffs.parts;
+        let mut all = vec![Ext([0u64; K]); n];
+        for (p, part) in all.chunks_mut(per).enumerate() {
+            (coeffs.prepare)(p)?;
+            (coeffs.read)(p * per, part);
+        }
+        self.commit_multilinear_ext_owned(all, seed)
+    }
+
     /// [`prove_multilinear_ext_rebuilt`](Self::prove_multilinear_ext_rebuilt) on a state of
     /// [`commit_multilinear_ext_lifted`](Self::commit_multilinear_ext_lifted), given the same
     /// coefficients again. The value and the proof are those of
@@ -209,6 +233,33 @@ pub trait BasePcs<const K: usize>: Send + Sync {
         seed: &[u8; 32],
     ) -> Result<(Ext<K>, Self::Proof)> {
         self.prove_multilinear_ext_rebuilt(st, move || Ok(coeffs.to_vec()), point, context, seed)
+    }
+
+    /// [`prove_multilinear_ext_lifted`](Self::prove_multilinear_ext_lifted) given the committed
+    /// coefficients in parts ([`PartedCoeffs`], whose `fingerprint()` is the commitment's), which
+    /// an implementation may read one part at a time. The value and the proof are those of
+    /// [`prove_multilinear_ext`](Self::prove_multilinear_ext) on the state; by default every part
+    /// is formed and read, then the state is opened with them.
+    ///
+    /// # Errors
+    /// As [`prove_multilinear_ext_lifted`](Self::prove_multilinear_ext_lifted); those of
+    /// `coeffs.prepare`.
+    fn prove_multilinear_ext_parts(
+        &self,
+        st: Self::State,
+        coeffs: &PartedCoeffs<'_, K>,
+        point: &[Ext<K>],
+        context: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Result<(Ext<K>, Self::Proof)> {
+        let n = 1usize << coeffs.vars;
+        let per = n / coeffs.parts;
+        let mut all = vec![Ext([0u64; K]); n];
+        for (p, part) in all.chunks_mut(per).enumerate() {
+            (coeffs.prepare)(p)?;
+            (coeffs.read)(p * per, part);
+        }
+        self.prove_multilinear_ext_rebuilt(st, move || Ok(all), point, context, seed)
     }
 
     /// Opens a commitment of [`commit_multilinear`](Self::commit_multilinear) at `point`
@@ -564,6 +615,25 @@ pub struct LiftedCoeffs<const K: usize> {
     /// The table's entry at the pad's index, reduced, which [`LiftedCoeffs::from_table`] set to
     /// 0 and [`LiftedCoeffs::into_table`] puts back (0 without a pad).
     replaced: u64,
+}
+
+/// The monomial coefficients of a multilinear polynomial in `vars` variables over the field,
+/// formed in `parts` parts of $2^{\mathtt{vars}} / \mathtt{parts}$ consecutive coefficients, for
+/// [`BasePcs::commit_multilinear_ext_parts`]: `prepare(p)` forms part $p$ (called for $p = 0, 1,
+/// \dots$ in order), after which `read(start, out)` writes coefficients of that part into `out`;
+/// `fingerprint()`, once every part was formed, is [`LiftedCoeffs::fingerprint`] of the
+/// coefficients.
+pub struct PartedCoeffs<'a, const K: usize> {
+    /// The number of variables.
+    pub vars: usize,
+    /// The number of parts, a power of two.
+    pub parts: usize,
+    /// Forms part `p`.
+    pub prepare: &'a (dyn Fn(usize) -> Result<()> + Sync),
+    /// Coefficients `start .. start + out.len()` of the part formed last.
+    pub read: &'a (dyn Fn(usize, &mut [Ext<K>]) + Sync),
+    /// The fingerprint of all the coefficients.
+    pub fingerprint: &'a (dyn Fn() -> u64 + Sync),
 }
 
 impl<const K: usize> LiftedCoeffs<K> {

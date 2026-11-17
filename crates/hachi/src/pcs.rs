@@ -122,12 +122,12 @@
 //! parameters imply. The verifier checks the counts of a header: $B$ against $\ell - \kappa$, the
 //! others against the schedule.
 
-use crate::commit::{Committed, Ctx, commit, commit_source, commit_table};
+use crate::commit::{Committed, Ctx, commit, commit_source, commit_source_parts, commit_table};
 use crate::error::VerifyError;
 use crate::fs::Fs;
 use crate::iteration::{
-    self, Claim, IterationProof, MessageView, OwnedSource, Reduced, Witness, check_exts,
-    check_polys, commitment_randomness, evaluate_claim, table_eval,
+    self, Claim, IterationProof, MessageView, OwnedParts, OwnedSource, Reduced, Witness,
+    check_exts, check_polys, commitment_randomness, evaluate_claim, table_eval,
 };
 use crate::params::{HachiChoices, Layout, Schedule, best_layout, max_digit};
 use crate::partials::{self, RoundValues};
@@ -235,6 +235,24 @@ pub struct ExtSource<'a, const K: usize> {
     /// A fingerprint of the coefficients, against which the opening checks that it was given
     /// those of the commitment (not a binding: the commitment is).
     pub fingerprint: u64,
+    /// For the commitment only: the coefficients in parts, which the commitment reads one at a
+    /// time ([`SourceParts`]); `None` reads them in any order.
+    pub parts: Option<SourceParts<'a>>,
+}
+
+/// The coefficients of an [`ExtSource`] in `count` parts of $2^\ell / \mathrm{count}$
+/// consecutive coefficients: [`HachiPcs::commit_multilinear_ext_source`] calls `prepare(p)` for
+/// $p = 0, 1, \dots$ in order and reads only part $p$'s coefficients after it, so that a source
+/// can form one part at a time ([`crate::commit::commit_source_parts`]). `fingerprint` is read after the
+/// commitment, when every part was formed, in place of [`ExtSource::fingerprint`].
+#[derive(Clone)]
+pub struct SourceParts<'a> {
+    /// The number of parts, a power of two dividing the chunks.
+    pub count: usize,
+    /// Forms part `p`.
+    pub prepare: Arc<dyn Fn(usize) -> Result<()> + Send + Sync + 'a>,
+    /// The fingerprint of all the coefficients, once every part was formed.
+    pub fingerprint: Arc<dyn Fn() -> u64 + Send + Sync + 'a>,
 }
 
 /// FNV-1a over the residues of the first `len` ring elements of each chunk, chunk by chunk (in
@@ -981,7 +999,33 @@ impl<const K: usize> HachiPcs<K> {
             self.source_elements(coeffs, &layout, &rows, c, range)
         };
         let r = commitment_randomness(ctx, &layout, seed, DOMAIN_COMMIT_R)?;
-        let committed = commit_source(ctx, 0, layout, &elements, r)?;
+        let (committed, fingerprint) = match &coeffs.parts {
+            None => (
+                commit_source(ctx, 0, layout, &elements, r)?,
+                coeffs.fingerprint,
+            ),
+            Some(parts) => {
+                // Part p of the coefficients is chunks p chunks / count .. of the message.
+                let message = layout.chunks() * layout.message_len() * ctx.d_over_k();
+                if message != 1 << vars || !layout.chunks().is_multiple_of(parts.count) {
+                    return Err(Error::Shape(format!(
+                        "{} parts of the 2^{vars} coefficients do not split the {} chunks",
+                        parts.count,
+                        layout.chunks()
+                    )));
+                }
+                let prepare = |p: usize| (parts.prepare)(p);
+                let committed = commit_source_parts(
+                    ctx,
+                    0,
+                    layout,
+                    &elements,
+                    r,
+                    Some((parts.count, &prepare)),
+                )?;
+                (committed, (parts.fingerprint)())
+            }
+        };
         let tails = if layout.masked {
             rows.into_iter().map(|row| Vec::from([row])).collect()
         } else {
@@ -990,7 +1034,7 @@ impl<const K: usize> HachiPcs<K> {
         let mut state = State::new(Input::MultilinearExt { vars }, committed);
         state.shed = Some(Shed {
             tails,
-            fingerprint: coeffs.fingerprint,
+            fingerprint,
             from_source: true,
         });
         Ok((
@@ -1065,6 +1109,14 @@ impl<const K: usize> HachiPcs<K> {
         let layout = state.committed.layout;
         let len = layout.message_len();
         let tails = shed.tails;
+        // Coefficient parts are chunk parts (`commit_multilinear_ext_source` checks the split).
+        let parts = coeffs.parts.as_ref().map(|parts| {
+            let prepare = parts.prepare.clone();
+            OwnedParts {
+                count: parts.count,
+                prepare: Box::new(move |p: usize| prepare(p)),
+            }
+        });
         let elements = move |c: usize, range: core::ops::Range<usize>| -> Result<Vec<Poly>> {
             let head = range.start.min(len)..range.end.min(len);
             let mut out = self.source_elements(&coeffs, &layout, &[], c, head)?;
@@ -1085,6 +1137,7 @@ impl<const K: usize> HachiPcs<K> {
             chunks: layout.chunks(),
             chunk_len: layout.chunk_len(),
             elements: Box::new(elements),
+            parts,
         };
         self.prove_multilinear_ext_from(Held::Owned(state), Some(source), point, context, seed)
     }
@@ -1290,17 +1343,35 @@ impl<const K: usize> HachiPcs<K> {
         message: MessageView<'_>,
         len: usize,
     ) -> Result<Vec<Poly>> {
-        use rayon::prelude::*;
         let ring = &self.ctx.ring;
         let a_row = ring.prepare(core::slice::from_ref(&a.to_vec()))?;
-        (0..message.chunks())
+        // The chunks of each part after it is prepared, in order.
+        let mut out = Vec::with_capacity(message.chunks());
+        for p in 0..message.part_count() {
+            let range = message.prepare_part(p)?;
+            out.extend(self.chunk_products_of(&a_row, message, len, range)?);
+        }
+        Ok(out)
+    }
+
+    /// [`HachiPcs::chunk_products`] on the chunks `range` (of the part prepared last).
+    fn chunk_products_of(
+        &self,
+        a_row: &hachi_co_math::rns::Prepared,
+        message: MessageView<'_>,
+        len: usize,
+        range: core::ops::Range<usize>,
+    ) -> Result<Vec<Poly>> {
+        use rayon::prelude::*;
+        let ring = &self.ctx.ring;
+        range
             .into_par_iter()
             .map(|c| {
                 let chunk = message.chunk(c)?;
                 let part = chunk
                     .get(..len)
                     .ok_or_else(|| Error::Shape("a chunk is shorter than its weights".into()))?;
-                ring.mat_vec_prepared(&a_row, part)?
+                ring.mat_vec_prepared(a_row, part)?
                     .pop()
                     .ok_or_else(|| Error::Shape("a^T f_i is one row".into()))
             })

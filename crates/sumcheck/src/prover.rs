@@ -8,13 +8,16 @@ use crate::eq::{eq_point, eq_table, msb_bits};
 use crate::error::{Error, Result, check_len};
 use crate::interp::Extrapolation;
 use crate::tables::{
-    MStarParts, RangeProduct, ind_rows, lift_table, pad_index, row_indicator, table_size,
+    BaseTable, CompactTable, DenseTable, MStarParts, RangeProduct, ind_rows, lift_table, pad_index,
+    row_indicator, table_size, zero_rows,
 };
 use crate::transcript::RoundValues;
+use core::ops::Range;
 use hachi_co_core::{Blinder, Context, SumcheckCoins};
 use hachi_co_math::{Ext, Fqk, Zq};
 use hachi_co_mpc::PartyId;
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// The tables that change with the coins (built by [`PartyProver::start`]).
 #[derive(Clone, Debug)]
@@ -37,6 +40,11 @@ struct Running<const K: usize> {
     e: Vec<Ext<K>>,
     /// $\mathrm{ind}$ over $U$.
     ind: Vec<Ext<K>>,
+    /// The rows over $U$ of the current table on which $\langle \widetilde w \rangle\_p$ is
+    /// zero ([`zero_rows`]), folded with the $U$ variables: a row of the bound table is zero when
+    /// both rows it binds are. A round over $U$ skips the pairs of zero rows, which contribute
+    /// nothing to $F\_{0,p}$ or $F\_{1,p}$ (both have the factor $W$, the range product included).
+    zero: Vec<bool>,
     /// The round polynomials of $g\_{0,p}$ and $g\_{1,p}$.
     g0: BlinderRounds<K>,
     g1: BlinderRounds<K>,
@@ -62,6 +70,9 @@ enum MStar<const K: usize> {
     Bound(MStarParts<K>, Coin<K>),
     /// The parts, $a\_1$ and $a\_2$, between the second and the third bind.
     Bound2(MStarParts<K>, Coin<K>, Coin<K>),
+    /// The parts and the coins $a\_1, \dots, a\_k$ ($k \ge 3$), when rounds after the third read
+    /// the parts too ([`PartyProver::deep_rounds`]).
+    Deep(MStarParts<K>, Vec<Coin<K>>),
 }
 
 impl<const K: usize> MStar<K> {
@@ -88,6 +99,27 @@ impl<const K: usize> MStar<K> {
                 let (lo, hi) = (bound(x), bound(x + q));
                 field.add(&lo, &a2.times(field, &field.sub(&hi, &lo)))
             }
+            Self::Deep(parts, coins) => {
+                // The 2^k entries of the parts that entry x binds, then the coins in order, each
+                // binding the top remaining bit as `fold` binds a table.
+                let k = coins.len();
+                let stride = parts.len() >> k;
+                let mut values = [field.zero(); 1 << MAX_DEEP_COINS];
+                for (c, v) in values.iter_mut().take(1 << k).enumerate() {
+                    *v = parts.at(field, x + c * stride);
+                }
+                let mut len = 1 << k;
+                for a in coins {
+                    len /= 2;
+                    for c in 0..len {
+                        values[c] = field.add(
+                            &values[c],
+                            &a.times(field, &field.sub(&values[c + len], &values[c])),
+                        );
+                    }
+                }
+                values[0]
+            }
         }
     }
 
@@ -98,9 +130,18 @@ impl<const K: usize> MStar<K> {
             Self::Parts(parts) => parts.len(),
             Self::Bound(parts, _) => parts.len() / 2,
             Self::Bound2(parts, ..) => parts.len() / 4,
+            Self::Deep(parts, coins) => parts.len() >> coins.len(),
         }
     }
 }
+
+/// The most coins whose rounds read the base table and the parts of $M^\ast$ (rounds up to
+/// $3 + 2$, [`PartyProver::deep_rounds`]).
+const MAX_DEEP_COINS: usize = 5;
+
+/// The entries of a table bound to three or more coins that the prover holds: the tables formed
+/// later have at most this many entries where the hypercube allows ([`PartyProver::deep_rounds`]).
+const DEEP_TABLE_ENTRIES: usize = 1 << 24;
 
 /// A coin of a bind, canonical, with its Montgomery form where the modulus admits it
 /// ([`Montgomery`]): [`Coin::times`] gives the canonical product $a d$ either way.
@@ -164,10 +205,9 @@ impl SmallValues {
         }
     }
 
-    /// The centered value of the residue `x`, if it is an integer of this path.
+    /// The centered value `c` of an entry, if it is an integer of this path.
     #[inline(always)]
-    fn small<const K: usize>(&self, field: &Fqk<K>, x: u64) -> Option<i64> {
-        let c = field.zq().to_centered(x);
+    fn small(&self, c: i64) -> Option<i64> {
         (c.abs() <= self.digit).then_some(c)
     }
 }
@@ -246,10 +286,9 @@ impl<const K: usize> PlaneValues<K> {
         self.value[(v + 2 * self.reach) as usize]
     }
 
-    /// The centered value of the residue `x`, if it is an integer of this path.
+    /// The centered value `c` of an entry, if it is an integer of this path.
     #[inline(always)]
-    fn small(&self, field: &Fqk<K>, x: u64) -> Option<i64> {
-        let c = field.zq().to_centered(x);
+    fn small(&self, c: i64) -> Option<i64> {
         (c.abs() <= self.digit).then_some(c)
     }
 }
@@ -414,7 +453,10 @@ pub struct PartyProver<const K: usize> {
     /// The Montgomery form of the inner loops, when $q$ admits it (otherwise the canonical
     /// field is used; both give the same values).
     mont: Option<Montgomery<K>>,
-    w_base: Vec<u64>,
+    w_base: Base,
+    /// The entries of the rows of [`ind_rows`], the only ones a party's table holds residues in;
+    /// [`PartyProver::compact`] keeps the others in a byte each.
+    large: Range<usize>,
     /// The table index and the value of a pad in $\mathbb F\_{q^K}$, the one entry of the table
     /// outside $\mathbb Z\_q$; `w_base` has 0 there.
     pad: Option<(usize, Ext<K>)>,
@@ -428,6 +470,58 @@ pub struct PartyProver<const K: usize> {
     /// table of the range product has at most $2^{\ell''} /$ `plane_share` values
     /// ([`PLANE_SHARE`]).
     plane_share: usize,
+    /// The rounds after the third that read the base table, for the tests
+    /// ([`PartyProver::deep_rounds`] otherwise).
+    deep: Option<usize>,
+}
+
+/// The base-field table of a [`PartyProver`]: as [`w_table`](crate::w_table) forms it, or compact
+/// ([`PartyProver::compact`]), with the same entries.
+#[derive(Clone, Debug)]
+pub(crate) enum Base {
+    Dense(Vec<u64>),
+    Compact(CompactTable),
+}
+
+impl Base {
+    fn len(&self) -> usize {
+        match self {
+            Self::Dense(t) => t.len(),
+            Self::Compact(t) => t.entries(),
+        }
+    }
+
+    /// The dense table, borrowed or formed.
+    fn dense(&self) -> Cow<'_, [u64]> {
+        match self {
+            Self::Dense(t) => Cow::Borrowed(t),
+            Self::Compact(t) => Cow::Owned(t.to_dense()),
+        }
+    }
+
+    pub(crate) fn into_dense(self) -> Vec<u64> {
+        match self {
+            Self::Dense(t) => t,
+            Self::Compact(t) => t.to_dense(),
+        }
+    }
+}
+
+/// Calls `$body` with `$t` bound to the [`BaseTable`] of `$base`: the dense table or the compact
+/// one, so that the rounds and the binds are compiled for each.
+macro_rules! with_base {
+    ($zq:expr, $base:expr, |$t:ident| $body:expr) => {
+        match $base {
+            Base::Dense(table) => {
+                let $t = &DenseTable::new($zq, table);
+                $body
+            }
+            Base::Compact(table) => {
+                let $t = table;
+                $body
+            }
+        }
+    };
 }
 
 /// The default `plane_share` of [`PartyProver`]: at $b = 16$ the table of [`PlaneValues`] has
@@ -455,15 +549,39 @@ impl<const K: usize> PartyProver<K> {
         g0: Blinder<K>,
         g1: Blinder<K>,
     ) -> Result<Self> {
+        Self::with_base(ctx, party, Base::Dense(w_table), pad, g0, g1)
+    }
+
+    /// [`PartyProver::new`] with the table given compactly
+    /// ([`CompactTable::from_share`](crate::CompactTable::from_share)), the same prover as with
+    /// the table itself followed by [`PartyProver::compact`].
+    ///
+    /// # Errors
+    /// As [`PartyProver::new`].
+    pub fn from_compact(
+        ctx: &Context<K>,
+        party: PartyId,
+        table: CompactTable,
+        pad: Option<Ext<K>>,
+        g0: Blinder<K>,
+        g1: Blinder<K>,
+    ) -> Result<Self> {
+        Self::with_base(ctx, party, Base::Compact(table), pad, g0, g1)
+    }
+
+    fn with_base(
+        ctx: &Context<K>,
+        party: PartyId,
+        w_base: Base,
+        pad: Option<Ext<K>>,
+        g0: Blinder<K>,
+        g1: Blinder<K>,
+    ) -> Result<Self> {
         let l = &ctx.layout;
         if party == 0 || party > l.n {
             return Err(Error::InvalidParty { party, n: l.n });
         }
-        check_len(
-            "<w~>_p table (2^l'' entries)",
-            table_size(l)?,
-            w_table.len(),
-        )?;
+        check_len("<w~>_p table (2^l'' entries)", table_size(l)?, w_base.len())?;
         g0.validate(l.ell_pp, l.d0)?;
         g1.validate(l.ell_pp, l.d1)?;
         let field = ctx.field().clone();
@@ -507,12 +625,17 @@ impl<const K: usize> PartyProver<K> {
             ext0,
             ext1,
             binomials,
-            w_base: w_table,
+            w_base,
+            large: {
+                let rows = ind_rows(l);
+                rows.start * 2 * l.d..rows.end * 2 * l.d
+            },
             g0,
             g1,
             sums,
             run: None,
             plane_share: PLANE_SHARE,
+            deep: None,
         })
     }
 
@@ -536,6 +659,27 @@ impl<const K: usize> PartyProver<K> {
         self.second_from_table() && self.ell_pp >= 3 && self.ell_u >= 3
     }
 
+    /// The rounds after the third that also read the base table and the coins, so that the tables
+    /// bound to the coins are formed later and smaller: as many as keep the tables formed at the
+    /// $(3 + k)$-th bind below [`DEEP_TABLE_ENTRIES`] entries (two at most, and only rounds over
+    /// $U$), and none unless round 3 reads the base table. The same values: each entry is the
+    /// table bound to the coins at that point.
+    fn deep_rounds(&self) -> usize {
+        if !self.third_from_table() {
+            return 0;
+        }
+        let wanted = self.deep.unwrap_or_else(|| {
+            let mut k = 0;
+            while k < MAX_DEEP_COINS - 3 && (self.w_base.len() >> (3 + k)) > DEEP_TABLE_ENTRIES {
+                k += 1;
+            }
+            k
+        });
+        wanted
+            .min(self.ell_u.saturating_sub(3))
+            .min(self.ell_pp.saturating_sub(3))
+    }
+
     /// The party $p$.
     pub fn party(&self) -> PartyId {
         self.party
@@ -546,9 +690,40 @@ impl<const K: usize> PartyProver<K> {
         self.sums
     }
 
-    /// The hypercube table of $\langle \widetilde w \rangle\_p$ without a field pad (base field).
-    pub fn w_table(&self) -> &[u64] {
-        &self.w_base
+    /// The hypercube table of $\langle \widetilde w \rangle\_p$ without a field pad (base field),
+    /// formed again if the prover holds it compactly ([`PartyProver::compact`]).
+    pub fn w_table(&self) -> Cow<'_, [u64]> {
+        self.w_base.dense()
+    }
+
+    /// Holds the table compactly from here on (`CompactTable`): a byte per entry outside the
+    /// rows of [`ind_rows`], with the same entries, if they fit (the entries of the party's slice
+    /// are digits below $b$ and the others zero); otherwise it stays as it is. The rounds then
+    /// read it as they read the table, so that the values are the same. The driver calls it after
+    /// the commitment, which needs the table itself.
+    pub fn compact(&mut self) {
+        if let Base::Dense(table) = &self.w_base
+            && let Some(compact) =
+                CompactTable::from_dense(*self.field.zq(), table, self.large.clone())
+        {
+            self.w_base = Base::Compact(compact);
+        }
+    }
+
+    /// The table if it is held compactly.
+    pub(crate) fn compact_table(&self) -> Option<&CompactTable> {
+        match &self.w_base {
+            Base::Compact(t) => Some(t),
+            Base::Dense(_) => None,
+        }
+    }
+
+    /// Whether the table is held compactly, and the bytes it takes.
+    pub fn table_bytes(&self) -> (bool, usize) {
+        match &self.w_base {
+            Base::Dense(t) => (false, 8 * t.len()),
+            Base::Compact(t) => (true, t.bytes()),
+        }
     }
 
     /// Lends the table of [`PartyProver::w_table`], which is then empty, to a caller that gives
@@ -556,7 +731,7 @@ impl<const K: usize> PartyProver<K> {
     /// step 3 of the driver transforms it in place into the commitment's coefficients and back,
     /// so that it is not copied.
     pub(crate) fn take_w_table(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.w_base)
+        std::mem::replace(&mut self.w_base, Base::Dense(Vec::new())).into_dense()
     }
 
     /// Takes back the table of [`PartyProver::take_w_table`].
@@ -569,7 +744,7 @@ impl<const K: usize> PartyProver<K> {
             1 << self.ell_pp,
             table.len(),
         )?;
-        self.w_base = table;
+        self.w_base = Base::Dense(table);
         Ok(())
     }
 
@@ -586,7 +761,7 @@ impl<const K: usize> PartyProver<K> {
     /// The hypercube table of $\langle \widetilde w \rangle\_p$ over $\mathbb F\_{q^K}$, the pad
     /// included.
     pub fn w_field_table(&self) -> Vec<Ext<K>> {
-        lift_table(&self.field, &self.w_base, self.pad)
+        lift_table(&self.field, &self.w_base.dense(), self.pad)
     }
 
     /// The blinders $g\_{0,p}$ and $g\_{1,p}$.
@@ -605,6 +780,21 @@ impl<const K: usize> PartyProver<K> {
         self,
     ) -> (
         Vec<u64>,
+        Option<(usize, Ext<K>)>,
+        Blinder<K>,
+        Blinder<K>,
+        Vec<Ext<K>>,
+    ) {
+        let point = self.run.map(|run| run.point).unwrap_or_default();
+        (self.w_base.into_dense(), self.pad, self.g0, self.g1, point)
+    }
+
+    /// [`PartyProver::into_parts`] with the table as the prover holds it, compact or not.
+    #[allow(clippy::type_complexity)] // the prover's parts, in order
+    pub(crate) fn into_parts_held(
+        self,
+    ) -> (
+        Base,
         Option<(usize, Ext<K>)>,
         Blinder<K>,
         Blinder<K>,
@@ -663,6 +853,11 @@ impl<const K: usize> PartyProver<K> {
             eq_l: eq_table(f, &tau0[self.ell_u..self.ell_pp])?,
             e: lift(&self.e_rows),
             ind: lift(&self.ind_rows),
+            zero: with_base!(*f.zq(), &self.w_base, |t| zero_rows(
+                t,
+                self.two_d,
+                self.pad.map(|(at, _)| at / self.two_d)
+            )),
             g0: BlinderRounds::new(f, &self.g0),
             g1: BlinderRounds::new(f, &self.g1),
             point: Vec::with_capacity(self.ell_pp),
@@ -727,23 +922,53 @@ impl<const K: usize> PartyProver<K> {
         run: &Running<K>,
         r: usize,
     ) -> (Vec<Ext<K>>, Vec<Ext<K>>) {
+        with_base!(*self.field.zq(), &self.w_base, |wb| self
+            .dispatch_with(arith, run, r, wb))
+    }
+
+    /// [`PartyProver::dispatch`] on the base-field table `wb`, dense or compact.
+    fn dispatch_with<A: Arith<K> + Sync, B: BaseTable>(
+        &self,
+        arith: &A,
+        run: &Running<K>,
+        r: usize,
+        wb: &B,
+    ) -> (Vec<Ext<K>>, Vec<Ext<K>>) {
         if r == 1 {
-            let (f, wb) = (&self.field, &self.w_base);
+            let f = &self.field;
             let (at, value) = self.pad.unwrap_or((usize::MAX, f.zero()));
             let nodes = self.direct0.max(self.direct1);
             let small = SmallValues::new(arith, f, &self.range, self.b, nodes);
-            self.kernel(arith, run, r, wb.len(), Some((&small, wb, at)), None, |x| {
-                if x == at { value } else { f.from_base(wb[x]) }
-            })
+            self.kernel(
+                arith,
+                run,
+                r,
+                wb.entries(),
+                Some((&small, wb, at)),
+                None,
+                |x| {
+                    if x == at {
+                        value
+                    } else {
+                        f.from_base(wb.residue(x))
+                    }
+                },
+            )
         } else if r == 2 && run.w.is_empty() {
             // The table folded by a_1 was not formed (`second_from_table`): points with small
             // entries read `PlaneValues`, the others the folded entries formed on the fly as
             // `fold_tables` forms them.
-            let (f, wb) = (&self.field, &self.w_base);
+            let f = &self.field;
             let (at, value) = self.pad.unwrap_or((usize::MAX, f.zero()));
             let a1 = run.point[0];
-            let half = wb.len() / 2;
-            let base = |i: usize| if i == at { value } else { f.from_base(wb[i]) };
+            let half = wb.entries() / 2;
+            let base = |i: usize| {
+                if i == at {
+                    value
+                } else {
+                    f.from_base(wb.residue(i))
+                }
+            };
             let nodes = self.direct0.max(self.direct1);
             let small = SmallValues::new(arith, f, &self.range, self.b, nodes);
             let plane = PlaneValues::new(arith, f, &self.range, &small, &a1);
@@ -753,16 +978,25 @@ impl<const K: usize> PartyProver<K> {
         } else if r == 3 && run.w.is_empty() {
             // The table bound to a_1 and a_2 was not formed (`third_from_table`): its entries are
             // formed where they are read, as `fold_tables` formed them.
-            let (f, wb) = (&self.field, &self.w_base);
+            let f = &self.field;
             let (a1, a2) = (run.point[0], run.point[1]);
             let a12 = f.mul(&a1, &a2);
             let pad = self.pad.as_ref();
-            self.kernel(arith, run, r, wb.len() / 4, None, None, |x| {
+            self.kernel::<A, _, B>(arith, run, r, wb.entries() / 4, None, None, |x| {
                 bound_two_entry(f, wb, pad, &a1, &a2, &a12, x)
+            })
+        } else if r >= 4 && r <= 3 + self.deep_rounds() && run.w.is_empty() {
+            // The table bound to the coins so far was not formed (`deep_rounds`): its entries are
+            // formed where they are read.
+            let f = &self.field;
+            let coins = &run.point[..r - 1];
+            let pad = self.pad.as_ref();
+            self.kernel::<A, _, B>(arith, run, r, wb.entries() >> (r - 1), None, None, |x| {
+                bound_entry(f, wb, pad, coins, x)
             })
         } else {
             let w = &run.w;
-            self.kernel(arith, run, r, w.len(), None, None, |x| w[x])
+            self.kernel::<A, _, B>(arith, run, r, w.len(), None, None, |x| w[x])
         }
     }
 
@@ -774,14 +1008,14 @@ impl<const K: usize> PartyProver<K> {
     /// points, run on the Rayon pool; field sums do not depend on the order. `round1` gives the
     /// small values, the table over $\mathbb Z\_q$ and the index of a field pad, if any.
     #[allow(clippy::too_many_arguments)] // the tables and the paths of rounds 1 and 2
-    fn kernel<A: Arith<K> + Sync, W: Fn(usize) -> Ext<K> + Sync>(
+    fn kernel<A: Arith<K> + Sync, W: Fn(usize) -> Ext<K> + Sync, B: BaseTable>(
         &self,
         arith: &A,
         run: &Running<K>,
         r: usize,
         len: usize,
-        round1: Option<(&SmallValues, &[u64], usize)>,
-        round2: Option<(&PlaneValues<K>, &[u64], usize)>,
+        round1: Option<(&SmallValues, &B, usize)>,
+        round2: Option<(&PlaneValues<K>, &B, usize)>,
         w_at: W,
     ) -> (Vec<Ext<K>>, Vec<Ext<K>>) {
         let f = &self.field;
@@ -807,6 +1041,10 @@ impl<const K: usize> PartyProver<K> {
             let (_, f0, f1) = (0..rows)
                 .into_par_iter()
                 .fold(start, |(mut acc, mut f0, mut f1), u| {
+                    // A pair of zero rows adds nothing (`Running::zero`).
+                    if run.zero[u] && run.zero[u + rows] {
+                        return (acc, f0, f1);
+                    }
                     acc.clear(f);
                     let base = u * self.two_d;
                     // Without e_p on this row, the range product does not count.
@@ -817,13 +1055,13 @@ impl<const K: usize> PartyProver<K> {
                     let mut pair_sums = [zero; 2];
                     for (l, e) in eq_l.iter().enumerate() {
                         let x = base + l;
-                        if let Some((lo, hi)) = small_pair(f, round1, x, h) {
+                        if let Some((lo, hi)) = small_pair(round1, x, h) {
                             let (small, ..) = round1.expect("a small pair comes from round 1");
                             let m = (run.mstar.at(f, x), run.mstar.at(f, x + h));
                             self.accumulate_small(
                                 arith, small, range, &mut acc, m, lo, hi, e, &zero,
                             );
-                        } else if let Some(quad) = small_quad(f, round2, x, h) {
+                        } else if let Some(quad) = small_quad(round2, x, h) {
                             let (plane, ..) = round2.expect("a small quadruple comes from round 2");
                             let m = (run.mstar.at(f, x), run.mstar.at(f, x + h));
                             self.accumulate_plane(
@@ -913,7 +1151,7 @@ impl<const K: usize> PartyProver<K> {
                     // the sum of its two entries at every node.
                     let (e_hi, de) = (arith.enter(&f.add(lo, hi)), zero);
                     let m = (run.mstar.at(f, x), run.mstar.at(f, x + h));
-                    if let Some((a, b)) = small_pair(f, round1, x, h) {
+                    if let Some((a, b)) = small_pair(round1, x, h) {
                         let (small, ..) = round1.expect("a small pair comes from round 1");
                         self.accumulate_small(arith, small, range, &mut acc, m, a, b, &e_hi, &de);
                     } else {
@@ -1126,33 +1364,35 @@ impl<const K: usize> PartyProver<K> {
         let a = self.field.reduce(a);
         let defer = self.second_from_table();
         let defer3 = self.third_from_table();
+        let deep = self.deep_rounds();
         let Some(run) = self.run.as_mut() else {
             return Err(Error::State("bind before start".into()));
         };
-        match &self.mont {
+        let (field, pad, ell_u) = (&self.field, self.pad.as_ref(), self.ell_u);
+        with_base!(*field.zq(), &self.w_base, |wb| match &self.mont {
             Some(mont) => fold_tables(
                 mont,
-                &self.field,
-                &self.w_base,
-                self.pad.as_ref(),
+                field,
+                wb,
+                pad,
                 run,
                 r,
-                self.ell_u,
+                ell_u,
                 &a,
-                (defer, defer3),
+                (defer, defer3, deep)
             ),
             None => fold_tables(
-                &self.field,
-                &self.field,
-                &self.w_base,
-                self.pad.as_ref(),
+                field,
+                field,
+                wb,
+                pad,
                 run,
                 r,
-                self.ell_u,
+                ell_u,
                 &a,
-                (defer, defer3),
+                (defer, defer3, deep)
             ),
-        }
+        });
         let f = &self.field;
         run.g0.bind(f, &self.g0, r, &a);
         run.g1.bind(f, &self.g1, r, &a);
@@ -1195,9 +1435,8 @@ impl<const K: usize> PartyProver<K> {
 /// The centered entries of the point pair $(x, x + h)$ in round 1, if both are small and neither
 /// is a field pad.
 #[inline(always)]
-fn small_pair<const K: usize>(
-    f: &Fqk<K>,
-    round1: Option<(&SmallValues, &[u64], usize)>,
+fn small_pair<B: BaseTable>(
+    round1: Option<(&SmallValues, &B, usize)>,
     x: usize,
     h: usize,
 ) -> Option<(i64, i64)> {
@@ -1205,16 +1444,18 @@ fn small_pair<const K: usize>(
     if x == pad || x + h == pad {
         return None;
     }
-    Some((small.small(f, table[x])?, small.small(f, table[x + h])?))
+    Some((
+        small.small(table.centered(x))?,
+        small.small(table.centered(x + h))?,
+    ))
 }
 
 /// The centered entries $A, B, C, E$ of the base-field table at $x$, $x + 2h$, $x + h$ and
 /// $x + 3h$ for round 2's pair $(x, x + h)$ (with $h = 2^{\ell''}/4$), if all four are small and
 /// none is a field pad.
 #[inline(always)]
-fn small_quad<const K: usize>(
-    f: &Fqk<K>,
-    round2: Option<(&PlaneValues<K>, &[u64], usize)>,
+fn small_quad<const K: usize, B: BaseTable>(
+    round2: Option<(&PlaneValues<K>, &B, usize)>,
     x: usize,
     h: usize,
 ) -> Option<(i64, i64, i64, i64)> {
@@ -1224,10 +1465,10 @@ fn small_quad<const K: usize>(
         return None;
     }
     Some((
-        plane.small(f, table[at[0]])?,
-        plane.small(f, table[at[1]])?,
-        plane.small(f, table[at[2]])?,
-        plane.small(f, table[at[3]])?,
+        plane.small(table.centered(at[0]))?,
+        plane.small(table.centered(at[1]))?,
+        plane.small(table.centered(at[2]))?,
+        plane.small(table.centered(at[3]))?,
     ))
 }
 
@@ -1379,23 +1620,23 @@ fn fold<const K: usize, A: Arith<K> + Sync>(
 /// $A, B, C, E$ at $x$, $x + n/2$, $x + n/4$ and $x + 3n/4$; the pad's quadruple in the field, as
 /// the two folds form it. `a12` is $a\_1 a\_2$.
 #[inline(always)]
-fn bound_two_entry<const K: usize>(
+fn bound_two_entry<const K: usize, B: BaseTable>(
     f: &Fqk<K>,
-    w_base: &[u64],
+    w_base: &B,
     pad: Option<&(usize, Ext<K>)>,
     a1: &Ext<K>,
     a2: &Ext<K>,
     a12: &Ext<K>,
     x: usize,
 ) -> Ext<K> {
-    let quarter = w_base.len() / 4;
+    let quarter = w_base.entries() / 4;
     let (ia, ib, ic, ie) = (x, x + 2 * quarter, x + quarter, x + 3 * quarter);
     if let Some((at, value)) = pad.filter(|(at, _)| [ia, ib, ic, ie].contains(at)) {
         let base = |i: usize| {
             if i == *at {
                 *value
             } else {
-                f.from_base(w_base[i])
+                f.from_base(w_base.residue(i))
             }
         };
         let lo = f.add(&base(ia), &f.mul(a1, &f.sub(&base(ib), &base(ia))));
@@ -1403,12 +1644,50 @@ fn bound_two_entry<const K: usize>(
         return f.add(&lo, &f.mul(a2, &f.sub(&hi, &lo)));
     }
     let zq = f.zq();
-    let (va, vb, vc, ve) = (w_base[ia], w_base[ib], w_base[ic], w_base[ie]);
+    let (va, vb, vc, ve) = (
+        w_base.residue(ia),
+        w_base.residue(ib),
+        w_base.residue(ic),
+        w_base.residue(ie),
+    );
     let ba = zq.sub(vb, va);
     let cross = zq.sub(zq.sub(ve, vc), ba);
     let v = f.add(&f.from_base(va), &f.scale(a1, ba));
     let v = f.add(&v, &f.scale(a2, zq.sub(vc, va)));
     f.add(&v, &f.scale(a12, cross))
+}
+
+/// Entry $x$ of the base-field table `w_base` (with the pad) bound to the coins $a\_1, \dots, a\_k$:
+/// the $2^k$ entries at $x + c\, n/2^k$ ($n$ entries), then each coin binding the top remaining bit,
+/// $T\_j\[c\] = T\_{j-1}\[c\] + a\_j (T\_{j-1}\[c + 2^{k-j}\] - T\_{j-1}\[c\])$, as [`fold`] binds a
+/// table: the same field element as the table folded by the coins.
+#[inline(always)]
+fn bound_entry<const K: usize, B: BaseTable>(
+    f: &Fqk<K>,
+    w_base: &B,
+    pad: Option<&(usize, Ext<K>)>,
+    coins: &[Ext<K>],
+    x: usize,
+) -> Ext<K> {
+    let k = coins.len();
+    debug_assert!(k <= MAX_DEEP_COINS);
+    let stride = w_base.entries() >> k;
+    let mut values = [f.zero(); 1 << MAX_DEEP_COINS];
+    for (c, v) in values.iter_mut().take(1 << k).enumerate() {
+        let i = x + c * stride;
+        *v = match pad {
+            Some((at, value)) if *at == i => *value,
+            _ => f.from_base(w_base.residue(i)),
+        };
+    }
+    let mut len = 1 << k;
+    for a in coins {
+        len /= 2;
+        for c in 0..len {
+            values[c] = f.add(&values[c], &f.mul(a, &f.sub(&values[c + len], &values[c])));
+        }
+    }
+    values[0]
 }
 
 /// Binds round $r$'s variable to $a$ in every table of `run` (the witness table from the
@@ -1418,16 +1697,16 @@ fn bound_two_entry<const K: usize>(
 /// not formed in round 2 either, and in round 3 it is formed bound to the three coins from the
 /// entries bound to two, each as [`fold`] binds a table.
 #[allow(clippy::too_many_arguments)] // the tables and the coin
-fn fold_tables<const K: usize, A: Arith<K> + Sync>(
+fn fold_tables<const K: usize, A: Arith<K> + Sync, B: BaseTable>(
     arith: &A,
     f: &Fqk<K>,
-    w_base: &[u64],
+    w_base: &B,
     pad: Option<&(usize, Ext<K>)>,
     run: &mut Running<K>,
     r: usize,
     ell_u: usize,
     a: &Ext<K>,
-    (defer, defer3): (bool, bool),
+    (defer, defer3, deep): (bool, bool, usize),
 ) {
     let coin = arith.enter(a);
     // M* first, so that its table is not held at its size before the bind next to the witness
@@ -1442,7 +1721,15 @@ fn fold_tables<const K: usize, A: Arith<K> + Sync>(
         }
         MStar::Parts(parts) => MStar::Bound(parts, Coin::new(f, a)),
         MStar::Bound(parts, a1) if run.tau.len() >= 3 => MStar::Bound2(parts, a1, Coin::new(f, a)),
-        bound @ (MStar::Bound(..) | MStar::Bound2(..)) => {
+        // With deep rounds, rounds 4 .. 3 + deep read the parts and the coins as well.
+        MStar::Bound2(parts, a1, a2) if deep >= 1 => {
+            MStar::Deep(parts, Vec::from([a1, a2, Coin::new(f, a)]))
+        }
+        MStar::Deep(parts, mut coins) if coins.len() < 2 + deep => {
+            coins.push(Coin::new(f, a));
+            MStar::Deep(parts, coins)
+        }
+        bound @ (MStar::Bound(..) | MStar::Bound2(..) | MStar::Deep(..)) => {
             let h = bound.len() / 2;
             MStar::Table(
                 (0..h)
@@ -1461,14 +1748,23 @@ fn fold_tables<const K: usize, A: Arith<K> + Sync>(
         // Round 3 reads w_base, a_1 and a_2 (`bound_two_entry`).
     } else if r == 2 && defer {
         let (a1, a12) = (run.point[0], f.mul(&run.point[0], a));
-        run.w = (0..w_base.len() / 4)
+        run.w = (0..w_base.entries() / 4)
             .into_par_iter()
             .map(|x| bound_two_entry(f, w_base, pad, &a1, a, &a12, x))
+            .collect();
+    } else if r >= 3 && r < 3 + deep && defer3 {
+        // Rounds 4 .. 3 + deep read w_base and the coins (`bound_entry`).
+    } else if r == 3 + deep && deep >= 1 && defer3 {
+        let mut coins = run.point.clone();
+        coins.push(*a);
+        run.w = (0..w_base.entries() >> r)
+            .into_par_iter()
+            .map(|x| bound_entry(f, w_base, pad, &coins, x))
             .collect();
     } else if r == 3 && defer3 {
         let (a1, a2) = (run.point[0], run.point[1]);
         let a12 = f.mul(&a1, &a2);
-        let eighth = w_base.len() / 8;
+        let eighth = w_base.entries() / 8;
         run.w = (0..eighth)
             .into_par_iter()
             .map(|x| {
@@ -1479,20 +1775,21 @@ fn fold_tables<const K: usize, A: Arith<K> + Sync>(
             .collect();
     } else if r == 1 {
         let zq = f.zq();
-        let (low, high) = w_base.split_at(w_base.len() / 2);
-        run.w = low
-            .par_iter()
-            .zip(high.par_iter())
-            .map(|(lo, hi)| f.add(&f.from_base(*lo), &arith.scale_out(&coin, zq.sub(*hi, *lo))))
+        let h = w_base.entries() / 2;
+        run.w = (0..h)
+            .into_par_iter()
+            .map(|x| {
+                let (lo, hi) = (w_base.residue(x), w_base.residue(x + h));
+                f.add(&f.from_base(lo), &arith.scale_out(&coin, zq.sub(hi, lo)))
+            })
             .collect();
         // The pad's pair has one entry outside the base field.
         if let Some((at, value)) = pad {
-            let h = w_base.len() / 2;
             let x = at % h;
             let (lo, hi) = if *at < h {
-                (*value, f.from_base(w_base[x + h]))
+                (*value, f.from_base(w_base.residue(x + h)))
             } else {
-                (f.from_base(w_base[x]), *value)
+                (f.from_base(w_base.residue(x)), *value)
             };
             run.w[x] = f.add(&lo, &arith.mul(&coin, &f.sub(&hi, &lo)));
         }
@@ -1503,6 +1800,10 @@ fn fold_tables<const K: usize, A: Arith<K> + Sync>(
         fold(arith, f, &mut run.eq_u, &coin);
         fold(arith, f, &mut run.e, &coin);
         fold(arith, f, &mut run.ind, &coin);
+        // A bound row is zero when both of its rows are.
+        let h = run.zero.len() / 2;
+        let (low, high) = run.zero.split_at(h);
+        run.zero = low.iter().zip(high).map(|(a, b)| *a && *b).collect();
     } else {
         fold(arith, f, &mut run.eq_l, &coin);
     }
@@ -1674,6 +1975,148 @@ mod tests {
         }
     }
 
+    /// A table shaped as a party's share (digits on its slice $S\_p$, some of its rows zero,
+    /// residues on the rows of [`ind_rows`], zero elsewhere, a field pad for party 1) against the
+    /// direct evaluation at every round, held as it is and compactly ([`PartyProver::compact`]),
+    /// with round 2 and 3 from the base table or not, in both arithmetics: the pairs of zero rows
+    /// that the rounds skip and the compact entries give the same values.
+    #[test]
+    fn share_shaped_tables_match_the_direct_evaluation_dense_and_compact() {
+        let mut compacted = 0;
+        let mut skipped = 0;
+        for n in 1..=3u64 {
+            let (params, _) = derive(&toy_choices(n)).unwrap();
+            let ctx = Context::<4>::setup(params, &[n as u8 + 40; 32]).unwrap();
+            let l = &ctx.layout;
+            let f = ctx.field();
+            let q = ctx.q();
+            let b = ctx.b() as i64;
+            let size = 1usize << l.ell_pp;
+            let two_d = 2 * l.d;
+            for p in 1..=l.n {
+                let mut rng = SplitMix(3000 * n + p as u64);
+                let slice = row_indicator(l, &l.s_ranges(p)).unwrap();
+                let large = ind_rows(l);
+                let span = (2 * b - 1) as u64;
+                let w: Vec<u64> = (0..size)
+                    .map(|x| {
+                        let u = x / two_d;
+                        if large.contains(&u) {
+                            rng.next() % q
+                        } else if slice[u] == 1 && u % 5 != 2 {
+                            f.zq().from_i64((rng.next() % span) as i64 - (b - 1))
+                        } else {
+                            0
+                        }
+                    })
+                    .collect();
+                let pad = (p == 1).then(|| rng.ext(q));
+                let mut w = w;
+                if pad.is_some() {
+                    w[pad_index(l)] = 0;
+                }
+                let mut blinder = |degree: usize| Blinder {
+                    s0: rng.ext(q),
+                    s: (0..l.ell_pp)
+                        .map(|_| (0..degree).map(|_| rng.ext(q)).collect())
+                        .collect(),
+                };
+                let (g0, g1) = (blinder(l.d0), blinder(l.d1));
+                let coins = SumcheckCoins {
+                    alpha: rng.ext(q),
+                    rho: rng.ext(q),
+                    tau0: (0..l.ell_pp + l.log_n).map(|_| rng.ext(q)).collect(),
+                    tau1: (0..l.log_nu).map(|_| rng.ext(q)).collect(),
+                };
+                let mstar: Vec<Ext<4>> = (0..size).map(|_| rng.ext(q)).collect();
+                let point: Vec<Ext<4>> = (0..l.ell_pp).map(|_| rng.ext(q)).collect();
+                let dense =
+                    PartyProver::new(&ctx, p, w.clone(), pad, g0.clone(), g1.clone()).unwrap();
+                let mut provers = Vec::new();
+                for (compact, share, deep) in [
+                    (false, PLANE_SHARE, None),
+                    (true, PLANE_SHARE, None),
+                    (true, 0, None),
+                    (false, 0, None),
+                    (true, 0, Some(1)),
+                    (true, 0, Some(2)),
+                ] {
+                    let mut prover = dense.clone();
+                    prover.plane_share = share;
+                    prover.deep = deep;
+                    if compact {
+                        prover.compact();
+                        assert!(prover.table_bytes().0, "the share's entries fit in a byte");
+                        assert_eq!(&*prover.w_table(), &w[..], "the compact table's entries");
+                        compacted += 1;
+                    }
+                    let mut slow = prover.clone();
+                    slow.mont = None;
+                    provers.push(prover);
+                    provers.push(slow);
+                }
+                for prover in &mut provers {
+                    prover.start(&coins, mstar.clone()).unwrap();
+                }
+                let zero_pairs = {
+                    let z = &provers[0].run.as_ref().unwrap().zero;
+                    (0..z.len() / 2)
+                        .filter(|u| z[*u] && z[u + z.len() / 2])
+                        .count()
+                };
+                skipped += zero_pairs;
+                let expand = |rows: &[u64]| -> Vec<Ext<4>> {
+                    (0..size).map(|x| f.from_base(rows[x / two_d])).collect()
+                };
+                let mut eq = eq_table(f, &coins.tau0[..l.ell_pp]).unwrap();
+                let mut e = expand(&slice);
+                let mut ind = expand(&row_indicator(l, std::slice::from_ref(&large)).unwrap());
+                let mut wt: Vec<Ext<4>> = w.iter().map(|x| f.from_base(*x)).collect();
+                if let Some(value) = pad {
+                    wt[pad_index(l)] = f.reduce(&value);
+                }
+                let mut ms = mstar;
+                let eq_party =
+                    eq_point(f, &coins.tau0[l.ell_pp..], &msb_bits(p - 1, l.log_n)).unwrap();
+                for r in 1..=l.ell_pp {
+                    let (f0, f1) =
+                        direct_round(f, ctx.b(), &eq_party, &eq, &e, &ind, &wt, &ms, l.d0, l.d1);
+                    let values = provers[0].round_values().unwrap();
+                    assert_eq!(values.f0, f0, "n = {n}, p = {p}, round {r}: F_0");
+                    assert_eq!(values.f1, f1, "n = {n}, p = {p}, round {r}: F_1");
+                    for (i, prover) in provers.iter().enumerate().skip(1) {
+                        assert_eq!(
+                            prover.round_values().unwrap(),
+                            values,
+                            "prover {i}, round {r}"
+                        );
+                    }
+                    let a = point[r - 1];
+                    for prover in &mut provers {
+                        prover.bind(&a).unwrap();
+                    }
+                    for t in [&mut eq, &mut e, &mut ind, &mut wt, &mut ms] {
+                        bind_top(f, t, &a).unwrap();
+                    }
+                }
+                let fin = provers[0].final_values().unwrap();
+                assert_eq!(fin.0, wt[0]);
+                for prover in &provers {
+                    assert_eq!(prover.final_values().unwrap(), fin);
+                }
+                assert_eq!(
+                    provers[2].clone().into_parts().0,
+                    w,
+                    "the table back from compact"
+                );
+            }
+        }
+        assert!(
+            compacted > 0 && skipped > 0,
+            "compact tables and skipped pairs were exercised"
+        );
+    }
+
     /// Round 2 from the base-field table and the first coin (`PlaneValues`, forced by a plane share
     /// of 0) against the direct evaluation at all nodes and against the prover that folds after
     /// round 1, in both arithmetics: toy parameters with n = 1, 2, 3, tables of digits with
@@ -1802,6 +2245,7 @@ mod tests {
         use crate::tables::EqSplit;
         use hachi_co_core::{MRows, Poly};
         use std::borrow::Cow;
+        let mut deeps = 0;
         for n in 1..=3u64 {
             let (params, _) = derive(&toy_choices(n)).unwrap();
             let ctx = Context::<4>::setup(params, &[n as u8 + 20; 32]).unwrap();
@@ -1856,13 +2300,27 @@ mod tests {
                 let point: Vec<Ext<4>> = (0..l.ell_pp).map(|_| rng.ext(q)).collect();
                 let base =
                     PartyProver::new(&ctx, p, w.clone(), None, g0.clone(), g1.clone()).unwrap();
-                for (mont, plane_share) in [(true, PLANE_SHARE), (false, PLANE_SHARE), (true, 0)] {
+                for (mont, plane_share, deep) in [
+                    (true, PLANE_SHARE, None),
+                    (false, PLANE_SHARE, None),
+                    (true, 0, None),
+                    (true, 0, Some(1)),
+                    (true, 0, Some(2)),
+                    (false, 0, Some(2)),
+                ] {
                     let mut with_table = base.clone();
                     if !mont {
                         with_table.mont = None;
                     }
                     with_table.plane_share = plane_share;
                     let mut with_parts = with_table.clone();
+                    // Deep rounds read the parts of M* and the base table after the third round:
+                    // against the prover with the table and none.
+                    with_parts.deep = deep;
+                    with_table.deep = Some(0);
+                    if deep.is_some() {
+                        deeps += usize::from(with_parts.deep_rounds() > 0);
+                    }
                     with_table.start(&coins, table.clone()).unwrap();
                     with_parts.start_parts(&coins, parts.clone()).unwrap();
                     for (r, a) in point.iter().enumerate() {
@@ -1889,6 +2347,7 @@ mod tests {
                 );
             }
         }
+        assert!(deeps > 0, "deep rounds were exercised");
     }
 
     /// The pairs of factors against the product one factor at a time, for every base up to 17

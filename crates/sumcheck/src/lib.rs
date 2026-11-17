@@ -86,8 +86,9 @@ pub use interp::{Nodes, degree_at_nodes};
 pub use prover::PartyProver;
 pub use quotient::{quotient_share, quotient_share_rows};
 pub use tables::{
-    EqSplit, MStarParts, RangeProduct, claimed_sum, ind_rows, mstar_table, mstar_table_rows,
-    pad_index, powers, put_pad_residues, range_product, row_indicator, table_size, w_table,
+    CompactTable, EqSplit, MStarParts, RangeProduct, claimed_sum, ind_rows, mstar_table,
+    mstar_table_rows, pad_index, powers, put_pad_residues, range_product, row_indicator,
+    table_size, w_table,
 };
 pub use transcript::{
     Claim, ClaimedPoly, FinalClaims, FinalValues, PcsWords, RoundMessage, RoundValues,

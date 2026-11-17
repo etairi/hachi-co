@@ -82,6 +82,388 @@ pub fn w_table<const K: usize>(
     Ok(table)
 }
 
+/// A party's base-field table of [`w_table`] as the rounds of
+/// [`PartyProver`](crate::PartyProver) read it: entry `x` as a residue and as its centered
+/// representative. [`DenseTable`] reads the table itself, [`CompactTable`] its compact form; both
+/// give the same entries.
+pub(crate) trait BaseTable: Sync {
+    /// The number of entries, $2^{\ell''}$.
+    fn entries(&self) -> usize;
+    /// Entry `x`, reduced modulo $q$.
+    fn residue(&self, x: usize) -> u64;
+    /// Entry `x` centered, in $(-q/2, q/2]$ ([`Zq::to_centered`]).
+    fn centered(&self, x: usize) -> i64;
+}
+
+/// The table of [`w_table`] as it is (reduced entries).
+pub(crate) struct DenseTable<'a> {
+    zq: Zq,
+    table: &'a [u64],
+}
+
+impl<'a> DenseTable<'a> {
+    pub(crate) fn new(zq: Zq, table: &'a [u64]) -> Self {
+        Self { zq, table }
+    }
+}
+
+impl BaseTable for DenseTable<'_> {
+    #[inline(always)]
+    fn entries(&self) -> usize {
+        self.table.len()
+    }
+
+    #[inline(always)]
+    fn residue(&self, x: usize) -> u64 {
+        self.table[x]
+    }
+
+    #[inline(always)]
+    fn centered(&self, x: usize) -> i64 {
+        self.zq.to_centered(self.table[x])
+    }
+}
+
+/// The table of [`w_table`] held compactly: every entry outside the range `large` as its centered
+/// value in one byte, and the entries of `large` as residues. A party's share of $\mathbf z'$ is
+/// zero outside its slice $S\_p$ (the slices condition of $\mathcal R\_3$) and its entries in the
+/// slice are digits of absolute value below $b$, so only the rows of [`ind_rows`] ($\langle u
+/// \rangle$, the pad's and the quotient's) hold large values: $2^{\ell''}$ bytes and $(n' + 2)\, 2d$
+/// residues in place of $2^{\ell''}$ residues, with the same entries
+/// ([`CompactTable::from_dense`] checks that they fit).
+#[derive(Clone, Debug)]
+pub struct CompactTable {
+    zq: Zq,
+    small: Vec<i8>,
+    /// The first entry of the range held as residues.
+    large_start: usize,
+    large: Vec<u64>,
+}
+
+impl CompactTable {
+    /// `table` (reduced entries) with the entries `large` held as residues, if the centered value
+    /// of every other entry lies in $[-128, 127]$; `None` otherwise (or for a range outside the
+    /// table).
+    pub fn from_dense(zq: Zq, table: &[u64], large: Range<usize>) -> Option<Self> {
+        if large.start > large.end || large.end > table.len() {
+            return None;
+        }
+        const CHUNK: usize = 1 << 16;
+        let mut small = vec![0i8; table.len()];
+        let fits = small.par_chunks_mut(CHUNK).enumerate().all(|(c, chunk)| {
+            chunk.iter_mut().enumerate().all(|(i, s)| {
+                let x = c * CHUNK + i;
+                if large.contains(&x) {
+                    return true;
+                }
+                match i8::try_from(zq.to_centered(table[x])) {
+                    Ok(v) => {
+                        *s = v;
+                        true
+                    }
+                    Err(_) => false,
+                }
+            })
+        });
+        fits.then(|| Self {
+            zq,
+            small,
+            large_start: large.start,
+            large: table[large].to_vec(),
+        })
+    }
+
+    /// The table of [`w_table`] on the same shares, formed compactly without the table itself:
+    /// the same entries as [`CompactTable::from_dense`] on it with the entries of the rows of
+    /// [`ind_rows`] as residues, or `None` where that would be `None`.
+    ///
+    /// # Errors
+    /// Those of [`w_table`] for shares of the wrong shape.
+    pub fn from_share<const K: usize>(
+        ctx: &Context<K>,
+        z_share: &[Poly],
+        r_share: &[Poly],
+    ) -> Result<Option<Self>> {
+        let l = &ctx.layout;
+        let (q, zq, two_d) = (ctx.q(), *ctx.field().zq(), 2 * l.d);
+        check_len("<z'>_p", l.len_z, z_share.len())?;
+        check_len("<r>_p", l.n_prime, r_share.len())?;
+        for p in z_share {
+            check_len("<z'>_p (coefficients)", l.d, p.0.len())?;
+        }
+        for p in r_share {
+            check_len("<r>_p (coefficients)", two_d, p.0.len())?;
+        }
+        let size = table_size(l)?;
+        if l.len_z > l.mu || (l.mu + l.n_prime) * two_d > size {
+            return Err(Error::Shape {
+                what: "rows of the table (z' then r from row mu)",
+                expected: size / two_d,
+                actual: l.mu + l.n_prime,
+            });
+        }
+        let rows = ind_rows(l);
+        let large = rows.start * two_d..rows.end * two_d;
+        // The entries of w_table at row u, column c (reduced), as it writes them.
+        let entry = |u: usize, c: usize| -> u64 {
+            if u < l.len_z {
+                if c < l.d { z_share[u].0[c] % q } else { 0 }
+            } else if u >= l.mu && u < l.mu + l.n_prime {
+                r_share[u - l.mu].0[c] % q
+            } else {
+                0
+            }
+        };
+        let mut small = vec![0i8; size];
+        let fits = small
+            .par_chunks_mut(two_d)
+            .enumerate()
+            .take(l.mu + l.n_prime)
+            .all(|(u, row)| {
+                rows.contains(&u)
+                    || row.iter_mut().enumerate().all(|(c, s)| {
+                        match i8::try_from(zq.to_centered(entry(u, c))) {
+                            Ok(v) => {
+                                *s = v;
+                                true
+                            }
+                            Err(_) => false,
+                        }
+                    })
+            });
+        Ok(fits.then(|| Self {
+            zq,
+            small,
+            large_start: large.start,
+            large: large.map(|x| entry(x / two_d, x % two_d)).collect(),
+        }))
+    }
+
+    /// The dense table again, reduced: the table given to [`CompactTable::from_dense`].
+    pub fn to_dense(&self) -> Vec<u64> {
+        (0..self.small.len())
+            .into_par_iter()
+            .map(|x| self.residue(x))
+            .collect()
+    }
+
+    /// The bytes and residues it holds.
+    pub fn bytes(&self) -> usize {
+        self.small.len() + 8 * self.large.len()
+    }
+
+    /// A digest of the table (FNV-1a over its bytes, eight at a time, then its length, the start of
+    /// its residues and the residues), against which a later reader checks that the table did not
+    /// change in between: not a binding.
+    pub fn digest(&self) -> u64 {
+        let fnv = |h: u64, w: u64| (h ^ w).wrapping_mul(FNV_PRIME);
+        let blocks: Vec<u64> = self
+            .small
+            .par_chunks(FNV_BLOCK)
+            .map(|block| {
+                block.chunks(8).fold(FNV_OFFSET, |h, word| {
+                    let w = word
+                        .iter()
+                        .enumerate()
+                        .fold(0u64, |w, (i, v)| w | (u64::from(*v as u8) << (8 * i)));
+                    fnv(h, w)
+                })
+            })
+            .collect();
+        let h = blocks.into_iter().fold(FNV_OFFSET, fnv);
+        let h = fnv(fnv(h, self.small.len() as u64), self.large_start as u64);
+        self.large.iter().fold(h, |h, x| fnv(h, *x))
+    }
+}
+
+impl BaseTable for CompactTable {
+    #[inline(always)]
+    fn entries(&self) -> usize {
+        self.small.len()
+    }
+
+    #[inline(always)]
+    fn residue(&self, x: usize) -> u64 {
+        let i = x.wrapping_sub(self.large_start);
+        if i < self.large.len() {
+            self.large[i]
+        } else {
+            self.zq.from_i64(i64::from(self.small[x]))
+        }
+    }
+
+    #[inline(always)]
+    fn centered(&self, x: usize) -> i64 {
+        let i = x.wrapping_sub(self.large_start);
+        if i < self.large.len() {
+            self.zq.to_centered(self.large[i])
+        } else {
+            i64::from(self.small[x])
+        }
+    }
+}
+
+/// The monomial coefficients of a party's table held compactly, with a field pad, formed in
+/// `parts` parts of consecutive coefficients for
+/// [`BasePcs::commit_multilinear_ext_parts`](hachi_co_core::BasePcs::commit_multilinear_ext_parts):
+/// the coefficients of [`LiftedCoeffs`](hachi_co_core::base_pcs::LiftedCoeffs) on the same table and
+/// pad, without the table or its coefficients held whole. Part $p$ of $P$ coefficients (indices
+/// $p P + x$) is the Möbius transform over the bits of $x$ of $\sum\_{h \subseteq p} (-1)^{\lvert p
+/// \rvert - \lvert h \rvert} T\[h P + x\]$, the first $\log \mathrm{parts}$ levels of the Möbius
+/// transform of the table $T$ taken at $p$ (the transform's levels commute); the pad is added as
+/// `LiftedCoeffs` adds it. The fingerprint hashes the parts' blocks of $2^{16}$ in order, as
+/// `LiftedCoeffs::fingerprint` hashes its coefficients.
+pub(crate) struct CompactCoeffs<'a, const K: usize> {
+    field: &'a Fqk<K>,
+    table: &'a CompactTable,
+    pad: Option<(usize, Ext<K>)>,
+    parts: usize,
+    /// The part formed last and its coefficients over $\mathbb Z\_q$.
+    current: std::sync::RwLock<(usize, Vec<u64>)>,
+    /// The FNV-1a state over the blocks of the parts formed so far, and the next part.
+    hash: std::sync::Mutex<(u64, usize)>,
+}
+
+/// FNV-1a, as `LiftedCoeffs::fingerprint` takes it.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+/// The blocks that `LiftedCoeffs::fingerprint` hashes.
+const FNV_BLOCK: usize = 1 << 16;
+
+impl<'a, const K: usize> CompactCoeffs<'a, K> {
+    /// The coefficients of `table` with the pad `pad` in `parts` parts: a power of two dividing
+    /// the table whose parts hold a multiple of $2^{16}$ coefficients, or one part.
+    pub(crate) fn new(
+        field: &'a Fqk<K>,
+        table: &'a CompactTable,
+        pad: Option<(usize, Ext<K>)>,
+        parts: usize,
+    ) -> Result<Self> {
+        let n = table.entries();
+        if !parts.is_power_of_two()
+            || !n.is_multiple_of(parts)
+            || (parts > 1 && !(n / parts).is_multiple_of(FNV_BLOCK))
+        {
+            return Err(Error::Parameter(format!(
+                "{parts} parts of {n} coefficients"
+            )));
+        }
+        Ok(Self {
+            field,
+            table,
+            pad: pad.map(|(at, v)| (at, field.reduce(&v))),
+            parts,
+            current: std::sync::RwLock::new((usize::MAX, Vec::new())),
+            hash: std::sync::Mutex::new((FNV_OFFSET, 0)),
+        })
+    }
+
+    /// Forms part `p`, which must be the part after the last one formed for the fingerprint.
+    pub(crate) fn prepare(&self, p: usize) -> hachi_co_core::Result<()> {
+        let n = self.table.entries();
+        let len = n / self.parts;
+        if p >= self.parts {
+            return Err(hachi_co_core::Error::Shape {
+                what: "part of the coefficients",
+                expected: self.parts,
+                actual: p,
+            });
+        }
+        let (zq, table) = (*self.field.zq(), self.table);
+        let mut current = self.current.write().expect("the coefficients' lock");
+        let mut part = std::mem::take(&mut current.1);
+        part.clear();
+        part.resize(len, 0);
+        part.par_chunks_mut(1 << 12)
+            .enumerate()
+            .for_each(|(i, out)| {
+                for (j, o) in out.iter_mut().enumerate() {
+                    let x = (i << 12) + j;
+                    // The sum over the subsets h of p, with the sign of |p| - |h|.
+                    let (mut h, mut acc) = (p, 0u64);
+                    loop {
+                        let v = table.residue(h * len + x);
+                        acc = if (p ^ h).count_ones().is_multiple_of(2) {
+                            zq.add(acc, v)
+                        } else {
+                            zq.sub(acc, v)
+                        };
+                        if h == 0 {
+                            break;
+                        }
+                        h = (h - 1) & p;
+                    }
+                    *o = acc;
+                }
+            });
+        hachi_co_core::base_pcs::mobius(&zq, &mut part)?;
+        let mut hash = self.hash.lock().expect("the fingerprint's lock");
+        if hash.1 == p {
+            let fnv = |h: u64, w: u64| (h ^ w).wrapping_mul(FNV_PRIME);
+            let blocks: Vec<u64> = part
+                .par_chunks(FNV_BLOCK)
+                .map(|block| block.iter().fold(FNV_OFFSET, |h, x| fnv(h, *x)))
+                .collect();
+            hash.0 = blocks.into_iter().fold(hash.0, fnv);
+            hash.1 = p + 1;
+        }
+        *current = (p, part);
+        Ok(())
+    }
+
+    /// Coefficients `start .. start + out.len()`, within the part formed last.
+    pub(crate) fn read(&self, start: usize, out: &mut [Ext<K>]) {
+        let f = self.field;
+        let current = self.current.read().expect("the coefficients' lock");
+        let (p, part) = (&current.0, &current.1);
+        let first = p * part.len();
+        for (i, o) in (start..).zip(out.iter_mut()) {
+            let x = f.from_base(part[i - first]);
+            *o = match self.pad {
+                Some((at, v)) if i & at == at => {
+                    if (i ^ at).count_ones().is_multiple_of(2) {
+                        f.add(&x, &v)
+                    } else {
+                        f.sub(&x, &v)
+                    }
+                }
+                _ => x,
+            };
+        }
+    }
+
+    /// The fingerprint, once every part was formed in order: that of `LiftedCoeffs` on the
+    /// same table and pad.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        let fnv = |h: u64, w: u64| (h ^ w).wrapping_mul(FNV_PRIME);
+        let hash = self.hash.lock().expect("the fingerprint's lock");
+        debug_assert_eq!(hash.1, self.parts, "every part formed");
+        let mut h = fnv(hash.0, self.table.entries() as u64);
+        if let Some((at, value)) = self.pad {
+            h = value
+                .0
+                .iter()
+                .fold(fnv(h, at as u64 + 1), |h, x| fnv(h, *x));
+        }
+        h
+    }
+}
+
+/// The rows of a table of `two_d` entries per row whose entries are all zero, the pad's row
+/// excluded (a field pad is held outside the table, which has 0 at its index): the rows on which
+/// $\langle \widetilde w \rangle\_p$ vanishes, where $F\_{0,p}$ and $F\_{1,p}$ vanish too.
+pub(crate) fn zero_rows<B: BaseTable>(
+    table: &B,
+    two_d: usize,
+    pad_row: Option<usize>,
+) -> Vec<bool> {
+    let rows = table.entries() / two_d;
+    (0..rows)
+        .into_par_iter()
+        .map(|u| Some(u) != pad_row && (u * two_d..(u + 1) * two_d).all(|x| table.residue(x) == 0))
+        .collect()
+}
+
 /// The table `base` of [`w_table`] over $\mathbb F\_{q^K}$, with the pad's entry `pad` (its index
 /// and value) set when the pad is a field element: the hypercube values of
 /// $\langle \widetilde w \rangle\_p$, the pad included.
@@ -671,6 +1053,105 @@ mod tests {
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         z ^ (z >> 31)
+    }
+
+    /// [`CompactTable::from_share`] against [`CompactTable::from_dense`] on the table of
+    /// [`w_table`] for shares shaped as a party's (digits on rows of the slice, residues on the
+    /// rows of [`ind_rows`], zero elsewhere), for toy contexts of one to three parties, and `None`
+    /// for both once an entry outside those rows is not a byte.
+    #[test]
+    fn the_compact_table_from_the_share_is_the_compact_dense_table() {
+        use hachi_co_params::{derive, presets::toy_choices};
+        for n in 1..=3u64 {
+            let (params, _) = derive(&toy_choices(n)).unwrap();
+            let ctx = Context::<4>::setup(params, &[n as u8 + 60; 32]).unwrap();
+            let l = &ctx.layout;
+            let (q, zq, two_d) = (ctx.q(), *ctx.field().zq(), 2 * l.d);
+            let mut state = 60 + n;
+            let rows = ind_rows(l);
+            for p in 1..=l.n {
+                let slice = row_indicator(l, &l.s_ranges(p)).unwrap();
+                let mut z: Vec<Poly> = (0..l.len_z)
+                    .map(|u| {
+                        Poly(
+                            (0..l.d)
+                                .map(|_| {
+                                    if rows.contains(&u) {
+                                        next(&mut state) % q
+                                    } else if slice[u] == 1 {
+                                        zq.from_i64((next(&mut state) % 31) as i64 - 15)
+                                    } else {
+                                        0
+                                    }
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let r: Vec<Poly> = (0..l.n_prime)
+                    .map(|_| Poly((0..two_d).map(|_| next(&mut state) % q).collect()))
+                    .collect();
+                let large = rows.start * two_d..rows.end * two_d;
+                let dense = w_table(&ctx, &z, &r).unwrap();
+                let from_dense = CompactTable::from_dense(zq, &dense, large.clone()).unwrap();
+                let from_share = CompactTable::from_share(&ctx, &z, &r).unwrap().unwrap();
+                assert_eq!(from_share.to_dense(), dense, "n = {n}, p = {p}");
+                assert_eq!(from_share.to_dense(), from_dense.to_dense());
+                // An entry of the slice that is not a byte: neither form is compact.
+                if let Some(u) = (0..l.len_z).find(|u| slice[*u] == 1 && !rows.contains(u)) {
+                    z[u].0[0] = 1000;
+                    let dense = w_table(&ctx, &z, &r).unwrap();
+                    assert!(CompactTable::from_dense(zq, &dense, large).is_none());
+                    assert!(CompactTable::from_share(&ctx, &z, &r).unwrap().is_none());
+                }
+            }
+        }
+    }
+
+    /// [`CompactCoeffs`] in 1, 2 and 4 parts against [`LiftedCoeffs`] on the same table and pad:
+    /// a table of $2^{18}$ entries with small entries, zero rows and a range of residues, every
+    /// coefficient read part by part and the fingerprint.
+    #[test]
+    fn the_coefficients_in_parts_are_the_lifted_coefficients() {
+        use hachi_co_core::base_pcs::LiftedCoeffs;
+        let q = 18211211930825437u64; // secure-l24-n2-a8
+        let f = Fqk::<4>::new(q).unwrap();
+        let zq = *f.zq();
+        let mut state = 77u64;
+        let n = 1usize << 18;
+        let large = 1000..3000;
+        let dense: Vec<u64> = (0..n)
+            .map(|x| {
+                if large.contains(&x) {
+                    next(&mut state) % q
+                } else if (x / 512) % 3 == 0 {
+                    0
+                } else {
+                    zq.from_i64((next(&mut state) % 15) as i64 - 7)
+                }
+            })
+            .collect();
+        let at = 5 * 512 + 3;
+        let mut table = dense.clone();
+        table[at] = 0;
+        let pad_value = Ext::<4>(core::array::from_fn(|_| next(&mut state) % q));
+        let compact = CompactTable::from_dense(zq, &table, large).unwrap();
+        let lifted = LiftedCoeffs::from_table(&f, table.clone(), Some((at, pad_value))).unwrap();
+        let want = lifted.to_vec();
+        for parts in [1usize, 2, 4] {
+            let coeffs = CompactCoeffs::new(&f, &compact, Some((at, pad_value)), parts).unwrap();
+            let per = n / parts;
+            let mut got = vec![f.zero(); n];
+            for (p, out) in got.chunks_mut(per).enumerate() {
+                coeffs.prepare(p).unwrap();
+                // Read in runs of 64, as the commitment reads them.
+                for (k, run) in out.chunks_mut(64).enumerate() {
+                    coeffs.read(p * per + 64 * k, run);
+                }
+            }
+            assert_eq!(got, want, "{parts} parts");
+            assert_eq!(coeffs.fingerprint(), lifted.fingerprint(), "{parts} parts");
+        }
     }
 
     #[test]

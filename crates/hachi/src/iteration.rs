@@ -403,12 +403,35 @@ fn fold_message<const K: usize>(
     {
         return Ok(z);
     }
-    fold_chunks(ctx, sparse, layout.width(delta), |i| match message {
-        MessageView::Held(m) => Committed::digits(ctx, layout, delta, &m[i]),
-        MessageView::Source { .. } => Ok(Cow::Owned(
-            Committed::digits(ctx, layout, delta, &message.chunk(i)?)?.into_owned(),
-        )),
-    })
+    // The chunks of each part after it is prepared (one part for a message not read in parts):
+    // the sums of the parts are the sum over all the chunks.
+    let ring = &ctx.ring;
+    let mut z: Option<Vec<Poly>> = None;
+    for p in 0..message.part_count() {
+        let range = message.prepare_part(p)?;
+        let first = range.start;
+        let part = fold_chunks(
+            ctx,
+            &sparse[range],
+            layout.width(delta),
+            |i| match message {
+                MessageView::Held(m) => Committed::digits(ctx, layout, delta, &m[first + i]),
+                MessageView::Source { .. } => Ok(Cow::Owned(
+                    Committed::digits(ctx, layout, delta, &message.chunk(first + i)?)?.into_owned(),
+                )),
+            },
+        )?;
+        z = Some(match z {
+            None => part,
+            Some(mut acc) => {
+                for (x, y) in acc.iter_mut().zip(&part) {
+                    *x = ring.add(x, y)?;
+                }
+                acc
+            }
+        });
+    }
+    z.ok_or_else(|| Error::Shape("a message of no parts".into()))
 }
 
 /// [`fold_chunks`] over the digits of a decomposed message, $\sum_i c_i \mathbf
@@ -467,24 +490,34 @@ fn fold_message_digits_i64<const K: usize>(
     len: usize,
 ) -> Result<Vec<Poly>> {
     let (ring, b, d) = (&ctx.ring, ctx.choices.b, ctx.d());
-    let elements = (0..len)
-        .into_par_iter()
-        .map_init(
-            || (vec![0i64; delta * d], vec![0i64; d], vec![0i64; delta * d]),
-            |(digits, scratch, acc), e| -> Result<Vec<Poly>> {
-                acc.fill(0);
-                for (i, c) in sparse.iter().enumerate() {
-                    let element = message.element(i, e)?;
-                    g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
-                    for (sum, row) in acc.chunks_exact_mut(d).zip(digits.chunks_exact(d)) {
-                        ring.add_sparse_product_signed(sum, c, row)?;
+    // Every element's sums over the chunks, part after part (one part for a message not read in
+    // parts): the chunks in the same order, so the same integers.
+    let mut accs = vec![0i64; len * delta * d];
+    for p in 0..message.part_count() {
+        let range = message.prepare_part(p)?;
+        accs.par_chunks_mut(delta * d)
+            .enumerate()
+            .try_for_each_init(
+                || (vec![0i64; delta * d], vec![0i64; d]),
+                |(digits, scratch), (e, acc)| -> Result<()> {
+                    for i in range.clone() {
+                        let element = message.element(i, e)?;
+                        g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
+                        for (sum, row) in acc.chunks_exact_mut(d).zip(digits.chunks_exact(d)) {
+                            ring.add_sparse_product_signed(sum, &sparse[i], row)?;
+                        }
                     }
-                }
-                acc.chunks_exact(d)
-                    .map(|sum| Ok(ring.from_i64(sum)?))
-                    .collect()
-            },
-        )
+                    Ok(())
+                },
+            )?;
+    }
+    let elements = accs
+        .par_chunks(delta * d)
+        .map(|acc| {
+            acc.chunks_exact(d)
+                .map(|sum| Ok(ring.from_i64(sum)?))
+                .collect::<Result<Vec<Poly>>>()
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(elements.into_iter().flatten().collect())
 }
@@ -501,31 +534,37 @@ fn fold_message_digits_i32<const K: usize>(
     len: usize,
 ) -> Result<Vec<Poly>> {
     let (ring, b, d) = (&ctx.ring, ctx.choices.b, ctx.d());
-    let elements = (0..len)
-        .into_par_iter()
+    // As in `fold_message_digits_i64`: every element's sums, part after part, the chunks in the
+    // same order (every partial sum is within the caller's bound).
+    let mut accs = vec![0i32; len * delta * d];
+    for p in 0..message.part_count() {
+        let range = message.prepare_part(p)?;
+        accs.par_chunks_mut(delta * d)
+            .enumerate()
+            .try_for_each_init(
+                || (vec![0i64; delta * d], vec![0i64; d], vec![0i32; delta * d]),
+                |(digits, scratch, narrow), (e, acc)| -> Result<()> {
+                    for i in range.clone() {
+                        let element = message.element(i, e)?;
+                        g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
+                        for (n, x) in narrow.iter_mut().zip(digits.iter()) {
+                            *n = i32::try_from(*x).map_err(|_| {
+                                Error::Protocol("a digit does not fit 32 bits".into())
+                            })?;
+                        }
+                        for (sum, row) in acc.chunks_exact_mut(d).zip(narrow.chunks_exact(d)) {
+                            ring.add_sparse_product_signed_i32(sum, &sparse[i], row)?;
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+    }
+    let elements = accs
+        .par_chunks(delta * d)
         .map_init(
-            || {
-                (
-                    vec![0i64; delta * d],
-                    vec![0i64; d],
-                    vec![0i32; delta * d],
-                    vec![0i32; delta * d],
-                    vec![0i64; d],
-                )
-            },
-            |(digits, scratch, narrow, acc, wide), e| -> Result<Vec<Poly>> {
-                acc.fill(0);
-                for (i, c) in sparse.iter().enumerate() {
-                    let element = message.element(i, e)?;
-                    g_inv_rows(ring.zq(), b, delta, &element.0, digits, scratch)?;
-                    for (n, x) in narrow.iter_mut().zip(digits.iter()) {
-                        *n = i32::try_from(*x)
-                            .map_err(|_| Error::Protocol("a digit does not fit 32 bits".into()))?;
-                    }
-                    for (sum, row) in acc.chunks_exact_mut(d).zip(narrow.chunks_exact(d)) {
-                        ring.add_sparse_product_signed_i32(sum, c, row)?;
-                    }
-                }
+            || vec![0i64; d],
+            |wide, acc| {
                 acc.chunks_exact(d)
                     .map(|sum| {
                         for (w, x) in wide.iter_mut().zip(sum) {
@@ -533,7 +572,7 @@ fn fold_message_digits_i32<const K: usize>(
                         }
                         Ok(ring.from_i64(wide)?)
                     })
-                    .collect()
+                    .collect::<Result<Vec<Poly>>>()
             },
         )
         .collect::<Result<Vec<_>>>()?;
@@ -812,7 +851,22 @@ pub struct OwnedSource<'a> {
     pub chunk_len: usize,
     /// Elements `range` of chunk `c`.
     pub elements: Box<ElementSource<'a>>,
+    /// The message in parts of consecutive chunks, formed one at a time ([`OwnedParts`]).
+    pub parts: Option<OwnedParts<'a>>,
 }
+
+/// A message read in `count` parts of consecutive chunks: `prepare(p)` forms part $p$, after which
+/// only its chunks are read, until the next part is prepared. The readers of the message
+/// ([`MessageView::prepare_part`]) prepare the parts in order, once per pass over the chunks.
+pub struct OwnedParts<'a> {
+    /// The number of parts, dividing the chunks.
+    pub count: usize,
+    /// Forms part `p`.
+    pub prepare: Box<PartPrepare<'a>>,
+}
+
+/// Forms part `p` of a message read in parts.
+pub type PartPrepare<'a> = dyn Fn(usize) -> Result<()> + Send + Sync + 'a;
 
 impl OwnedSource<'_> {
     /// The message as steps 1 and 2 read it.
@@ -821,6 +875,7 @@ impl OwnedSource<'_> {
             chunks: self.chunks,
             chunk_len: self.chunk_len,
             elements: &*self.elements,
+            parts: self.parts.as_ref().map(|p| (p.count, &*p.prepare)),
         }
     }
 }
@@ -840,6 +895,9 @@ pub enum MessageView<'a> {
         chunk_len: usize,
         /// The elements.
         elements: &'a ElementSource<'a>,
+        /// The number of parts and their preparation ([`OwnedParts`]), if the message is read in
+        /// parts.
+        parts: Option<(usize, &'a PartPrepare<'a>)>,
     },
 }
 
@@ -850,6 +908,41 @@ impl<'a> MessageView<'a> {
             Self::Held(m) => m.len(),
             Self::Source { chunks, .. } => *chunks,
         }
+    }
+
+    /// The number of parts in which the message is read (1 if it is not read in parts).
+    pub fn part_count(&self) -> usize {
+        match self {
+            Self::Source {
+                parts: Some((count, _)),
+                ..
+            } => (*count).max(1),
+            _ => 1,
+        }
+    }
+
+    /// Prepares part `p` (nothing for a message not read in parts) and returns its chunks: a
+    /// pass over the chunks prepares the parts in order and reads each part's chunks after it.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] unless the parts divide the chunks and `p` is one of them; those of the
+    /// preparation.
+    pub fn prepare_part(&self, p: usize) -> Result<core::ops::Range<usize>> {
+        let (count, chunks) = (self.part_count(), self.chunks());
+        if p >= count || !chunks.is_multiple_of(count) {
+            return Err(Error::Shape(format!(
+                "part {p} of {count} parts of {chunks} chunks"
+            )));
+        }
+        if let Self::Source {
+            parts: Some((_, prepare)),
+            ..
+        } = self
+        {
+            prepare(p)?;
+        }
+        let per = chunks / count;
+        Ok(p * per..(p + 1) * per)
     }
 
     /// Chunk `c`.
@@ -947,6 +1040,7 @@ impl Next {
                 chunks,
                 chunk_len: len,
                 elements: Box::new(elements),
+                parts: None,
             }),
         })
     }
