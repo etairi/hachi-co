@@ -327,6 +327,13 @@ def main():
                    if ("lan", n, ell) in rows and rows[("lan", n, ell)][key]]
             if pts:
                 print(f"\\addplot coordinates {{{coords(pts, 2)}}};  % proof MB, {label}, n = {n}")
+    # fig:bench-comm: the communication per prover in the LAN, ours and PPP26 with the dealer's share.
+    for n in (4, 8):
+        for key, label in (("hachi", "ours, Hachi"), ("ppp26", "PPP26, k = N/4, with the dealer's share")):
+            pts = [(ell, rows[("lan", n, ell)][key]["sent"]) for ell in ELLS
+                   if ("lan", n, ell) in rows and rows[("lan", n, ell)][key]]
+            if pts:
+                print(f"\\addplot coordinates {{{coords(pts)}}};  % sent MB, {label}, n = {n}")
 
     # 9. The same at 8 threads per prover: ours, and their code with OpenMP (scripts/ppp26/openmp.patch).
     print("\n% 9. Three ways, 100 bits, 8 threads per prover: ours (Hachi) | ours (Hachi + Greyhound) | "
