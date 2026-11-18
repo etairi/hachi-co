@@ -6,9 +6,12 @@
 #   python3 scripts/wan_docker.py build
 ARG RUST_VERSION=1.99.1
 FROM rust:${RUST_VERSION}-bookworm AS build
+ARG JOBS
 WORKDIR /src
-COPY . .
-RUN cargo build --release --locked -p hachi-co --bin hachi-co-party
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+COPY crates crates
+RUN cargo build --release --locked ${JOBS:+-j $JOBS} -p hachi-co --bin hachi-co-party
 ARG COMMIT=unknown
 ARG DIRTY=false
 RUN printf '{"commit": "%s", "dirty": %s, "rustc": "%s", "built_in": "docker %s"}\n' \

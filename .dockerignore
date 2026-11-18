@@ -1,8 +1,10 @@
-# The build context of docker/Dockerfile: the workspace's manifests and crates, nothing else.
+# The build context of the images in docker/: the workspace's manifests and crates, and the scripts, which only
+# docker/quickstart.Dockerfile uses (a root .dockerignore, since the legacy builder reads no other).
 *
 !Cargo.toml
 !Cargo.lock
 !crates/
 !.cargo/
+!scripts/
 **/target
 **/__pycache__

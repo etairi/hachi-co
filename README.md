@@ -39,7 +39,7 @@ machines with the same instructions. Build on the machine that you measure on.
 Optional:
 
 - SageMath, for the reference implementation in `ref/` and for recomputing parameters.
-- Docker, to emulate a wide-area network on one machine.
+- Docker, to run everything in a container (see [Docker](#docker)) or to emulate a wide-area network on one machine.
 - The Google Cloud SDK, to run the provers on separate cloud instances.
 - CMake and MPI, to build and run PPP26.
 
@@ -62,6 +62,23 @@ prover it takes a few minutes. Other useful options:
 - `--threads <k>` gives each prover k threads.
 - `--spill <directory>` keeps each prover's large blocks on disk, so that big instances fit in memory.
 - `--single` runs the single-prover baseline: one prover commits to the whole polynomial with Hachi.
+
+## Docker
+
+To build and run without installing Rust or Python, use the image of `docker/quickstart.Dockerfile`:
+
+```sh
+docker build -f docker/quickstart.Dockerfile -t hachi-co .
+docker run --rm hachi-co
+docker run --rm hachi-co python3 scripts/run_parties.py --preset secure100-l20-n2-a8 --n 2 --out /tmp/run
+```
+
+The first run is the quick start above: two provers in one container, then the verifier. Any command of
+`scripts/run_parties.py` works the same way. The image builds for the CPU of the machine that builds it, so build it
+on the machine that runs it. `--build-arg JOBS=<k>` limits the build to k parallel jobs.
+
+`docker/Dockerfile` is a different image: one prover per container, which `scripts/wan_docker.py` uses to emulate a
+wide-area network on one machine.
 
 ## Running the provers on several machines
 
