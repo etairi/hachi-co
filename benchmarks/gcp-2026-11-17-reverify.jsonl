@@ -1,0 +1,6 @@
+{"dir": "secure100-l20-n4-a8-20261117-032158/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 7.94, "max_rss_gib": 3.820240020751953}, "00df544": {"accepted": true, "verify_s": 7.49, "max_rss_gib": 1.6469841003417969}}
+{"dir": "secure100-l20-n8-a8-20261116-215229/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 18.72, "max_rss_gib": 7.008106231689453}, "00df544": {"accepted": true, "verify_s": 18.02, "max_rss_gib": 3.027843475341797}}
+{"dir": "secure100-l22-n4-a8-20261117-032929/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 12.29, "max_rss_gib": 6.823314666748047}, "00df544": {"accepted": true, "verify_s": 11.58, "max_rss_gib": 2.96490478515625}}
+{"dir": "secure100-l22-n8-a8-20261116-220838/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 25.01, "max_rss_gib": 11.396930694580078}, "00df544": {"accepted": true, "verify_s": 24.13, "max_rss_gib": 5.374828338623047}}
+{"dir": "secure100-l24-n4-a8-20261117-034457/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 18.5, "max_rss_gib": 12.126949310302734}, "00df544": {"accepted": true, "verify_s": 17.15, "max_rss_gib": 5.376564025878906}}
+{"dir": "secure100-l24-n8-a8-20261116-223453/rep-0/party-1", "e668433": {"accepted": true, "verify_s": 44.28, "max_rss_gib": 23.652019500732422}, "00df544": {"accepted": true, "verify_s": 41.46, "max_rss_gib": 10.434761047363281}}

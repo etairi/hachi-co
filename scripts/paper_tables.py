@@ -5,8 +5,9 @@ loopback) and the grid of PPP26's network settings (`scripts/wan_grid.py`, one p
 
     python3 scripts/paper_tables.py --local benchmarks/gcp-2026-11-17-local.jsonl \\
         --wan benchmarks/gcp-2026-11-17-wan.jsonl benchmarks/gcp-2026-11-17-greyhound.jsonl \\
-        benchmarks/gcp-2026-11-17-ppp26-k1.jsonl --inmemory benchmarks/gcp-2026-11-17-inmemory.jsonl \\
-        --reverify benchmarks/gcp-2026-11-17-reverify.jsonl
+        benchmarks/gcp-2026-11-17-threads8.jsonl benchmarks/gcp-2026-11-17-ppp26-openmp.jsonl \\
+        --inmemory benchmarks/gcp-2026-11-17-inmemory.jsonl --reverify benchmarks/gcp-2026-11-17-reverify.jsonl \\
+        --single benchmarks/gcp-2026-11-17-single100.jsonl
 
 The grid records of PPP26's settings may come in several files: ours (presets secure100-*), ours composed with
 Greyhound (the same presets with the suffix -greyhound, one Greyhound proof per prover), and PPP26 at their default packing
@@ -83,6 +84,8 @@ def main():
     ap.add_argument("--inmemory", help="the records of the runs with every share in memory (no --spill)")
     ap.add_argument("--reverify", help="the verifier of the phase 1 build against the verifier that reads M by rows, "
                                        "on the same saved proofs (reverify177.jsonl)")
+    ap.add_argument("--single", help="the single Hachi prover at 100 bits with 8 threads on one prover instance "
+                                     "(`run_parties.py --single`), against ours at n = 2 in the LAN")
     args = ap.parse_args()
     local, wan = lines(args.local), [d for path in args.wan for d in lines(path)]
 
@@ -355,6 +358,24 @@ def main():
                     h1 = ours_row(g, f"secure100-l{ell}-n{n}-a8")
                     if h1 and r["hachi"]:
                         print(f"%   ours at 8 threads against 1 thread: time x{fmt(r['hachi']['time'] / h1['time'], 3)}")
+
+    # 10. The single Hachi prover at 100 bits and 8 threads, on one instance of the provers' type, against ours at
+    # n = 2 in the LAN with 8 threads per prover: the overhead of collaboration.
+    singles = defaultdict(list)
+    for d in lines(args.single):
+        if d.get("single") and d.get("accepted", True):
+            singles[int(d["preset"].split("-l")[1].split("-")[0])].append(d)
+    if singles:
+        print("\n% 10. Single Hachi prover, 100 bits, 8 threads (Commit + Eval, proof, peak), against ours at n = 2 in "
+              "the LAN, 8 threads per prover")
+    for ell in sorted(singles):
+        rs = singles[ell]
+        t, proof = mean([d["commit_s"] + d["eval_s"] for d in rs]), mean([d["proof_bytes"] for d in rs]) / 1e6
+        peak = mean([d["peak_bytes"] for d in rs]) / 1e9
+        o = ours_row("lan", f"secure100-l{ell}-n2-a8", 8)
+        vs = f", ours n = 2 {fmt(o['time'])} s, {fmt(o['proof'], 2)} MB: time x{fmt(o['time'] / t)}, proof " \
+             f"x{fmt(o['proof'] / proof)}" if o else ""
+        print(f"% l{ell}: {fmt(t)} s, proof {fmt(proof, 2)} MB, peak {fmt(peak, 2)} GB ({len(rs)} reps){vs}")
 
     # 7. Memory with every share in memory, and the verifier that reads M by rows.
     for d in lines(args.inmemory):

@@ -132,8 +132,8 @@ run need more memory than this machine has; the estimate is the fit in `scripts/
 
 ## Across machines and emulated networks
 
-These tools, added on 2026-11-12, prepare the wide-area runs and the comparison with PPP26 (ePrint 2026/729). No grid
-has been run with them yet.
+These tools, added on 2026-11-12, prepare the wide-area runs and the comparison with PPP26 (ePrint 2026/729). The
+paper's grids ran with them on 2026-11-17 ("Cloud runs of 2026-11-17" below).
 
 - **`scripts/cluster.py`** runs the parties of one instance on the hosts of a hosts file (transport `ssh`, `docker` or
   `local`), then the verifier, and prints one JSON line per repetition (`--reps`). Each line records the slowest
@@ -172,7 +172,11 @@ has been run with them yet.
   times and the parts the mode's timer leaves out (`dummy_setup`, where rank 0 plays a dealer of the random shares,
   and `prepare_mask_shares`, every prover's encoding and commitment of its masks), and `mpi_count.c`, preloaded,
   counts the payload bytes each rank sends, since the mode prints "Com: 0 MB" (it sums a local variable that stays 0)
-  and the code's own counter misses the PCS's messages. On the instances, `gcp-build` builds it, `gcp-mpi` sets up ssh
+  and the code's own counter misses the PCS's messages. Two more patches came with the runs of 2026-11-17:
+  `packing.patch` takes their packing factor k from `HCO_PPP26_K` (`--packing`) and keeps their n/4 when it is unset,
+  and `openmp.patch` (`--openmp`, a second tree and build) adds `-fopenmp`, without which the compiler ignores the
+  OpenMP loops of their Merkle trees, their only parallel code, and makes the hash buffers of those loops private to
+  each thread, since their code shares them between the threads. On the instances, `gcp-build` builds it, `gcp-mpi` sets up ssh
   between the instances, MPI's host file and a firewall rule for MPI's ports, and `gcp-run` runs it with one rank per
   instance and records the setting as `cluster.py` does. Its code needs x86-64 with AVX2 and MPI. `docker-build` and
   `docker-run` build and run it in one amd64 container, which on this Mac runs under Rosetta: a test of the build and
@@ -248,3 +252,41 @@ parameters Section 3.1 costs 5 to 16% of Hachi-Co's Eval.
 
 Commands: each line records its preset and seeds' tag, and `python3 scripts/run_parties.py --preset <preset> --n 2
 --threads 5 --out <dir> [--single]` with the binary built from the variant's code reproduces it.
+
+## Cloud runs of 2026-11-17
+
+The runs behind the paper's benchmark section. Every run was accepted, with one repetition per cell (two in the local
+grid of phase 1, as its lines say).
+
+- **Machines.** Google Cloud, Ubuntu 24.04, AMD EPYC 9B14. The networked runs used eight instances of type
+  c3d-standard-8 (8 vCPUs, 4 cores, 32 GB) in us-central1-a, one prover per instance, with `tc netem` for PPP26's three
+  settings: `lan` (RTT 2 ms, 10 Gbit/s), `wan50` and `wan100` (RTT 50 and 100 ms, 200 Mbit/s). The local grid of phase 1
+  ran every prover on one c3d-standard-16 (16 vCPUs, 8 cores), and the run with every share in memory on one
+  c3d-highmem-16 (16 vCPUs, 128 GB).
+- **Software.** rustc 1.99.1, release profile with mimalloc. Commit `e668433` for phase 1 and the grid at one thread,
+  `b3def5d` for the grids at eight threads, with Greyhound, and the single prover, and `00df544` for the run in memory.
+  The lines of the grids record their commit and the hash of their source. PPP26 at commit `1c50a74` with `timing.patch`,
+  `packing.patch` and `mpi_count.c`, plus `openmp.patch` at eight threads.
+- **Definitions.** Those of `scripts/paper_tables.py` (its docstring): the per-prover time is the slowest prover's
+  Commit and Eval, and for PPP26 their commitment and opening plus the preparation of their masks.
+
+| file | contents |
+|---|---|
+| `gcp-2026-11-17-local.jsonl` | the local grid of phase 1 at 115 bits, every prover on one machine over the loopback: one thread per prover, n = 2 at 4 threads, the base PCS without hiding, and the single prover at 1 and 8 threads |
+| `gcp-2026-11-17-wan.jsonl` | ours at 100 bits and PPP26 at k = n/4, one thread per prover, in the three settings, and ours at 115 bits with eight threads in the LAN |
+| `gcp-2026-11-17-greyhound.jsonl` | ours composed with Greyhound at 100 bits, one thread per prover |
+| `gcp-2026-11-17-threads8.jsonl` | ours at eight threads per prover, alone and composed with Greyhound, with and without hiding in the base PCS, and three runs composed with Greyhound at 115 bits |
+| `gcp-2026-11-17-ppp26-openmp.jsonl` | PPP26 with OpenMP at eight threads per prover, at k = n/4 in the three settings and at k = 1 for n = 8 in the LAN |
+| `gcp-2026-11-17-single100.jsonl` | the single Hachi prover at 100 bits with eight threads, on one c3d-standard-8 |
+| `gcp-2026-11-17-inmemory.jsonl` | `secure100-l24-n8-a8` with every share in memory, one thread per prover |
+| `gcp-2026-11-17-reverify.jsonl` | the verifier of the phase 1 build against the verifier that reads M by rows, on the same saved proofs |
+
+The tables, plot coordinates and numbers of the paper, from these files:
+
+```text
+python3 scripts/paper_tables.py --local benchmarks/gcp-2026-11-17-local.jsonl \
+    --wan benchmarks/gcp-2026-11-17-wan.jsonl benchmarks/gcp-2026-11-17-greyhound.jsonl \
+    benchmarks/gcp-2026-11-17-threads8.jsonl benchmarks/gcp-2026-11-17-ppp26-openmp.jsonl \
+    --inmemory benchmarks/gcp-2026-11-17-inmemory.jsonl --reverify benchmarks/gcp-2026-11-17-reverify.jsonl \
+    --single benchmarks/gcp-2026-11-17-single100.jsonl
+```
