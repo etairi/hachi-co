@@ -5,3 +5,4 @@
 *.preprocess
 .DS_Store
 /runs
+__pycache__/

@@ -1,0 +1,13 @@
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -804,7 +804,9 @@
+     
+     int N = size;
+     if(rank == 0) printf("Workers: %d\n",size);
+-    int k = N/4;
++    // hachi-co patch: the packing factor from HCO_PPP26_K when it is set, otherwise their N/4; k = 1 gives their
++    // highest corruption threshold (their Theorem 4: t <= k' - k + 1; Theorem 6: t <= N/2 - k + 1).
++    int k = getenv("HCO_PPP26_K") ? atoi(getenv("HCO_PPP26_K")) : N/4;
+     int _k = N/2;
+     int M = 1ULL<<(atoi(argv[2]));
+     

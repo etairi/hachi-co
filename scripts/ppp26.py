@@ -13,6 +13,12 @@ shares (a deployment needs a distributed protocol for them), and `prepare_mask_s
 commitment of its masks. It also reads the code's own communication counter around both, since the mode's printed
 "Com" sums a local variable that stays 0. Everything else is their code as published.
 
+Their build has no -fopenmp, so the compiler ignores the OpenMP loops of their Merkle trees, the only parallel code in
+it, and every prover runs one thread. With --openmp, fetch, gcp-build and gcp-run use a second tree
+(target/ppp26/src-openmp) and a second build on the instances (~/ppp26-openmp) with scripts/ppp26/openmp.patch on top,
+which adds -fopenmp and makes the hash buffers of those loops private to each thread (their code shares them between
+the threads), and gcp-run gives every prover --threads OpenMP threads.
+
     python3 scripts/ppp26.py fetch                           # clone at COMMIT into target/ppp26/src, apply the patch
     python3 scripts/ppp26.py docker-build                    # an amd64 image (Rosetta on Apple Silicon: tests only)
     python3 scripts/ppp26.py docker-run --n 4 --log-m 14 --reps 2 >> runs/ppp26-docker.jsonl
@@ -46,8 +52,11 @@ import gcp      # noqa: E402  (the configuration and the gcloud commands)
 REPO = "https://github.com/ChristodoulosPappas/Code-Based-Scalable-coSNARKs"
 COMMIT = "1c50a7410fa464ad325e0014d0d5fedd196d86c5"   # main on 2026-11-12 (last push 2025-11-14)
 PATCH = HERE / "ppp26" / "timing.patch"
+PACKING = HERE / "ppp26" / "packing.patch"   # their packing factor from HCO_PPP26_K (unset: their N/4)
+OPENMP = HERE / "ppp26" / "openmp.patch"   # with --openmp: -fopenmp, and thread-private buffers in their parallel loops
 SHIM = HERE / "ppp26" / "mpi_count.c"   # copied into their tree as hco/mpi_count.c
 SRC = ROOT / "target" / "ppp26" / "src"
+SRC_OPENMP = ROOT / "target" / "ppp26" / "src-openmp"
 IMAGE = "ppp26:local"
 BINARY_IN_IMAGE = "/ppp26/build/src/pigeon"
 SHIM_IN_IMAGE = "/ppp26/build/libhco_mpi_count.so"
@@ -60,9 +69,15 @@ def sh(argv, **kw):
     return subprocess.run(argv, check=True, **kw)
 
 
-def patch_sha():
-    """The SHA-256 of the patch and the shim, which together are our changes to their tree."""
-    return hashlib.sha256(PATCH.read_bytes() + SHIM.read_bytes()).hexdigest()
+def patch_sha(openmp=False):
+    """The SHA-256 of the patches and the shim, which together are our changes to their tree."""
+    extra = OPENMP.read_bytes() if openmp else b""
+    return hashlib.sha256(PATCH.read_bytes() + PACKING.read_bytes() + extra + SHIM.read_bytes()).hexdigest()
+
+
+def remote_dir(args):
+    """The directory of their build in the home directory of every instance."""
+    return "ppp26-openmp" if getattr(args, "openmp", False) else "ppp26"
 
 
 # ------------------------------------------------------------------------------------------- the source
@@ -77,9 +92,13 @@ def fetch(args):
         sh(["git", "clone", "--quiet", REPO, str(args.dir)])
         sh(["git", "-C", str(args.dir), "checkout", "--quiet", COMMIT])
     sh(["git", "-C", str(args.dir), "apply", str(PATCH)])
+    sh(["git", "-C", str(args.dir), "apply", str(PACKING)])
+    if args.openmp:
+        sh(["git", "-C", str(args.dir), "apply", str(OPENMP)])
     (args.dir / "hco").mkdir(exist_ok=True)
     (args.dir / "hco" / "mpi_count.c").write_bytes(SHIM.read_bytes())
-    print(f"{args.dir}: {COMMIT} with {PATCH.name} (sha256 {patch_sha()[:16]}) and hco/mpi_count.c")
+    patches = ", ".join(f.name for f in [PATCH, PACKING] + ([OPENMP] if args.openmp else []))
+    print(f"{args.dir}: {COMMIT} with {patches} (sha256 {patch_sha(args.openmp)[:16]}) and hco/mpi_count.c")
 
 
 # ------------------------------------------------------------------------------------------- parsing a run
@@ -131,8 +150,11 @@ def parse(stdout, stderr):
 
 
 def line(args, rep, result, setting):
-    return {"scheme": "ppp26", "commit": COMMIT, "patch_sha256": patch_sha(), "n": args.n, "log_m": args.log_m,
-            "ell": args.log_m, "rate": args.rate, "rep": rep, **result, "setting": setting,
+    packing = getattr(args, "packing", None) or args.n // 4
+    openmp = getattr(args, "openmp", False)
+    return {"scheme": "ppp26", "commit": COMMIT, "patch_sha256": patch_sha(openmp), "n": args.n, "log_m": args.log_m,
+            "ell": args.log_m, "rate": args.rate, "packing": packing, "openmp": openmp,
+            "threads_per_prover": args.threads if openmp else 1, "rep": rep, **result, "setting": setting,
             "started": time.strftime("%Y%m%d-%H%M%S")}
 
 
@@ -184,25 +206,29 @@ def source_tarball(src):
 BUILD = r"""set -e
 sudo apt-get update -y -q
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q build-essential cmake libopenmpi-dev openmpi-bin time iproute2 iputils-ping iperf3
-rm -rf "$HOME/ppp26" && mkdir -p "$HOME/ppp26" && tar -C "$HOME/ppp26" -xzf "$HOME/ppp26.tar.gz"
-cd "$HOME/ppp26" && mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release > /dev/null && make -j"$(nproc)" > /dev/null
+rm -rf "$HOME/REMOTE" && mkdir -p "$HOME/REMOTE" && tar -C "$HOME/REMOTE" -xzf "$HOME/REMOTE.tar.gz"
+cd "$HOME/REMOTE" && mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release > /dev/null && make -j"$(nproc)" > /dev/null
 mpicc -shared -fPIC -O2 -o libhco_mpi_count.so ../hco/mpi_count.c
-printf '{"scheme": "ppp26", "commit": "COMMIT", "patch_sha256": "PATCHSHA", "source_sha256": "SRCSHA", "built_in": "gcp %s"}\n' "$(uname -m)" > src/pigeon.build.json
+printf '{"scheme": "ppp26", "commit": "COMMIT", "patch_sha256": "PATCHSHA", "source_sha256": "SRCSHA", "openmp": OPENMPFLAG, "built_in": "gcp %s"}\n' "$(uname -m)" > src/pigeon.build.json
 cat src/pigeon.build.json
 """
 
 
 def gcp_build(args):
+    if not (args.dir / "CMakeLists.txt").exists():
+        raise SystemExit(f"{args.dir}: no source (run fetch{' --openmp' if args.openmp else ''} first)")
     cfg = gcp.load(args.config)
     data = source_tarball(args.dir)
-    tarball = ROOT / "target" / "ppp26" / "ppp26.tar.gz"
+    tarball = ROOT / "target" / "ppp26" / f"{remote_dir(args)}.tar.gz"
     tarball.parent.mkdir(parents=True, exist_ok=True)
     tarball.write_bytes(data)
     sha = hashlib.sha256(data).hexdigest()
     print(f"# {tarball}: {len(data)} bytes, sha256 {sha}")
-    script = BUILD.replace("COMMIT", COMMIT).replace("PATCHSHA", patch_sha()).replace("SRCSHA", sha)
+    script = (BUILD.replace("COMMIT", COMMIT).replace("PATCHSHA", patch_sha(args.openmp)).replace("SRCSHA", sha)
+              .replace("REMOTE", remote_dir(args)).replace("OPENMPFLAG", "true" if args.openmp else "false"))
     uploads = [gcp.gcloud(cfg, "compute", "scp", "--zone", i["zone"], str(tarball),
-                          f"{cfg['ssh_user']}@{i['name']}:ppp26.tar.gz", "--quiet") for i in cfg["instances"]]
+                          f"{cfg['ssh_user']}@{i['name']}:{remote_dir(args)}.tar.gz", "--quiet")
+               for i in cfg["instances"]]
     gcp.execute(uploads, args.execute, parallel=True)
     gcp.execute([gcp.ssh(cfg, i, script) for i in cfg["instances"]], args.execute, parallel=True)
 
@@ -249,10 +275,12 @@ def gcp_run(args):
         raise SystemExit(f"{len(hosts)} hosts for n = {args.n}")
     hosts = hosts[:args.n]
     home = hosts[0].workdir.rsplit('/', 1)[0]
-    binary = f"{home}/ppp26/build/src/pigeon"
-    shim = f"{home}/ppp26/build/libhco_mpi_count.so"
+    binary = f"{home}/{remote_dir(args)}/build/src/pigeon"
+    shim = f"{home}/{remote_dir(args)}/build/libhco_mpi_count.so"
+    packing = ["-x", f"HCO_PPP26_K={args.packing}"] if args.packing else []
+    threads = ["-x", f"OMP_NUM_THREADS={args.threads}", "--bind-to", "none"] if args.openmp else []
     command = " ".join(shlex.quote(a) for a in ["mpirun", "--hostfile", "ppp26-hosts", "--map-by", "node", "-np",
-                                                 str(args.n), *MCA, "/usr/bin/time", "-v", "env",
+                                                 str(args.n), *MCA, *packing, *threads, "/usr/bin/time", "-v", "env",
                                                  f"LD_PRELOAD={shim}", binary, "1", str(args.log_m),
                                                  str(args.rate)])
     if not args.execute:
@@ -287,7 +315,10 @@ def main():
     sub = ap.add_subparsers(dest="command", required=True)
     for name in ("fetch", "docker-build", "docker-run", "gcp-build", "gcp-mpi", "gcp-run"):
         p = sub.add_parser(name)
-        p.add_argument("--dir", type=Path, default=SRC, help="their source, patched (default target/ppp26/src)")
+        p.add_argument("--dir", type=Path, help="their source, patched (default target/ppp26/src, or "
+                       "target/ppp26/src-openmp with --openmp)")
+        if name in ("fetch", "gcp-build", "gcp-run"):
+            p.add_argument("--openmp", action="store_true", help="their code with OpenMP (scripts/ppp26/openmp.patch)")
         if name in ("docker-run", "gcp-run"):
             p.add_argument("--n", type=int, required=True, help="provers (at least 4: the packing factor is n/4)")
             p.add_argument("--log-m", type=int, required=True, help="log2 of the number of coefficients")
@@ -295,6 +326,10 @@ def main():
             p.add_argument("--reps", type=int, default=1)
             p.add_argument("--first-rep", type=int, default=0)
             p.add_argument("--setting-json", default="{}", help="JSON merged into the recorded setting")
+        if name == "gcp-run":
+            p.add_argument("--threads", type=int, default=8, help="OpenMP threads of every prover, with --openmp")
+            p.add_argument("--packing", type=int, help="their packing factor k (default n/4, their choice; 1 gives "
+                           "their highest corruption threshold, t <= n/2)")
         if name.startswith("gcp"):
             p.add_argument("--execute", action="store_true", help="run the commands instead of printing them")
         if name in ("gcp-build", "gcp-mpi"):
@@ -305,6 +340,8 @@ def main():
             p.add_argument("--bandwidth", action="store_true")
             p.add_argument("--timeout-s", type=int, default=7200)
     args = ap.parse_args()
+    if args.dir is None:
+        args.dir = SRC_OPENMP if getattr(args, "openmp", False) else SRC
     if getattr(args, "n", 4) < 4:
         raise SystemExit("PPP26 needs n >= 4 provers (packing factor n/4)")
     return {"fetch": fetch, "docker-build": docker_build, "docker-run": docker_run, "gcp-build": gcp_build,

@@ -1,0 +1,55 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b7c43de..fd59083 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,8 +4,8 @@ project(ProofOfLearning)
+ find_package(MPI REQUIRED)
+ 
+ set(CMAKE_CXX_STANDARD 14)
+-set(CMAKE_CXX_FLAGS "-w -march=native  -mavx -msha")
+-set(CMAKE_C_FLAGS "-w -march=native -mavx -msha")
++set(CMAKE_CXX_FLAGS "-w -march=native  -mavx -msha -fopenmp")
++set(CMAKE_C_FLAGS "-w -march=native -mavx -msha -fopenmp")
+ 
+ 
+ 
+diff --git a/src/merkle_tree.cpp b/src/merkle_tree.cpp
+index fbe4656..18c6e15 100644
+--- a/src/merkle_tree.cpp
++++ b/src/merkle_tree.cpp
+@@ -172,7 +172,7 @@ void merkle_tree::merkle_tree_prover::MT_commit(F *leafs,vector<vector<__hhash_d
+     __hhash_digest data[2], ret;
+     //data[0] = prev_hash;
+     virgo::fieldElement element[2];
+-   #pragma omp parallel for
++   #pragma omp parallel for private(data, element)
+    for(int i = 0; i < N/4; i++){
+         element[0] = leafs[4*i];
+         element[1] = leafs[4*i+1];
+@@ -203,7 +203,7 @@ void merkle_tree::merkle_tree_prover::MT_commit_Blake(F *leafs,vector<vector<_ha
+         hashes.resize((int)log2(N/4)+1);
+     }
+     hashes[0].resize(N/4);
+-   #pragma omp parallel for
++   #pragma omp parallel for private(data, element)
+    for(int i = 0; i < N/4; i++){
+         element[0] = leafs[4*i];
+         element[1] = leafs[4*i+1];
+@@ -237,7 +237,7 @@ __hhash_digest merkle_tree::merkle_tree_prover::create_tree(int ele_num, vector<
+         if(lvl >= 0){
+             hashes[lvl].resize(current_lvl_size);
+         }
+-        #pragma omp parallel for
++        #pragma omp parallel for private(data)
+         for(int i = 0; i < current_lvl_size; ++i)
+         {
+             //printf("%d,%d\n",start_ptr + current_lvl_size + i * 2,start_ptr + current_lvl_size + i * 2+1);
+@@ -268,7 +268,7 @@ void merkle_tree::merkle_tree_prover::create_tree_blake(int ele_num, vector<vect
+         if(lvl >= 0){
+             hashes[lvl].resize(current_lvl_size);
+         }
+-        #pragma omp parallel for
++        #pragma omp parallel for private(data)
+         for(int i = 0; i < current_lvl_size; ++i)
+         {
+             //printf("%d,%d\n",start_ptr + current_lvl_size + i * 2,start_ptr + current_lvl_size + i * 2+1);
