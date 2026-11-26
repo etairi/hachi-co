@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The tables of `hachi_co_sampling::gauss`, `src/gauss_tables.rs`, computed from their definition.
 
-A port of ntru-trapdoor's `tools/gauss_tables.py` (commit 2273fda; same author, MIT), itself a
+A port of ntru-trapdoor's `tools/gauss_tables.py` (commit 8b61420; same author, MIT), itself a
 port of Jali's `tools/kat/half_gaussian_cdf.py`. The functions `_rho`, `_suffixes` and `table`
 are unchanged; the tables are new.
 
